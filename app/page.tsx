@@ -837,11 +837,33 @@ export default function Page() {
 
   const [photos, setPhotos] = useState<PhotoProject[]>([]);
   const [activePhotoId, setActivePhotoId] = useState<string>("");
+  const [screen, setScreen] = useState<"MENU" | "PROJECT" | "CUSTOMER_VIEW">("MENU");
+  const [customerViewData, setCustomerViewData] = useState<{ name: string; roofs: Roof[]; shingleColor: ShingleColor } | null>(null);
+  const [customerStep, setCustomerStep] = useState<Step>("TEAROFF");
+  const [customerShingleColor, setCustomerShingleColor] = useState<ShingleColor>("Barkwood");
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareUrlCopied, setShareUrlCopied] = useState(false);
 
-  const active = useMemo(
-    () => photos.find((p) => p.id === activePhotoId) || null,
-    [photos, activePhotoId]
-  );
+  const active = useMemo(() => {
+    if (screen === "CUSTOMER_VIEW" && customerViewData) {
+      return {
+        id: "customer-view",
+        name: customerViewData.name,
+        src: "",
+        photoSrcs: [],
+        step: customerStep,
+        roofs: customerViewData.roofs,
+        activeRoofId: customerViewData.roofs[0]?.id ?? "",
+        shingleColor: customerShingleColor,
+        showGuidesDuringInstall: false,
+        showEditHandles: false,
+        stageScale: 1,
+        stagePos: { x: 0, y: 0 },
+        photoStates: {},
+      } as PhotoProject;
+    }
+    return photos.find((p) => p.id === activePhotoId) || null;
+  }, [photos, activePhotoId, screen, customerViewData, customerStep, customerShingleColor]);
   const photoImg = useHtmlImage(active?.src);
 
   const activeRoof = useMemo(() => {
@@ -855,7 +877,6 @@ export default function Page() {
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [exportView, setExportView] = useState<ExportView>("LIVE");
-  const [screen, setScreen] = useState<"MENU" | "PROJECT">("MENU");
   const [autoSuggest, setAutoSuggest] = useState<AutoSuggest | null>(null);
   const [autoDetecting, setAutoDetecting] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -865,24 +886,44 @@ export default function Page() {
   useEffect(() => {
     if (typeof window === "undefined" || photos.length === 0) return;
     try { localStorage.setItem("roofviz_v2", JSON.stringify(photos)); } catch {}
-  }, [photos]);
+    try { if (activePhotoId) localStorage.setItem("roofviz_v2_active", activePhotoId); } catch {}
+  }, [photos, activePhotoId]);
 
-  // Load projects from localStorage on mount.
+  // On mount: check for customer share link, then load localStorage.
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    // Customer share link takes priority
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const shareParam = params.get("share");
+      if (shareParam) {
+        const json = atob(shareParam.replace(/-/g, "+").replace(/_/g, "/"));
+        const data = JSON.parse(json) as { name: string; roofs: Roof[]; shingleColor: ShingleColor };
+        setCustomerViewData(data);
+        setCustomerShingleColor(data.shingleColor);
+        setCustomerStep("TEAROFF");
+        setScreen("CUSTOMER_VIEW");
+        return;
+      }
+    } catch { /* malformed share param — fall through */ }
+
+    // Load saved projects and auto-navigate back to active project
     try {
       const raw = localStorage.getItem("roofviz_v2");
       if (raw) {
         const parsed = JSON.parse(raw) as PhotoProject[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Migrate old format: ensure photoSrcs and photoStates exist
           const migrated = parsed.map((p) => ({
             ...p,
             photoSrcs: p.photoSrcs ?? (p.src ? [p.src] : []),
             photoStates: p.photoStates ?? {},
           }));
+          const savedActiveId = localStorage.getItem("roofviz_v2_active");
+          const restoredId = migrated.find((p) => p.id === savedActiveId)?.id ?? migrated[0].id;
           setPhotos(migrated);
-          setActivePhotoId(migrated[0].id);
+          setActivePhotoId(restoredId);
+          setScreen("PROJECT");
         }
       }
     } catch {}
@@ -1348,6 +1389,34 @@ export default function Page() {
 
   const showGuides = (active?.step === "TRACE") || !!active?.showGuidesDuringInstall;
 
+  // Customer view step navigation
+  const customerNavSteps = useMemo(() => {
+    if (!customerViewData) return [] as Step[];
+    const rel = relevantSteps(customerViewData.roofs);
+    rel.delete("START"); rel.delete("TRACE"); rel.delete("EXPORT");
+    return STEPS.filter((s) => rel.has(s));
+  }, [customerViewData]);
+  const customerStepIdx = customerNavSteps.indexOf(customerStep);
+
+  // Generate a shareable read-only URL encoding the current project structure (no photos)
+  function generateShareUrl(): string {
+    if (!active || screen === "CUSTOMER_VIEW") return "";
+    const shareData = {
+      name: active.name,
+      shingleColor: active.shingleColor,
+      roofs: active.roofs.map((r) => ({
+        ...r,
+        outline: r.outline.map((n) => Math.round(n * 10) / 10),
+        holes: r.holes.map((h) => h.map((n) => Math.round(n * 10) / 10)),
+        lines: r.lines.map((l) => ({ ...l, points: l.points.map((n) => Math.round(n * 10) / 10) })),
+      })),
+    };
+    const encoded = btoa(JSON.stringify(shareData))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+    const base = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+    return `${base}?share=${encoded}`;
+  }
+
   // Two-page PDF with material legends (multi-photo grid)
   async function exportPdfTwoPages() {
     if (!active || !stageRef.current) return;
@@ -1440,6 +1509,18 @@ export default function Page() {
       });
     }
 
+    // Capture shingle + underlay snaps for all photos
+    const shingleSnaps: string[] = [];
+    const underlaySnaps: string[] = [];
+    for (const src of allPhotos) {
+      await showPhoto(src);
+      shingleSnaps.push(await snap("PDF_SHINGLES"));
+      underlaySnaps.push(await snap("PDF_UNDERLAY"));
+    }
+    // Restore original photo
+    await showPhoto(originalSrc);
+    setExportView("LIVE");
+
     // Use the first photo's first roof for legend colors
     const firstState = fullStates[allPhotos[0]];
     const r0 = firstState ? (firstState.roofs[0] ?? null) : null;
@@ -1476,58 +1557,60 @@ export default function Page() {
       ...((hasEave || hasRake) ? [{ r: 18, g: 18, b: 20, label: "Pro-Start Starter Strip" }] : []),
     ];
 
-    const totalPhotos = allPhotos.length;
-    const totalPages = totalPhotos * 2;
+    // Grid layout: 1 col for single photo, 2 cols for multiple
+    const N = allPhotos.length;
+    const cols = N <= 1 ? 1 : 2;
+    const rows = Math.ceil(N / cols);
+    const gapX = cols > 1 ? 10 : 0;
+    const gapY = rows > 1 ? 10 : 0;
+    const cellW = (imgW - (cols - 1) * gapX) / cols;
+    const cellH = (imgH - (rows - 1) * gapY) / rows;
 
-    // One pair of pages per photo (shingles + underlayments)
-    for (let i = 0; i < totalPhotos; i++) {
-      const src = allPhotos[i];
-      const photoLabel = totalPhotos > 1 ? `  ·  Photo ${i + 1} of ${totalPhotos}` : "";
+    // Place each image maintaining its natural aspect ratio (letterbox to avoid distortion)
+    const stageAspect = stageRef.current.width() / stageRef.current.height();
+    function addImageFit(imgData: string, cx: number, cy: number, cw: number, ch: number) {
+      const cellAspect = cw / ch;
+      let iw: number, ih: number, ix: number, iy: number;
+      if (stageAspect > cellAspect) {
+        iw = cw; ih = cw / stageAspect;
+        ix = cx; iy = cy + (ch - ih) / 2;
+      } else {
+        ih = ch; iw = ch * stageAspect;
+        ix = cx + (cw - iw) / 2; iy = cy;
+      }
+      pdf.addImage(imgData, "PNG", ix, iy, iw, ih);
+    }
 
-      await showPhoto(src);
+    function addGrid(snaps: string[]) {
+      snaps.forEach((s, i) => {
+        addImageFit(s,
+          imgX + (i % cols) * (cellW + gapX),
+          imgY + Math.floor(i / cols) * (cellH + gapY),
+          cellW, cellH);
+      });
+    }
 
-      // ── Shingles page ──
-      if (i > 0) pdf.addPage();
-      const imgShingles = await snap("PDF_SHINGLES");
+    function writePage(title: string, subtitle: string, snaps: string[], items: typeof page1Items) {
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(16);
       pdf.setTextColor(15, 23, 42);
-      pdf.text(active.name || projectName, imgX, 28);
+      pdf.text((active?.name || projectName) ?? "", imgX, 28);
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(10);
       pdf.setTextColor(100, 116, 139);
-      pdf.text(`Page ${i * 2 + 1} of ${totalPages}  ·  Finished Roof${photoLabel}`, imgX, 46);
+      pdf.text(subtitle, imgX, 46);
       if (logoDataUrl) pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
-      pdf.addImage(imgShingles, "PNG", imgX, imgY, imgW, imgH);
-      drawLegend(page1Items);
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(7.5);
-      pdf.setTextColor(148, 163, 184);
-      pdf.text("MATERIAL KEY", imgX, legendY - 4);
-
-      // ── Underlayments page ──
-      pdf.addPage();
-      const imgUnderlay = await snap("PDF_UNDERLAY");
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(16);
-      pdf.setTextColor(15, 23, 42);
-      pdf.text(active.name || projectName, imgX, 28);
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(10);
-      pdf.setTextColor(100, 116, 139);
-      pdf.text(`Page ${i * 2 + 2} of ${totalPages}  ·  Underlayments & Metals${photoLabel}`, imgX, 46);
-      if (logoDataUrl) pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
-      pdf.addImage(imgUnderlay, "PNG", imgX, imgY, imgW, imgH);
-      drawLegend(page2Items);
+      addGrid(snaps);
+      drawLegend(items);
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(7.5);
       pdf.setTextColor(148, 163, 184);
       pdf.text("MATERIAL KEY", imgX, legendY - 4);
     }
 
-    // Restore original photo
-    await showPhoto(originalSrc);
-    setExportView("LIVE");
+    writePage("Finished Roof", "Page 1 of 2  ·  Finished Roof", shingleSnaps, page1Items);
+    pdf.addPage();
+    writePage("Underlayments", "Page 2 of 2  ·  Underlayments & Metals", underlaySnaps, page2Items);
 
     pdf.save(`${projectName.replaceAll(" ", "_")}_RoofViz.pdf`);
   }
@@ -1891,6 +1974,78 @@ export default function Page() {
         overflow: "hidden",
       }}>
 
+        {/* ── CUSTOMER VIEW PANEL ── */}
+        {screen === "CUSTOMER_VIEW" && customerViewData && (
+          <>
+            {/* Header */}
+            <div style={{ background: "#fff", borderBottom: "1px solid rgba(15,23,42,0.08)", padding: "16px 20px", flexShrink: 0 }}>
+              <Image src="/roofviz-logo.png" alt="RoofViz" width={148} height={43} priority />
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", marginTop: 10, lineHeight: 1.2 }}>{customerViewData.name}</div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>Your Roof Installation Preview</div>
+              <div style={{ marginTop: 10, height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${((customerStepIdx + 1) / Math.max(customerNavSteps.length, 1)) * 100}%`, background: "linear-gradient(90deg, #2563eb, #60a5fa)", borderRadius: 99, transition: "width 0.35s ease" }} />
+              </div>
+            </div>
+            {/* Body */}
+            <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
+              {/* Step card */}
+              <div style={sectionCard}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#94a3b8", textTransform: "uppercase", marginBottom: 8 }}>
+                  Step {customerStepIdx + 1} of {customerNavSteps.length}
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#0f172a", marginBottom: 6 }}>{STEP_TITLE[customerStep]}</div>
+                {STEP_HINT[customerStep] && (
+                  <p style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, margin: "0 0 14px" }}>{STEP_HINT[customerStep]}</p>
+                )}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <button
+                    style={{ ...ghostBtn, opacity: customerStepIdx > 0 ? 1 : 0.3 }}
+                    disabled={customerStepIdx <= 0}
+                    onClick={() => setCustomerStep(customerNavSteps[customerStepIdx - 1])}
+                  >← Back</button>
+                  <button
+                    style={{ ...primaryBtn, margin: 0, opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.3 }}
+                    disabled={customerStepIdx >= customerNavSteps.length - 1}
+                    onClick={() => setCustomerStep(customerNavSteps[customerStepIdx + 1])}
+                  >Next →</button>
+                </div>
+              </div>
+              {/* Shingle color swatches */}
+              <div style={sectionCard}>
+                <div style={sectionLabel}>Shingle Color</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 10 }}>
+                  {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => {
+                    const [cr, cg, cb] = shingleRGB(c);
+                    return (
+                      <div
+                        key={c}
+                        onClick={() => setCustomerShingleColor(c)}
+                        title={c}
+                        style={{
+                          aspectRatio: "1",
+                          borderRadius: 8,
+                          background: `rgb(${cr},${cg},${cb})`,
+                          cursor: "pointer",
+                          border: c === customerShingleColor ? "3px solid #2563eb" : "2px solid rgba(15,23,42,0.10)",
+                          boxShadow: c === customerShingleColor ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
+                          transition: "border-color 0.15s",
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 12, color: "#475569", marginTop: 8, fontWeight: 600 }}>{customerShingleColor}</div>
+              </div>
+              <div style={{ textAlign: "center", padding: "4px 0 12px", fontSize: 10, color: "#cbd5e1", letterSpacing: "0.04em" }}>
+                POWERED BY ROOFVIZ
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── PROJECT EDITOR PANEL ── */}
+        {screen !== "CUSTOMER_VIEW" && (<>
+
         {/* Sticky header */}
         <div style={{
           background: "#ffffff",
@@ -2146,11 +2301,40 @@ export default function Page() {
                   {liveStep === "EXPORT" && (
                     <div style={{ marginTop: 12 }}>
                       <button className="rv-btn-primary" style={greenBtn} onClick={exportPdfTwoPages}>
-                        ↓ Export 2-Page PDF
+                        ↓ Export PDF
                       </button>
                       <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, textAlign: "center" }}>
                         Page 1: Shingles &nbsp;·&nbsp; Page 2: Underlayments + metals
                       </div>
+                      <button
+                        style={{ ...ghostBtn, width: "100%", marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, boxSizing: "border-box" as const }}
+                        onClick={() => { setShowShareModal((v) => !v); setShareUrlCopied(false); }}
+                      >
+                        Share with Customer
+                      </button>
+                      {showShareModal && (() => {
+                        const url = generateShareUrl();
+                        return (
+                          <div style={{ marginTop: 10, padding: 14, background: "#f8fafc", borderRadius: 10, border: "1.5px solid rgba(37,99,235,0.18)" }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Customer Link</div>
+                            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.55 }}>
+                              Send this link to your customer. They can step through the installation and try shingle colors — no editing tools.
+                            </div>
+                            <input
+                              readOnly
+                              value={url}
+                              style={{ ...inputStyle, fontSize: 10, padding: "8px 10px", marginBottom: 8, color: "#334155", fontFamily: "monospace" }}
+                              onClick={(e) => (e.target as HTMLInputElement).select()}
+                            />
+                            <button
+                              style={{ ...primaryBtn, marginTop: 0, padding: "9px 14px", fontSize: 12 }}
+                              onClick={() => { navigator.clipboard?.writeText(url); setShareUrlCopied(true); setTimeout(() => setShareUrlCopied(false), 2500); }}
+                            >
+                              {shareUrlCopied ? "✓ Copied!" : "Copy Link"}
+                            </button>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -2516,6 +2700,7 @@ export default function Page() {
             </>
           )}
         </div>
+        </>)}
       </aside>
 
       {/* ── CANVAS ── */}
@@ -2530,10 +2715,10 @@ export default function Page() {
           ref={stageRef}
           width={w}
           height={h}
-          onMouseDown={onStageDown}
-          onTouchStart={onStageDown}
-          onWheel={onWheel}
-          draggable={!!active}
+          onMouseDown={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
+          onTouchStart={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
+          onWheel={screen !== "CUSTOMER_VIEW" ? onWheel : undefined}
+          draggable={!!active && screen !== "CUSTOMER_VIEW"}
           scaleX={active?.stageScale ?? 1}
           scaleY={active?.stageScale ?? 1}
           x={active?.stagePos?.x ?? 0}
@@ -2545,7 +2730,12 @@ export default function Page() {
           style={{ touchAction: "none" }}
         >
           <Layer>
-            {!photoImg && liveStep !== "START" && (
+            {/* Customer view: light background so roof overlays are visible without a photo */}
+            {screen === "CUSTOMER_VIEW" && (
+              <Rect x={0} y={0} width={w} height={h} fill="#dde4ea" />
+            )}
+
+            {!photoImg && liveStep !== "START" && screen !== "CUSTOMER_VIEW" && (
               <>
                 <Text
                   text="Upload a photo to begin"

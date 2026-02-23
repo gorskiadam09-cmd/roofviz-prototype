@@ -111,6 +111,10 @@ class FakeHTMLImage {
 }
 (global as unknown as { Image: unknown }).Image = FakeHTMLImage;
 
+// Clear localStorage before each test so the load effect doesn't auto-navigate
+// to PROJECT screen after a previous test created a project.
+beforeEach(() => { localStorage.clear(); });
+
 // ── Pure utility logic tests ──────────────────────────────────────────────
 // These mirror functions defined inside page.tsx.
 // If you extract them to a utils file, swap in direct imports.
