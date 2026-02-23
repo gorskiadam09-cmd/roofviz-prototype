@@ -21,7 +21,8 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    await transporter.sendMail({
+    await transporter.verify();
+    const info = await transporter.sendMail({
       from: `RoofViz <${process.env.GMAIL_USER}>`,
       to,
       subject: `${projectName} — Your Roof Installation Preview`,
@@ -46,7 +47,8 @@ export async function POST(req: NextRequest) {
       `,
     });
 
-    return NextResponse.json({ ok: true });
+    console.log("Email sent:", info.messageId, info.response);
+    return NextResponse.json({ ok: true, messageId: info.messageId });
   } catch (err) {
     console.error("send-email error:", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
