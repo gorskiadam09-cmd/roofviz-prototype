@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     }
 
     await resend.emails.send({
-      from: "RoofViz <onboarding@resend.dev>",
+      from: "RoofViz <noreply@tryroofviz.com>",
       to,
       subject: `${projectName} — Your Roof Installation Preview`,
       html: `
