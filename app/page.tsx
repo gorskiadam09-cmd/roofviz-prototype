@@ -843,6 +843,8 @@ export default function Page() {
   const [customerShingleColor, setCustomerShingleColor] = useState<ShingleColor>("Barkwood");
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
+  const [shareEmailSending, setShareEmailSending] = useState(false);
+  const [shareEmailSent, setShareEmailSent] = useState(false);
 
   const active = useMemo(() => {
     if (screen === "CUSTOMER_VIEW" && customerViewData) {
@@ -1413,7 +1415,8 @@ export default function Page() {
     };
     const encoded = btoa(JSON.stringify(shareData))
       .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-    const base = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+    const base = process.env.NEXT_PUBLIC_APP_URL ||
+      (typeof window !== "undefined" ? window.location.origin + window.location.pathname : "");
     return `${base}?share=${encoded}`;
   }
 
@@ -2308,36 +2311,53 @@ export default function Page() {
                       </div>
                       <button
                         style={{ ...ghostBtn, width: "100%", marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, boxSizing: "border-box" as const }}
-                        onClick={() => { setShowShareModal((v) => !v); setShareEmail(""); }}
+                        onClick={() => { setShowShareModal((v) => !v); setShareEmail(""); setShareEmailSent(false); }}
                       >
                         Share with Customer
                       </button>
                       {showShareModal && (() => {
                         const url = generateShareUrl();
                         const projectName = active?.name || "Your Roof";
-                        const subject = encodeURIComponent(`${projectName} — Roof Installation Preview`);
-                        const body = encodeURIComponent(
-                          `Hi,\n\nHere is a link to preview your roof installation with different shingle colors:\n\n${url}\n\nYou can step through each layer of the installation and try different shingle colors. No sign-up required — just open the link.\n\nLet me know if you have any questions!\n`
-                        );
+                        const canSend = shareEmail.includes("@") && shareEmail.includes(".");
                         return (
                           <div style={{ marginTop: 10, padding: 14, background: "#f8fafc", borderRadius: 10, border: "1.5px solid rgba(37,99,235,0.18)" }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Email to Customer</div>
-                            <input
-                              type="email"
-                              placeholder="customer@email.com"
-                              value={shareEmail}
-                              onChange={(e) => setShareEmail(e.target.value)}
-                              style={{ ...inputStyle, fontSize: 13, padding: "9px 12px", marginBottom: 8 }}
-                            />
-                            <button
-                              style={{ ...primaryBtn, marginTop: 0, padding: "9px 14px", fontSize: 12, width: "100%", boxSizing: "border-box" as const, opacity: shareEmail.includes("@") ? 1 : 0.45 }}
-                              disabled={!shareEmail.includes("@")}
-                              onClick={() => {
-                                window.location.href = `mailto:${encodeURIComponent(shareEmail)}?subject=${subject}&body=${body}`;
-                              }}
-                            >
-                              Send Email
-                            </button>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Email Preview to Customer</div>
+                            {shareEmailSent ? (
+                              <div style={{ textAlign: "center", padding: "14px 0" }}>
+                                <div style={{ fontSize: 22, marginBottom: 6 }}>✓</div>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: "#16a34a" }}>Link sent to {shareEmail}</div>
+                                <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>The customer can open it on any device.</div>
+                              </div>
+                            ) : (
+                              <>
+                                <input
+                                  type="email"
+                                  placeholder="customer@email.com"
+                                  value={shareEmail}
+                                  onChange={(e) => { setShareEmail(e.target.value); }}
+                                  style={{ ...inputStyle, fontSize: 13, padding: "9px 12px", marginBottom: 8 }}
+                                />
+                                <button
+                                  style={{ ...primaryBtn, marginTop: 0, padding: "9px 14px", fontSize: 12, width: "100%", boxSizing: "border-box" as const, opacity: canSend && !shareEmailSending ? 1 : 0.45 }}
+                                  disabled={!canSend || shareEmailSending}
+                                  onClick={async () => {
+                                    setShareEmailSending(true);
+                                    try {
+                                      await fetch("/api/send-email", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ to: shareEmail, shareUrl: url, projectName }),
+                                      });
+                                      setShareEmailSent(true);
+                                    } finally {
+                                      setShareEmailSending(false);
+                                    }
+                                  }}
+                                >
+                                  {shareEmailSending ? "Sending…" : "Send Link"}
+                                </button>
+                              </>
+                            )}
                           </div>
                         );
                       })()}
