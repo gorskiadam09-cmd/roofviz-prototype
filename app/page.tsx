@@ -232,6 +232,21 @@ const STEP_HINT: Partial<Record<Step, string>> = {
   EXPORT:       "Your visualization is complete — export a PDF to share with your customer.",
 };
 
+const STEP_SHORT: Partial<Record<Step, string>> = {
+  TRACE:        "Outline & Label Edges",
+  TEAROFF:      "Tear-off / Decking",
+  GUTTER_APRON: "Gutter Apron (eaves)",
+  ICE_WATER:    "Ice & Water Shield",
+  SYNTHETIC:    "Synthetic Underlayment",
+  DRIP_EDGE:    "Drip Edge (rakes)",
+  VALLEY_METAL: "Valley Metal (valleys)",
+  PRO_START:    "Pro-Start Strip",
+  SHINGLES:     "Shingles",
+  RIDGE_VENT:   "Ridge Vent",
+  CAP_SHINGLES: "Cap Shingles",
+  EXPORT:       "Export PDF",
+};
+
 // Returns the subset of STEPS that should appear given the lines drawn across all roofs.
 // Steps for which no relevant edge type exists are silently skipped during navigation.
 function relevantSteps(roofs: Roof[]): Set<Step> {
@@ -283,14 +298,14 @@ function defaultRoof(name: string): Roof {
     lines: [],
 
     // standards
-    gutterApronW: 8,
-    dripEdgeW: 8,
+    gutterApronW: 3,
+    dripEdgeW: 3,
     iceWaterEaveW: 40,
     iceWaterValleyW: 20,
     valleyMetalW: 10,
     proStartW: 12,
-    ridgeVentW: 12,
-    capW: 8,
+    ridgeVentW: 4,
+    capW: 3,
 
     gutterApronColor: "Aluminum",
     dripEdgeColor: "Aluminum",
@@ -991,6 +1006,14 @@ export default function Page() {
     setDraftHole(null);
   }
 
+  function deleteLine(lineId: string) {
+    patchActiveRoof((r) => ({ ...r, lines: r.lines.filter((l) => l.id !== lineId) }));
+  }
+
+  function deleteHole(holeIndex: number) {
+    patchActiveRoof((r) => ({ ...r, holes: r.holes.filter((_, i) => i !== holeIndex) }));
+  }
+
   function resetSelectedRoof() {
     if (!activeRoof || !active) return;
     patchActiveRoof((r) => ({ ...r, outline: [], closed: false, lines: [], holes: [] }));
@@ -1038,6 +1061,14 @@ export default function Page() {
     while (prevIdx > 0 && !rel.has(STEPS[prevIdx])) prevIdx--;
     const prev = STEPS[prevIdx];
     patchActive((p) => ({ ...p, step: prev }));
+    setTool("NONE");
+    setDraftLine(null);
+    setDraftHole(null);
+  }
+
+  function jumpToStep(step: Step) {
+    if (!active) return;
+    patchActive((p) => ({ ...p, step }));
     setTool("NONE");
     setDraftLine(null);
     setDraftHole(null);
@@ -1930,18 +1961,71 @@ export default function Page() {
                 )}
               </div>
 
-              {/* Step navigation */}
+              {/* Step navigation — checklist */}
               {active && (
                 <div style={sectionCard}>
-                  <div style={sectionLabel}>{`Step ${stepIndex(liveStep) + 1} of ${STEPS.length}`}</div>
-                  <div style={{
-                    fontSize: 15, fontWeight: 700, color: "#0f172a",
-                    marginTop: 8, marginBottom: 6, lineHeight: 1.35,
-                  }}>
+                  {/* Checklist */}
+                  <div style={{ display: "grid", gap: 2, marginBottom: 14 }}>
+                    {STEPS.filter(s => s !== "START").map((step) => {
+                      const rel = relevantSteps(active.roofs);
+                      const isCurrent   = liveStep === step;
+                      const isCompleted = stepIndex(liveStep) > stepIndex(step);
+                      const isSkipped   = !rel.has(step) && !isCurrent && !isCompleted;
+                      return (
+                        <div
+                          key={step}
+                          onClick={() => isCompleted ? jumpToStep(step) : undefined}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "5px 8px",
+                            borderRadius: 7,
+                            cursor: isCompleted ? "pointer" : "default",
+                            background: isCurrent ? "rgba(37,99,235,0.07)" : "transparent",
+                            opacity: isSkipped ? 0.38 : 1,
+                          }}
+                        >
+                          {/* Status icon */}
+                          <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            {isCompleted ? (
+                              <svg width="16" height="16" viewBox="0 0 16 16">
+                                <circle cx="8" cy="8" r="7" fill="#2563eb"/>
+                                <polyline points="4.5,8.5 7,11 11.5,5.5" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            ) : isCurrent ? (
+                              <svg width="16" height="16" viewBox="0 0 16 16">
+                                <circle cx="8" cy="8" r="7" fill="none" stroke="#2563eb" strokeWidth="2"/>
+                                <circle cx="8" cy="8" r="3.5" fill="#2563eb"/>
+                              </svg>
+                            ) : isSkipped ? (
+                              <span style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1 }}>—</span>
+                            ) : (
+                              <svg width="16" height="16" viewBox="0 0 16 16">
+                                <circle cx="8" cy="8" r="7" fill="none" stroke="#cbd5e1" strokeWidth="1.5"/>
+                              </svg>
+                            )}
+                          </div>
+                          {/* Step name */}
+                          <span style={{
+                            fontSize: 12,
+                            fontWeight: isCurrent ? 700 : isCompleted ? 600 : 500,
+                            color: isCurrent ? "#1d4ed8" : isCompleted ? "#0f172a" : "#64748b",
+                            flex: 1,
+                          }}>
+                            {STEP_SHORT[step]}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Current step detail */}
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 6, paddingTop: 8, borderTop: "1px solid rgba(15,23,42,0.06)" }}>
                     {STEP_TITLE[liveStep]}
                   </div>
                   {STEP_HINT[liveStep] && (
-                    <p style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, marginBottom: 14, marginTop: 0 }}>
+                    <p style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, margin: "0 0 12px" }}>
                       {STEP_HINT[liveStep]}
                     </p>
                   )}
@@ -2099,6 +2183,55 @@ export default function Page() {
                                 <button style={{ ...smallBtn, flex: 1 }} onClick={tool === "TRACE_HOLE" ? undoHolePoint : undoDraftPoint}>Undo point</button>
                                 <button style={{ ...smallBtn }} onClick={() => { setTool("NONE"); setDraftLine(null); setDraftHole(null); }}>✕</button>
                               </div>
+                            </div>
+                          )}
+
+                          {/* Lines drawn */}
+                          {activeRoof.lines.length > 0 && (
+                            <div style={{ display: "grid", gap: 4 }}>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>Lines drawn</div>
+                              {(["EAVE","RAKE","VALLEY","RIDGE","HIP"] as LineKind[])
+                                .filter(kind => activeRoof.lines.some(l => l.kind === kind))
+                                .map(kind => (
+                                  <div key={kind} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                    {activeRoof.lines
+                                      .filter(l => l.kind === kind)
+                                      .map((line, i) => (
+                                        <div key={line.id} style={{ display: "flex", alignItems: "center", gap: 6,
+                                          background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
+                                          <span style={{ flex: 1, fontSize: 11, color: "#475569", fontWeight: 600 }}>
+                                            {kind} {i + 1}
+                                          </span>
+                                          <button
+                                            style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
+                                              color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
+                                            onClick={() => deleteLine(line.id)}
+                                          >×</button>
+                                        </div>
+                                      ))}
+                                  </div>
+                                ))
+                              }
+                            </div>
+                          )}
+
+                          {/* Dormer holes */}
+                          {activeRoof.holes.length > 0 && (
+                            <div style={{ display: "grid", gap: 4 }}>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>Dormer holes</div>
+                              {activeRoof.holes.map((_, i) => (
+                                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6,
+                                  background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
+                                  <span style={{ flex: 1, fontSize: 11, color: "#475569", fontWeight: 600 }}>
+                                    Dormer {i + 1}
+                                  </span>
+                                  <button
+                                    style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
+                                      color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
+                                    onClick={() => deleteHole(i)}
+                                  >×</button>
+                                </div>
+                              ))}
                             </div>
                           )}
 
