@@ -72,7 +72,7 @@ const STEP_TITLE: Record<Step, string> = {
   ICE_WATER: "Step 4 — Ice & water (eaves + valleys)",
   SYNTHETIC: "Step 5 — Synthetic underlayment (field)",
   DRIP_EDGE: "Step 6 — Drip edge (rakes)",
-  VALLEY_METAL: "Step 7 — Galvanized valley metal (valleys)",
+  VALLEY_METAL: "Step 7 — Valley metal (valleys)",
   PRO_START: "Step 8 — Pro-start starter strip (eaves + rakes)",
   SHINGLES: "Step 9 — Shingles",
   RIDGE_VENT: "Step 10 — Ridge vent (ridges)",
@@ -93,7 +93,7 @@ type Tool =
 
 type Polyline = { id: string; kind: LineKind; points: number[] };
 
-type MetalColor = "Aluminum" | "White" | "Black" | "Bronze" | "Brown" | "Gray";
+type MetalColor = "Galvanized" | "Aluminum" | "White" | "Black" | "Bronze" | "Brown" | "Gray";
 type ShingleColor =
   | "Barkwood"
   | "Charcoal"
@@ -128,6 +128,8 @@ type Roof = {
   valleyMetalColor: MetalColor;
 
   shingleScale: number;
+  shingleRotation: number; // degrees, -45..45; 0 = horizontal
+  proStartOnRakes: boolean;
 };
 
 type PhotoProject = {
@@ -178,29 +180,81 @@ function kindColor(k: LineKind) {
 function metalRGBA(color: MetalColor, alpha: number) {
   const a = alpha;
   switch (color) {
-    case "Aluminum":
-      return `rgba(198,205,211,${a})`;
-    case "White":
-      return `rgba(245,246,248,${a})`;
-    case "Black":
-      return `rgba(25,25,28,${a})`;
-    case "Bronze":
-      return `rgba(132,97,60,${a})`;
-    case "Brown":
-      return `rgba(92,64,45,${a})`;
-    case "Gray":
-      return `rgba(120,126,134,${a})`;
+    case "Galvanized": return `rgba(155,165,172,${a})`;
+    case "Aluminum": return `rgba(198,205,211,${a})`;
+    case "White":    return `rgba(245,246,248,${a})`;
+    case "Black":    return `rgba(25,25,28,${a})`;
+    case "Bronze":   return `rgba(132,97,60,${a})`;
+    case "Brown":    return `rgba(92,64,45,${a})`;
+    case "Gray":     return `rgba(120,126,134,${a})`;
   }
+}
+
+// RGB tuples for jsPDF legend boxes
+function metalRGB(color: MetalColor): [number, number, number] {
+  switch (color) {
+    case "Galvanized": return [155, 165, 172];
+    case "Aluminum": return [198, 205, 211];
+    case "White":    return [230, 232, 235];
+    case "Black":    return [25,  25,  28];
+    case "Bronze":   return [132, 97,  60];
+    case "Brown":    return [92,  64,  45];
+    case "Gray":     return [120, 126, 134];
+  }
+}
+
+function shingleRGB(color: ShingleColor): [number, number, number] {
+  switch (color) {
+    case "Barkwood":     return [111, 79,  52];
+    case "Charcoal":     return [75,  78,  85];
+    case "WeatheredWood":return [106, 98,  86];
+    case "PewterGray":   return [122, 128, 135];
+    case "OysterGray":   return [141, 144, 146];
+    case "Slate":        return [93,  106, 121];
+    case "Black":        return [47,  49,  53];
+  }
+}
+
+// Per-step contextual hints shown in the panel
+const STEP_HINT: Partial<Record<Step, string>> = {
+  TRACE:        "Outline each roof section, then label its edges (eaves, rakes, valleys, etc.).",
+  TEAROFF:      "Shows the bare decking after the old roof is removed.",
+  GUTTER_APRON: "Metal strips at the eave edges channel water into the gutters.",
+  ICE_WATER:    "Self-adhering membrane at eaves and valleys stops ice dam leaks.",
+  SYNTHETIC:    "Lightweight felt covers the field of the roof as a moisture barrier.",
+  DRIP_EDGE:    "L-shaped metal along the rake edges keeps water off the fascia.",
+  VALLEY_METAL: "Standard open valley uses galvanized metal. Select a color in Advanced Options to upgrade to W-valley metal — installed over ice & water with shingles woven around it.",
+  PRO_START:    "Adhesive starter strip along eaves and rakes seals the first shingle row.",
+  SHINGLES:     "Architectural shingles are installed over the entire roof field.",
+  RIDGE_VENT:   "Continuous vent strip along the ridge allows attic air to escape.",
+  CAP_SHINGLES: "Pre-cut cap shingles finish the ridge and cover the vent.",
+  EXPORT:       "Your visualization is complete — export a PDF to share with your customer.",
+};
+
+// Returns the subset of STEPS that should appear given the lines drawn across all roofs.
+// Steps for which no relevant edge type exists are silently skipped during navigation.
+function relevantSteps(roofs: Roof[]): Set<Step> {
+  const allLines = roofs.flatMap((r) => r.lines);
+  const has = (k: LineKind) => allLines.some((l) => l.kind === k);
+  const s = new Set<Step>([
+    "START", "TRACE", "TEAROFF", "ICE_WATER", "SYNTHETIC", "SHINGLES", "EXPORT",
+  ]);
+  if (has("EAVE"))                   s.add("GUTTER_APRON");
+  if (has("RAKE"))                   s.add("DRIP_EDGE");
+  if (has("VALLEY"))                 s.add("VALLEY_METAL");
+  if (has("EAVE") || has("RAKE"))    s.add("PRO_START");
+  if (has("RIDGE")) { s.add("RIDGE_VENT"); s.add("CAP_SHINGLES"); }
+  return s;
 }
 
 function useHtmlImage(src?: string) {
   const [img, setImg] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
-    if (!src) {
-      setImg(null);
-      return;
-    }
+    // Clear stale image immediately so a previous project's photo never leaks
+    // into a different project while the new image is loading.
+    setImg(null);
+    if (!src) return;
     const i = new window.Image();
     i.crossOrigin = "anonymous";
     i.onload = () => setImg(i);
@@ -239,10 +293,12 @@ function defaultRoof(name: string): Roof {
 
     gutterApronColor: "Aluminum",
     dripEdgeColor: "Aluminum",
-    valleyMetalColor: "Aluminum",
+    valleyMetalColor: "Galvanized",
 
     // smaller shingles by default
     shingleScale: 0.20,
+    shingleRotation: 0,
+    proStartOnRakes: true,
   };
 }
 
@@ -377,74 +433,52 @@ function makeSyntheticTexture(w: number, h: number) {
   return c.toDataURL("image/png");
 }
 
-function makeShingleTexture(w: number, h: number, color: ShingleColor) {
+function makeShingleTexture(_w: number, _h: number, color: ShingleColor) {
+  // Flat-color base so the tile seams never show as color bands on large roofs.
+  const W = 2400, H = 2400;
   const c = document.createElement("canvas");
-  c.width = Math.max(1400, Math.floor(w));
-  c.height = Math.max(1400, Math.floor(h));
+  c.width = W; c.height = H;
   const ctx = c.getContext("2d")!;
-  const W = c.width,
-    H = c.height;
 
   const pal = shinglePalette(color);
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, pal.top);
-  g.addColorStop(1, pal.bot);
-  ctx.fillStyle = g;
+
+  // Uniform base — no gradient so the repeating tile is invisible.
+  ctx.fillStyle = pal.top;
   ctx.fillRect(0, 0, W, H);
 
-  // small shingles
-  const courseH = 7;
-  const tabW = 10;
+  const courseH = 11; // exposure height — must match fillPatternOffsetY calculation
+  const tabW    = 16; // shingle tab width
 
   for (let row = 0; row * courseH < H + courseH; row++) {
     const y = row * courseH;
     const offset = (row % 2) * (tabW / 2);
 
-    ctx.globalAlpha = 0.34;
-    ctx.strokeStyle = "rgba(0,0,0,0.46)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(W, y);
-    ctx.stroke();
+    // Shadow strip at the butt edge of each course (uses the shingle's own dark tone).
+    ctx.globalAlpha = 0.40;
+    ctx.fillStyle = pal.bot;
+    ctx.fillRect(0, y, W, 2);
 
-    ctx.globalAlpha = 0.1;
-    ctx.strokeStyle = "rgba(255,255,255,0.22)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, y + 1.2);
-    ctx.lineTo(W, y + 1.2);
-    ctx.stroke();
+    // Very faint highlight just below, giving the butt edge a slight lift.
+    ctx.globalAlpha = 0.10;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, y + 2, W, 1);
 
-    for (let x = -tabW; x < W + tabW; x += tabW) {
-      const xx = x + offset;
-
-      ctx.globalAlpha = 0.1;
-      ctx.strokeStyle = "rgba(0,0,0,0.26)";
-      ctx.lineWidth = 1;
+    // Tab cut dividers — faint, top 55% of exposure only.
+    ctx.globalAlpha = 0.08;
+    ctx.strokeStyle = pal.bot;
+    ctx.lineWidth = 0.9;
+    for (let col = 0; col < Math.ceil(W / tabW) + 2; col++) {
+      const tx = col * tabW + offset;
       ctx.beginPath();
-      ctx.moveTo(xx, y);
-      ctx.lineTo(xx, y + courseH);
+      ctx.moveTo(tx, y + 2);
+      ctx.lineTo(tx, y + courseH * 0.55);
       ctx.stroke();
-
-      if (Math.random() > 0.55) {
-        ctx.globalAlpha = 0.04 + Math.random() * 0.08;
-        ctx.fillStyle = "rgba(0,0,0,0.9)";
-        const bw = tabW * (0.7 + Math.random() * 0.8);
-        const bh = courseH * (0.35 + Math.random() * 0.75);
-        ctx.fillRect(
-          xx + 1 + Math.random() * 2,
-          y + 1 + Math.random() * 2,
-          bw,
-          bh
-        );
-      }
     }
   }
 
   ctx.globalAlpha = 1;
-  addNoise(ctx, W, H, 420000, 0.003, 0.06);
-  vignette(ctx, W, H, 0.09);
+  // Minimal noise for a slight granular texture.
+  addNoise(ctx, W, H, 28000, 0.003, 0.022);
   return c.toDataURL("image/png");
 }
 
@@ -604,6 +638,157 @@ function CapBand({
   );
 }
 
+/* ------------------- Roof auto-detection ------------------- */
+
+// Andrew's monotone-chain convex hull
+function convexHull(pts: [number, number][]): [number, number][] {
+  if (pts.length < 3) return pts;
+  const s = [...pts].sort((a, b) => a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]);
+  const cross = (o: [number,number], a: [number,number], b: [number,number]) =>
+    (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]);
+  const lower: [number,number][] = [];
+  for (const p of s) {
+    while (lower.length >= 2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: [number,number][] = [];
+  for (const p of [...s].reverse()) {
+    while (upper.length >= 2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  return [...lower.slice(0,-1), ...upper.slice(0,-1)];
+}
+
+type AutoSuggest = { outline: number[]; lines: Array<{ kind: LineKind; points: number[] }> };
+
+// Sobel-edge + Hough-transform roof line detector (runs client-side on a small canvas).
+function autoDetectRoof(img: HTMLImageElement, displayW: number, displayH: number): AutoSuggest {
+  const MAX = 350;
+  const sc = Math.min(MAX / img.naturalWidth, MAX / img.naturalHeight);
+  const pw = Math.max(1, Math.round(img.naturalWidth * sc));
+  const ph = Math.max(1, Math.round(img.naturalHeight * sc));
+  const toX = (x: number) => (x / sc) * (displayW / img.naturalWidth);
+  const toY = (y: number) => (y / sc) * (displayH / img.naturalHeight);
+
+  // Draw image to small processing canvas
+  const tc = document.createElement("canvas");
+  tc.width = pw; tc.height = ph;
+  const tCtx = tc.getContext("2d")!;
+  tCtx.drawImage(img, 0, 0, pw, ph);
+  const { data } = tCtx.getImageData(0, 0, pw, ph);
+
+  // Grayscale
+  const gray = new Float32Array(pw * ph);
+  for (let i = 0; i < pw * ph; i++) {
+    gray[i] = 0.299*data[i*4] + 0.587*data[i*4+1] + 0.114*data[i*4+2];
+  }
+
+  // Gaussian blur 3×3 (reduces noise before edge detection)
+  const bl = new Float32Array(pw * ph);
+  for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) {
+    bl[y*pw+x] = (
+      gray[(y-1)*pw+(x-1)] + 2*gray[(y-1)*pw+x] + gray[(y-1)*pw+(x+1)] +
+      2*gray[y*pw+(x-1)] + 4*gray[y*pw+x] + 2*gray[y*pw+(x+1)] +
+      gray[(y+1)*pw+(x-1)] + 2*gray[(y+1)*pw+x] + gray[(y+1)*pw+(x+1)]
+    ) / 16;
+  }
+
+  // Sobel edge magnitude + binary threshold at 22% of max
+  const mag = new Float32Array(pw * ph);
+  let mx = 0;
+  for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) {
+    const gx = -bl[(y-1)*pw+(x-1)] + bl[(y-1)*pw+(x+1)] - 2*bl[y*pw+(x-1)] + 2*bl[y*pw+(x+1)] - bl[(y+1)*pw+(x-1)] + bl[(y+1)*pw+(x+1)];
+    const gy = -bl[(y-1)*pw+(x-1)] - 2*bl[(y-1)*pw+x] - bl[(y-1)*pw+(x+1)] + bl[(y+1)*pw+(x-1)] + 2*bl[(y+1)*pw+x] + bl[(y+1)*pw+(x+1)];
+    mag[y*pw+x] = Math.hypot(gx, gy);
+    if (mag[y*pw+x] > mx) mx = mag[y*pw+x];
+  }
+  const edge = new Uint8Array(pw * ph);
+  for (let i = 0; i < pw*ph; i++) edge[i] = mag[i] >= mx * 0.22 ? 1 : 0;
+
+  // Standard Hough transform
+  const diag = Math.ceil(Math.hypot(pw, ph));
+  const NT = 180, NR = 2*diag+1;
+  const acc = new Int32Array(NT * NR);
+  const cLUT = new Float32Array(NT), sLUT = new Float32Array(NT);
+  for (let t = 0; t < NT; t++) { cLUT[t] = Math.cos(t*Math.PI/NT); sLUT[t] = Math.sin(t*Math.PI/NT); }
+  for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) {
+    if (!edge[y*pw+x]) continue;
+    for (let t = 0; t < NT; t++) {
+      const r = Math.round(x*cLUT[t] + y*sLUT[t]) + diag;
+      if (r >= 0 && r < NR) acc[t*NR+r]++;
+    }
+  }
+
+  // Extract top 7 peaks with tighter neighbourhood suppression
+  const minV = Math.max(25, Math.min(pw, ph) * 0.16);
+  const peaks: {t: number; r: number; v: number}[] = [];
+  const sup = new Uint8Array(NT * NR);
+  for (let i = 0; i < 7; i++) {
+    let best = 0, bt = 0, br = 0;
+    for (let t = 0; t < NT; t++) for (let r = 0; r < NR; r++) {
+      if (!sup[t*NR+r] && acc[t*NR+r] > best) { best = acc[t*NR+r]; bt = t; br = r; }
+    }
+    if (best < minV) break;
+    peaks.push({ t: bt, r: br, v: best });
+    // Wider suppression window to prevent near-duplicate lines
+    for (let dt = -15; dt <= 15; dt++) for (let dr = -30; dr <= 30; dr++) {
+      const nt = ((bt+dt)%NT+NT)%NT, nr = br+dr;
+      if (nr >= 0 && nr < NR) sup[nt*NR+nr] = 1;
+    }
+  }
+
+  // Classify each detected line
+  const classify = (tIdx: number, pts: number[]): LineKind => {
+    const deg = (tIdx * 180) / NT;
+    if (deg > 65 && deg < 115) return (pts[1] + pts[3]) / 2 < displayH * 0.5 ? "RIDGE" : "EAVE";
+    if (deg < 25 || deg > 155) return "RAKE";
+    return deg < 90 ? "HIP" : "VALLEY";
+  };
+
+  const allLines: AutoSuggest["lines"] = [];
+  const lineEqs: { ct: number; st: number; rho: number }[] = [];
+  for (const { t, r } of peaks) {
+    const rho = r - diag, ct = cLUT[t], st = sLUT[t];
+    lineEqs.push({ ct, st, rho });
+    const cp: number[] = [];
+    const addPt = (px: number, py: number) => {
+      if (px >= -1 && px <= pw+1 && py >= -1 && py <= ph+1) cp.push(px, py);
+    };
+    if (Math.abs(st) > 0.01) { addPt(0, rho/st); addPt(pw, (rho-pw*ct)/st); }
+    if (Math.abs(ct) > 0.01) { addPt(rho/ct, 0); addPt((rho-ph*st)/ct, ph); }
+    if (cp.length >= 4) {
+      const pts = [toX(cp[0]), toY(cp[1]), toX(cp[cp.length-2]), toY(cp[cp.length-1])];
+      allLines.push({ kind: classify(t, pts), points: pts });
+    }
+  }
+
+  // Limit to at most 2 lines per kind so the result stays clean
+  const maxPerKind: Record<LineKind, number> = { EAVE: 2, RAKE: 2, VALLEY: 2, RIDGE: 1, HIP: 2 };
+  const kindCounts: Partial<Record<LineKind, number>> = {};
+  const lines = allLines.filter((l) => {
+    const cnt = kindCounts[l.kind] ?? 0;
+    if (cnt >= maxPerKind[l.kind]) return false;
+    kindCounts[l.kind] = cnt + 1;
+    return true;
+  });
+
+  // Find intersections of line pairs → convex hull → outline polygon
+  const iPts: [number, number][] = [];
+  for (let i = 0; i < lineEqs.length; i++) for (let j = i+1; j < lineEqs.length; j++) {
+    const { ct: c1, st: s1, rho: r1 } = lineEqs[i], { ct: c2, st: s2, rho: r2 } = lineEqs[j];
+    const det = c1*s2 - c2*s1;
+    if (Math.abs(det) < 0.01) continue;
+    const ix = (r1*s2 - r2*s1) / det, iy = (c1*r2 - c2*r1) / det;
+    if (ix >= 0 && ix <= pw && iy >= 0 && iy <= ph) iPts.push([toX(ix), toY(iy)]);
+  }
+  // Fall back to image corners if too few intersections
+  if (iPts.length < 3) {
+    iPts.push([toX(0),toY(0)],[toX(pw),toY(0)],[toX(pw),toY(ph)],[toX(0),toY(ph)]);
+  }
+  const outline = convexHull(iPts).flatMap(p => p);
+  return { outline, lines };
+}
+
 /* ------------------- Main ------------------- */
 export default function Page() {
   const stageRef = useRef<any>(null);
@@ -646,6 +831,33 @@ export default function Page() {
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [exportView, setExportView] = useState<ExportView>("LIVE");
+  const [screen, setScreen] = useState<"MENU" | "PROJECT">("MENU");
+  const [autoSuggest, setAutoSuggest] = useState<AutoSuggest | null>(null);
+  const [autoDetecting, setAutoDetecting] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renamingName, setRenamingName] = useState("");
+
+  // Persist projects to localStorage whenever they change.
+  useEffect(() => {
+    if (typeof window === "undefined" || photos.length === 0) return;
+    try { localStorage.setItem("roofviz_v2", JSON.stringify(photos)); } catch {}
+  }, [photos]);
+
+  // Load projects from localStorage on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem("roofviz_v2");
+      if (raw) {
+        const parsed = JSON.parse(raw) as PhotoProject[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setPhotos(parsed);
+          setActivePhotoId(parsed[0].id);
+        }
+      }
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function patchActive(updater: (p: PhotoProject) => PhotoProject) {
     setPhotos((prev) => prev.map((p) => (p.id === activePhotoId ? updater(p) : p)));
@@ -660,15 +872,11 @@ export default function Page() {
   }
 
   function startProject() {
-    if (photos.length > 0) {
-      setActivePhotoId((prev) => prev || photos[0].id);
-      return;
-    }
     const id = uid();
     const roof1 = defaultRoof("Roof 1");
     const item: PhotoProject = {
       id,
-      name: "Project Photo",
+      name: projectName || "My Roof Project",
       src: "",
       step: "TRACE",
       roofs: [roof1],
@@ -679,73 +887,78 @@ export default function Page() {
       stageScale: 1,
       stagePos: { x: 0, y: 0 },
     };
-    setPhotos([item]);
+    setPhotos((prev) => [item, ...prev]);
     setActivePhotoId(id);
+    setScreen("PROJECT");
   }
 
-  // Multi-photo upload (always works):
-  // - If active project has empty src, first uploaded photo replaces it.
-  // - Remaining photos become new projects.
-  // - After upload, set active to the replaced/newest project.
-  function addFiles(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    const list = Array.from(files);
+  function openProject(id: string) {
+    setActivePhotoId(id);
+    setScreen("PROJECT");
+  }
 
-    list.forEach((file, idx) => {
-      const fr = new FileReader();
-      fr.onload = () => {
-        const data = String(fr.result);
-
-        setPhotos((prev) => {
-          const next = prev.slice();
-          const activeIdx = next.findIndex((p) => p.id === activePhotoId);
-
-          // Replace blank active with first file
-          if (idx === 0 && activeIdx !== -1 && !next[activeIdx].src) {
-            next[activeIdx] = {
-              ...next[activeIdx],
-              src: data,
-              name: file.name,
-              step: "TRACE",
-              stageScale: 1,
-              stagePos: { x: 0, y: 0 },
-            };
-            // keep activePhotoId the same
-            return next;
-          }
-
-          // Otherwise create new project
-          const id = uid();
-          const roof1 = defaultRoof("Roof 1");
-          const item: PhotoProject = {
-            id,
-            name: file.name,
-            src: data,
-            step: "TRACE",
-            roofs: [roof1],
-            activeRoofId: roof1.id,
-            shingleColor: "Barkwood",
-            showGuidesDuringInstall: false,
-            showEditHandles: false,
-            stageScale: 1,
-            stagePos: { x: 0, y: 0 },
-          };
-          next.unshift(item);
-          return next;
-        });
-
-        // If we created a new project (not replacing), jump to it
-        if (!(idx === 0 && active && !active.src)) {
-          // we don't have the new id in this scope (setPhotos is async),
-          // so we’ll do a safe approach: after state update, user can click.
-          // But we CAN still set active if there was no active yet:
-          if (!activePhotoId) {
-            // noop; list appears and user can click
-          }
-        }
-      };
-      fr.readAsDataURL(file);
+  function deleteProject(id: string) {
+    setPhotos((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      // If we deleted the active project, switch active to first remaining.
+      if (id === activePhotoId) setActivePhotoId(next[0]?.id ?? "");
+      return next;
     });
+  }
+
+  function renameProject(id: string, name: string) {
+    setPhotos((prev) => prev.map((p) => p.id === id ? { ...p, name } : p));
+  }
+
+  function runAutoDetect() {
+    if (!photoImg || !active) return;
+    setAutoDetecting(true);
+    setAutoSuggest(null);
+    // Defer to next tick so the "Detecting…" label renders before the heavy computation.
+    setTimeout(() => {
+      try {
+        const result = autoDetectRoof(photoImg, w, h);
+        setAutoSuggest(result);
+      } catch {
+        // Detection failed silently; user can trace manually.
+      } finally {
+        setAutoDetecting(false);
+      }
+    }, 0);
+  }
+
+  function acceptAutoSuggest() {
+    if (!autoSuggest) return;
+    patchActiveRoof((r) => ({
+      ...r,
+      outline: autoSuggest.outline,
+      closed: true,
+      lines: autoSuggest.lines.map((l) => ({ ...l, id: uid() })),
+    }));
+    setAutoSuggest(null);
+    setTool("NONE");
+  }
+
+  // Upload a photo into the currently active project.
+  // Never renames the project — the name stays whatever the user set.
+  // Only the first selected file is used; each project keeps its own photo.
+  function addFiles(files: FileList | null) {
+    if (!files || files.length === 0 || !activePhotoId) return;
+    // Capture the target project ID *before* the async FileReader callback
+    // so a subsequent activePhotoId change never redirects the photo to the
+    // wrong project.
+    const targetId = activePhotoId;
+    const fr = new FileReader();
+    fr.onload = () => {
+      setPhotos((prev) =>
+        prev.map((p) =>
+          p.id === targetId
+            ? { ...p, src: String(fr.result), stageScale: 1, stagePos: { x: 0, y: 0 } }
+            : p
+        )
+      );
+    };
+    fr.readAsDataURL(files[0]);
   }
 
   function addRoof() {
@@ -773,28 +986,41 @@ export default function Page() {
 
   function canGoNext() {
     if (!active) return false;
-    const idx = stepIndex(active.step);
-    if (idx >= STEPS.length - 1) return false;
     if (active.step === "TRACE") {
       if (!active.roofs.some((r) => r.closed)) return false;
     }
-    return true;
+    const rel = relevantSteps(active.roofs);
+    let nextIdx = stepIndex(active.step) + 1;
+    while (nextIdx < STEPS.length && !rel.has(STEPS[nextIdx])) nextIdx++;
+    return nextIdx < STEPS.length;
   }
 
   function goNext() {
     if (!active || !canGoNext()) return;
-    const next = STEPS[stepIndex(active.step) + 1];
+    const rel = relevantSteps(active.roofs);
+    let nextIdx = stepIndex(active.step) + 1;
+    while (nextIdx < STEPS.length && !rel.has(STEPS[nextIdx])) nextIdx++;
+    if (nextIdx >= STEPS.length) return;
+    const next = STEPS[nextIdx];
     patchActive((p) => ({ ...p, step: next, showEditHandles: next === "TRACE" ? p.showEditHandles : false }));
-    setTool("NONE");
     setDraftLine(null);
     setDraftHole(null);
+    // Auto-activate the trace tool when entering TRACE so users know to click the canvas.
+    if (next === "TRACE" && !activeRoof?.closed) {
+      setTool("TRACE_ROOF");
+    } else {
+      setTool("NONE");
+    }
   }
 
   function goBack() {
     if (!active) return;
     const idx = stepIndex(active.step);
     if (idx <= 0) return;
-    const prev = STEPS[idx - 1];
+    const rel = relevantSteps(active.roofs);
+    let prevIdx = idx - 1;
+    while (prevIdx > 0 && !rel.has(STEPS[prevIdx])) prevIdx--;
+    const prev = STEPS[prevIdx];
     patchActive((p) => ({ ...p, step: prev }));
     setTool("NONE");
     setDraftLine(null);
@@ -885,14 +1111,24 @@ export default function Page() {
   function onStageDown(e: any) {
     if (!active || !activeRoof || !photoImg) return;
     const stage = e.target.getStage();
-    const pos = stage.getPointerPosition();
-    if (!pos) return;
+    const rawPos = stage.getPointerPosition();
+    if (!rawPos) return;
+
+    // Convert from screen/container coords → world coords, accounting for
+    // the stage's current scale and pan offset.
+    const scale = stage.scaleX();
+    const pos = {
+      x: (rawPos.x - stage.x()) / scale,
+      y: (rawPos.y - stage.y()) / scale,
+    };
+    // Keep the close-snap radius constant in screen pixels regardless of zoom.
+    const worldCloseRadius = CLOSE_DIST / scale;
 
     if (active.step === "TRACE" && tool === "TRACE_ROOF" && !activeRoof.closed) {
       const pts = activeRoof.outline;
       if (pts.length >= 6) {
         const x0 = pts[0], y0 = pts[1];
-        if (dist(pos.x, pos.y, x0, y0) <= CLOSE_DIST) {
+        if (dist(pos.x, pos.y, x0, y0) <= worldCloseRadius) {
           patchActiveRoof((r) => ({ ...r, closed: true }));
           setTool("NONE");
           return;
@@ -906,7 +1142,7 @@ export default function Page() {
       if (!draftHole) return;
       if (draftHole.length >= 6) {
         const x0 = draftHole[0], y0 = draftHole[1];
-        if (dist(pos.x, pos.y, x0, y0) <= CLOSE_DIST) {
+        if (dist(pos.x, pos.y, x0, y0) <= worldCloseRadius) {
           patchActiveRoof((r) => ({ ...r, holes: [...r.holes, draftHole] }));
           setDraftHole([]);
           setTool("NONE");
@@ -941,6 +1177,31 @@ export default function Page() {
     });
   }
 
+  // Enter key shortcut: finish the current line or hole without clicking the button.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      if (tool === "TRACE_HOLE") {
+        if (!activeRoof || !draftHole || draftHole.length < 6) return;
+        patchActiveRoof((r) => ({ ...r, holes: [...r.holes, draftHole] }));
+        setDraftHole([]);
+        setTool("NONE");
+      } else if (
+        tool === "DRAW_EAVE" || tool === "DRAW_RAKE" || tool === "DRAW_VALLEY" ||
+        tool === "DRAW_RIDGE" || tool === "DRAW_HIP"
+      ) {
+        if (!activeRoof || !draftLine || draftLine.points.length < 4) return;
+        patchActiveRoof((r) => ({ ...r, lines: [...r.lines, { ...draftLine, id: uid() }] }));
+        setDraftLine({ id: uid(), kind: draftLine.kind, points: [] });
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  // Re-register whenever the captured state changes so the handler is never stale.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, draftLine, draftHole, activeRoof, active]);
+
   // textures
   const texW = Math.floor(w * 2.4);
   const texH = Math.floor(h * 2.4);
@@ -963,7 +1224,7 @@ export default function Page() {
   }, [active?.id, active?.shingleColor, texW, texH]);
   const shinglesImg = useHtmlImage(shingleSrc);
 
-  const metalOptions: MetalColor[] = ["Aluminum", "White", "Black", "Bronze", "Brown", "Gray"];
+  const metalOptions: MetalColor[] = ["Galvanized", "Aluminum", "White", "Black", "Bronze", "Brown", "Gray"];
 
   // export view overrides rendering step
   const liveStep: Step = active?.step ?? "START";
@@ -974,376 +1235,1059 @@ export default function Page() {
 
   const showGuides = (active?.step === "TRACE") || !!active?.showGuidesDuringInstall;
 
-  // Two-page PDF
+  // Two-page PDF with material legends
   async function exportPdfTwoPages() {
     if (!active || !stageRef.current) return;
 
     const mod: any = await import("jspdf");
     const jsPDF = mod.jsPDF || mod.default || mod;
 
+    // Fetch the RoofViz logo as a data URL for embedding in the PDF
+    let logoDataUrl = "";
+    try {
+      const blob = await fetch("/roofviz-logo.png").then((r) => r.blob());
+      logoDataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+    } catch { /* logo unavailable — continue without it */ }
+
     const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
+    const pageW = pdf.internal.pageSize.getWidth();  // 792
+    const pageH = pdf.internal.pageSize.getHeight(); // 612
 
     async function snap(view: ExportView) {
       setExportView(view);
-      await new Promise((r) => setTimeout(r, 120));
+      await new Promise((r) => setTimeout(r, 150));
       return stageRef.current.toDataURL({ pixelRatio: 2 });
     }
 
-    // Page 1: shingles
+    // Shrink image slightly to leave room for the legend at the bottom.
+    const imgX = 36, imgY = 76;
+    const imgW = pageW - 72;
+    const imgH = pageH - 160; // leaves ~84pt for legend
+
+    const legendY = imgY + imgH + 14;
+    const boxS = 11; // legend swatch size
+    const boxGap = 8;
+
+    // Helper: draw legend items in up to 2 rows of up to 3 columns each.
+    function drawLegend(items: Array<{ r: number; g: number; b: number; label: string; lineStyle?: boolean }>) {
+      const cols = 3;
+      const itemW = imgW / cols;
+      const rowH = boxS + 10; // spacing between rows
+      pdf.setFontSize(8.5);
+      pdf.setFont("helvetica", "normal");
+      items.forEach((item, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const x = imgX + col * itemW;
+        const rowY = legendY + row * rowH;
+        const cy = rowY + boxS / 2;
+        if (item.lineStyle) {
+          pdf.setDrawColor(item.r, item.g, item.b);
+          pdf.setLineWidth(2.5);
+          pdf.line(x, cy, x + boxS * 1.6, cy);
+          pdf.setDrawColor(0, 0, 0);
+          pdf.setLineWidth(0.5);
+          pdf.setTextColor(55, 65, 80);
+          pdf.text(item.label, x + boxS * 1.6 + 4, rowY + boxS - 1);
+        } else {
+          pdf.setFillColor(item.r, item.g, item.b);
+          pdf.setDrawColor(160, 160, 160);
+          pdf.setLineWidth(0.4);
+          pdf.rect(x, rowY, boxS, boxS, "FD");
+          pdf.setTextColor(55, 65, 80);
+          pdf.text(item.label, x + boxS + boxGap, rowY + boxS - 1);
+        }
+      });
+    }
+
+    // Use the first roof's colors for the legend (most common case).
+    const r0 = active.roofs[0] ?? null;
+    const sc = active.shingleColor;
+
+    // Determine which line types actually exist across all roofs.
+    const allLines = active.roofs.flatMap((r) => r.lines);
+    const hasEave   = allLines.some((l) => l.kind === "EAVE");
+    const hasRake   = allLines.some((l) => l.kind === "RAKE");
+    const hasValley = allLines.some((l) => l.kind === "VALLEY");
+    const hasRidge  = allLines.some((l) => l.kind === "RIDGE");
+    const hasHip    = allLines.some((l) => l.kind === "HIP");
+
+    // Logo dimensions: maintain 165:48 aspect ratio
+    const logoW = 108, logoH = Math.round(108 * 48 / 165);
+
+    // ── Page 1: Finished Shingles ──
     const img1 = await snap("PDF_SHINGLES");
     pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(18);
-    pdf.text(`RoofViz — ${projectName}`, 36, 40);
+    pdf.setFontSize(16);
+    pdf.setTextColor(15, 23, 42);
+    pdf.text(active.name || projectName, imgX, 28);
     pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(12);
-    pdf.text(`Page 1: Finished Shingles`, 36, 60);
-    pdf.addImage(img1, "PNG", 36, 80, pageW - 72, pageH - 120);
+    pdf.setFontSize(10);
+    pdf.setTextColor(100, 116, 139);
+    pdf.text("Page 1 of 2  ·  Finished Roof", imgX, 46);
+    if (logoDataUrl) pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
+    pdf.addImage(img1, "PNG", imgX, imgY, imgW, imgH);
 
-    // Page 2: underlayments + metals
+    // Legend row – Page 1 (only include items that have relevant lines)
+    const [sr, sg, sb] = shingleRGB(sc);
+    const page1Items = [
+      { r: sr,  g: sg,  b: sb,  label: `${sc} Shingles (field)` },
+      ...(hasRidge ? [{ r: sr,  g: sg,  b: sb,  label: "Cap Shingles (ridge)" }] : []),
+      ...(hasValley ? [{ r: 200, g: 200, b: 200, label: "Valley seam", lineStyle: true }] : []),
+      ...(hasHip    ? [{ r: 200, g: 200, b: 200, label: "Hip seam",    lineStyle: true }] : []),
+    ];
+    drawLegend(page1Items);
+
+    // Legend title
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(7.5);
+    pdf.setTextColor(148, 163, 184);
+    pdf.text("MATERIAL KEY", imgX, legendY - 4);
+
+    // ── Page 2: Underlayments + Metals ──
     pdf.addPage();
     const img2 = await snap("PDF_UNDERLAY");
     pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(18);
-    pdf.text(`RoofViz — ${projectName}`, 36, 40);
+    pdf.setFontSize(16);
+    pdf.setTextColor(15, 23, 42);
+    pdf.text(active.name || projectName, imgX, 28);
     pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(12);
-    pdf.text(`Page 2: Underlayments + Metals`, 36, 60);
-    pdf.addImage(img2, "PNG", 36, 80, pageW - 72, pageH - 120);
+    pdf.setFontSize(10);
+    pdf.setTextColor(100, 116, 139);
+    pdf.text("Page 2 of 2  ·  Underlayments & Metals", imgX, 46);
+    if (logoDataUrl) pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
+    pdf.addImage(img2, "PNG", imgX, imgY, imgW, imgH);
+
+    const [ar, ag, ab] = r0 ? metalRGB(r0.gutterApronColor) : [198, 205, 211];
+    const [dr, dg, db] = r0 ? metalRGB(r0.dripEdgeColor)    : [198, 205, 211];
+    const [vr, vg, vb] = r0 ? metalRGB(r0.valleyMetalColor) : [198, 205, 211];
+    // Only include legend entries for materials that are actually used.
+    const page2Items = [
+      { r: 18,  g: 23,  b: 38,  label: "Ice & Water Shield (eaves + valleys)" },
+      { r: 215, g: 230, b: 245, label: "Synthetic Underlayment (field)" },
+      ...(hasEave   ? [{ r: ar, g: ag, b: ab, label: `Gutter Apron — ${r0?.gutterApronColor ?? ""}` }] : []),
+      ...(hasRake   ? [{ r: dr, g: dg, b: db, label: `Drip Edge — ${r0?.dripEdgeColor ?? ""}` }] : []),
+      ...(hasValley ? [{ r: vr, g: vg, b: vb, label: `Valley Metal — ${r0?.valleyMetalColor ?? ""}` }] : []),
+      ...((hasEave || hasRake) ? [{ r: 18, g: 18, b: 20, label: "Pro-Start Starter Strip" }] : []),
+    ];
+    drawLegend(page2Items);
+
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(7.5);
+    pdf.setTextColor(148, 163, 184);
+    pdf.text("MATERIAL KEY", imgX, legendY - 4);
 
     setExportView("LIVE");
     pdf.save(`${projectName.replaceAll(" ", "_")}_RoofViz.pdf`);
   }
 
-  // UI styles
-  const card: React.CSSProperties = {
-    border: "1px solid rgba(15,23,42,0.10)",
-    borderRadius: 16,
-    padding: 14,
-    boxShadow: "0 1px 12px rgba(15,23,42,0.05)",
-    background: "#fff",
-    marginTop: 12,
-  };
-
-  const btn: React.CSSProperties = {
+  // ── Design tokens ──────────────────────────────────────────────────────────
+  const sectionCard: React.CSSProperties = {
+    background: "#ffffff",
     borderRadius: 14,
-    padding: "12px 14px",
-    fontWeight: 950,
-    fontSize: 13,
-    cursor: "pointer",
-    border: "1px solid rgba(15,23,42,0.16)",
-    background: "#fff",
+    padding: "16px",
+    boxShadow: "0 1px 3px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.05)",
+    marginBottom: 12,
   };
 
-  const btnPrimary: React.CSSProperties = {
-    ...btn,
-    background: "rgba(34,197,94,0.10)",
-    border: "1px solid rgba(34,197,94,0.35)",
+  const sectionLabel: React.CSSProperties = {
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: "0.08em",
+    color: "#94a3b8",
+    textTransform: "uppercase",
   };
 
-  const btnBlue: React.CSSProperties = {
-    ...btn,
-    background: "rgba(37,99,235,0.10)",
-    border: "1px solid rgba(37,99,235,0.35)",
+  const fieldLabel: React.CSSProperties = {
+    display: "block",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#334155",
+    marginBottom: 6,
   };
 
   const inputStyle: React.CSSProperties = {
+    display: "block",
     width: "100%",
-    marginTop: 6,
-    padding: 12,
-    borderRadius: 14,
-    border: "1px solid rgba(15,23,42,0.16)",
-    fontWeight: 900,
+    padding: "10px 14px",
+    borderRadius: 10,
+    border: "1.5px solid rgba(15,23,42,0.14)",
+    fontSize: 14,
+    fontWeight: 500,
+    background: "#ffffff",
+    color: "#0f172a",
+    boxSizing: "border-box",
+    marginBottom: 12,
   };
 
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "520px 1fr", height: "100vh" }}>
-      {/* LEFT PANEL */}
-      <aside style={{ background: "#fff", borderRight: "1px solid rgba(15,23,42,0.08)", padding: 16, overflow: "auto" }}>
-        <div style={{ ...card, marginTop: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <Image src="/roofviz-logo.png" alt="RoofViz" width={150} height={44} priority />
-          <div style={{ textAlign: "right", fontSize: 11, fontWeight: 900, opacity: 0.65 }}>
-            <div>{active ? `${stepIndex(liveStep) + 1}/${STEPS.length}` : ""}</div>
-            <div>Scroll=Zoom • Drag=Move</div>
+  const selectStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "9px 12px",
+    borderRadius: 8,
+    border: "1.5px solid rgba(15,23,42,0.12)",
+    fontSize: 13,
+    fontWeight: 500,
+    background: "#ffffff",
+    color: "#0f172a",
+  };
+
+  const primaryBtn: React.CSSProperties = {
+    display: "block",
+    width: "100%",
+    padding: "12px 20px",
+    borderRadius: 10,
+    fontSize: 14,
+    fontWeight: 700,
+    cursor: "pointer",
+    border: "none",
+    background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+    color: "#ffffff",
+    boxShadow: "0 1px 4px rgba(37,99,235,0.35)",
+    marginTop: 8,
+  };
+
+  const greenBtn: React.CSSProperties = {
+    ...primaryBtn,
+    background: "linear-gradient(135deg, #16a34a, #15803d)",
+    boxShadow: "0 1px 4px rgba(22,163,74,0.35)",
+  };
+
+  const ghostBtn: React.CSSProperties = {
+    padding: "10px 16px",
+    borderRadius: 10,
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    border: "1.5px solid rgba(15,23,42,0.12)",
+    background: "#ffffff",
+    color: "#475569",
+  };
+
+  const smallBtn: React.CSSProperties = {
+    padding: "7px 12px",
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+    border: "1.5px solid rgba(15,23,42,0.10)",
+    background: "#ffffff",
+    color: "#334155",
+  };
+
+  const lineKindBtn = (kind: LineKind): React.CSSProperties => {
+    const map: Record<LineKind, [string, string, string]> = {
+      EAVE:   ["rgba(37,99,235,0.08)",   "rgba(37,99,235,0.28)",   "#1d4ed8"],
+      RAKE:   ["rgba(16,185,129,0.08)",  "rgba(16,185,129,0.28)",  "#065f46"],
+      VALLEY: ["rgba(100,116,139,0.08)", "rgba(100,116,139,0.28)", "#334155"],
+      RIDGE:  ["rgba(245,158,11,0.08)",  "rgba(245,158,11,0.35)",  "#92400e"],
+      HIP:    ["rgba(168,85,247,0.08)",  "rgba(168,85,247,0.28)",  "#5b21b6"],
+    };
+    const [bg, border, color] = map[kind];
+    return {
+      padding: "8px 6px",
+      borderRadius: 8,
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: "0.04em",
+      cursor: "pointer",
+      border: `1.5px solid ${border}`,
+      background: bg,
+      color,
+    };
+  };
+
+  // ── MENU SCREEN ────────────────────────────────────────────────────────────
+  if (screen === "MENU") {
+    return (
+      <div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+        {/* Top nav */}
+        <header style={{
+          background: "#fff",
+          borderBottom: "1px solid rgba(15,23,42,0.08)",
+          padding: "0 48px",
+          height: 72,
+          display: "flex",
+          alignItems: "center",
+          flexShrink: 0,
+        }}>
+          <Image src="/roofviz-logo.png" alt="RoofViz" width={165} height={48} priority />
+          <div style={{ marginLeft: "auto", fontSize: 13, color: "#94a3b8", fontWeight: 500, letterSpacing: "0.02em" }}>
+            Professional Roof Visualization
           </div>
+        </header>
+
+        {/* Hero banner */}
+        <div style={{
+          background: "linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%)",
+          padding: "56px 48px",
+          textAlign: "center",
+          color: "#fff",
+        }}>
+          <h1 style={{ fontSize: 30, fontWeight: 800, margin: "0 0 12px", lineHeight: 1.25 }}>
+            Walk Customers Through Their New Roof
+          </h1>
+          <p style={{ fontSize: 15, color: "rgba(255,255,255,0.68)", maxWidth: 560, margin: "0 auto", lineHeight: 1.7 }}>
+            Upload a job-site photo, trace the roof, and visualize every installation layer — from tear-off to cap shingles. Export a professional 2-page PDF to share with your customer.
+          </p>
         </div>
 
-        {liveStep === "START" && (
-          <div style={card}>
-            <div style={{ fontWeight: 1000, fontSize: 16 }}>Start a project</div>
+        {/* Content area */}
+        <div style={{ maxWidth: 920, margin: "0 auto", padding: "40px 24px 60px" }}>
 
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontWeight: 900, fontSize: 12, opacity: 0.8 }}>Project name</div>
-              <input value={projectName} onChange={(e) => setProjectName(e.target.value)} style={inputStyle} />
-            </div>
+          {/* How it works */}
+          <div className="rv-fade-in-up" style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", marginBottom: 28, boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#94a3b8", textTransform: "uppercase", marginBottom: 20 }}>HOW IT WORKS</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 20 }}>
 
-            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
-              <button style={btnPrimary} onClick={startProject}>Start Project</button>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>Then upload a photo and trace the roofs.</div>
+              {/* Step 1 — Upload Photo */}
+              <div className="rv-how-step" style={{ textAlign: "center" }}>
+                <svg viewBox="0 0 64 56" width="64" height="56" style={{ display: "block", margin: "0 auto 12px" }}>
+                  <rect x="6" y="16" width="52" height="34" rx="5" fill="none" stroke="#2563eb" strokeWidth="2"/>
+                  <rect x="22" y="8" width="20" height="10" rx="3" fill="none" stroke="#2563eb" strokeWidth="2"/>
+                  <circle cx="32" cy="33" r="9" fill="none" stroke="#2563eb" strokeWidth="2"/>
+                  <circle cx="32" cy="33" r="4" fill="#2563eb" opacity="0.3"/>
+                  <rect x="46" y="20" width="6" height="4" rx="1" fill="#2563eb"/>
+                  <line x1="26" y1="28" x2="32" y2="22" stroke="#2563eb" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>Upload Photo</div>
+                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>Add a job-site photo of the roof.</div>
+              </div>
+
+              {/* Step 2 — Trace the Roof */}
+              <div className="rv-how-step" style={{ textAlign: "center" }}>
+                <svg viewBox="0 0 64 56" width="64" height="56" style={{ display: "block", margin: "0 auto 12px" }}>
+                  <polygon points="32,8 6,34 58,34" fill="rgba(37,99,235,0.07)" stroke="#2563eb" strokeWidth="2" strokeLinejoin="round"/>
+                  <line x1="6" y1="34" x2="6" y2="50" stroke="#2563eb" strokeWidth="2"/>
+                  <line x1="58" y1="34" x2="58" y2="50" stroke="#2563eb" strokeWidth="2"/>
+                  <line x1="6" y1="50" x2="58" y2="50" stroke="#2563eb" strokeWidth="2"/>
+                  <circle cx="32" cy="8" r="4" fill="#2563eb"/>
+                  <circle cx="6" cy="34" r="4" fill="#2563eb"/>
+                  <circle cx="58" cy="34" r="4" fill="#2563eb"/>
+                  <circle cx="6" cy="50" r="3" fill="rgba(37,99,235,0.4)"/>
+                  <circle cx="58" cy="50" r="3" fill="rgba(37,99,235,0.4)"/>
+                </svg>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>Trace the Roof</div>
+                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>Outline each section and label the edges.</div>
+              </div>
+
+              {/* Step 3 — Build Layers */}
+              <div className="rv-how-step" style={{ textAlign: "center" }}>
+                <svg viewBox="0 0 64 56" width="64" height="56" style={{ display: "block", margin: "0 auto 12px" }}>
+                  <rect x="6" y="8"  width="52" height="9" rx="2" fill="#0f172a" opacity="0.85"/>
+                  <rect x="6" y="19" width="52" height="9" rx="2" fill="#1d4ed8" opacity="0.75"/>
+                  <rect x="6" y="30" width="52" height="9" rx="2" fill="#60a5fa" opacity="0.70"/>
+                  <rect x="6" y="41" width="52" height="9" rx="2" fill="#4b4e55" opacity="0.85"/>
+                  <text x="10" y="16.5" fontSize="5.5" fill="#fff" fontFamily="sans-serif" fontWeight="600">Ice &amp; Water</text>
+                  <text x="10" y="27.5" fontSize="5.5" fill="#fff" fontFamily="sans-serif" fontWeight="600">Synthetic</text>
+                  <text x="10" y="38.5" fontSize="5.5" fill="#fff" fontFamily="sans-serif" fontWeight="600">Pro-Start</text>
+                  <text x="10" y="49.5" fontSize="5.5" fill="#fff" fontFamily="sans-serif" fontWeight="600">Shingles</text>
+                </svg>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>Build Layers</div>
+                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>Step through every material layer live.</div>
+              </div>
+
+              {/* Step 4 — Export PDF */}
+              <div className="rv-how-step" style={{ textAlign: "center" }}>
+                <svg viewBox="0 0 64 56" width="64" height="56" style={{ display: "block", margin: "0 auto 12px" }}>
+                  <rect x="10" y="4" width="36" height="46" rx="3" fill="none" stroke="#2563eb" strokeWidth="2"/>
+                  <polyline points="30,4 30,18 46,18" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinejoin="round"/>
+                  <line x1="16" y1="24" x2="40" y2="24" stroke="#2563eb" strokeWidth="1.5"/>
+                  <line x1="16" y1="30" x2="40" y2="30" stroke="#2563eb" strokeWidth="1.5"/>
+                  <line x1="16" y1="36" x2="32" y2="36" stroke="#2563eb" strokeWidth="1.5"/>
+                  <circle cx="51" cy="42" r="9" fill="#2563eb"/>
+                  <line x1="51" y1="37" x2="51" y2="45" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
+                  <polyline points="47,42 51,46 55,42" fill="none" stroke="#fff" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+                </svg>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>Export PDF</div>
+                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>Share a 2-page report with your customer.</div>
+              </div>
+
             </div>
           </div>
-        )}
 
-        {liveStep !== "START" && (
-          <>
-            <div style={card}>
-              <div style={{ fontWeight: 1000, fontSize: 13 }}>Upload photos</div>
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={(e) => {
-                  addFiles(e.target.files);
-                  e.currentTarget.value = "";
-                }}
-                style={{ width: "100%", marginTop: 10 }}
-              />
-              <div style={{ fontSize: 12, opacity: 0.65, marginTop: 8 }}>
-                Upload multiple photos, then select one below.
+          {/* Start new project */}
+          <div className="rv-fade-in-up" style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", marginBottom: 28, boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)", animationDelay: "0.08s" }}>
+            <h2 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", margin: "0 0 6px" }}>Start a project</h2>
+            <p style={{ fontSize: 13, color: "#64748b", margin: "0 0 20px", lineHeight: 1.65 }}>
+              Upload a photo and trace the roof to begin your visualization.
+            </p>
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#334155", marginBottom: 6 }}>
+                  Project name
+                </label>
+                <input
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                  style={inputStyle}
+                  placeholder="e.g. 123 Oak Street"
+                />
               </div>
+              <button
+                className="rv-btn-primary"
+                style={{ ...primaryBtn, width: "auto", padding: "12px 28px", marginTop: 0 }}
+                onClick={startProject}
+              >
+                Start Project
+              </button>
             </div>
+          </div>
 
-            {photos.length > 0 && (
-              <div style={card}>
-                <div style={{ fontWeight: 1000, fontSize: 13 }}>Photos</div>
-                <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-                  {photos.map((p) => (
+          {/* Saved projects */}
+          {photos.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#94a3b8", textTransform: "uppercase", marginBottom: 14 }}>
+                SAVED PROJECTS
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+                {photos.map((p) => (
+                  <div
+                    key={p.id}
+                    className="rv-project-card rv-fade-in-up"
+                    style={{
+                      background: "#fff",
+                      border: "1.5px solid rgba(15,23,42,0.08)",
+                      borderRadius: 14,
+                      overflow: "hidden",
+                      boxShadow: "0 1px 3px rgba(15,23,42,0.06)",
+                    }}
+                  >
+                    {/* Thumbnail — click to open */}
                     <button
-                      key={p.id}
-                      onClick={() => setActivePhotoId(p.id)}
+                      onClick={() => openProject(p.id)}
                       style={{
-                        ...btn,
-                        textAlign: "left",
-                        background: p.id === activePhotoId ? "rgba(37,99,235,0.10)" : "#fff",
-                        border: p.id === activePhotoId ? "2px solid rgba(37,99,235,0.45)" : "1px solid rgba(15,23,42,0.16)",
+                        display: "block", width: "100%", padding: 0, border: "none",
+                        cursor: "pointer", background: "none",
                       }}
                     >
-                      {p.name || "Untitled"} {!p.src ? "(no photo yet)" : ""}
+                      <div style={{
+                        height: 130,
+                        background: p.src ? "none" : "linear-gradient(135deg, #e2e8f0, #cbd5e1)",
+                        display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+                      }}>
+                        {p.src
+                          ? <img src={p.src} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                          : <div style={{ fontSize: 36, opacity: 0.25 }}>🏠</div>
+                        }
+                      </div>
                     </button>
-                  ))}
+
+                    <div style={{ padding: "10px 14px 12px" }}>
+                      {/* Inline rename / project name */}
+                      {renamingId === p.id ? (
+                        <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                          <input
+                            autoFocus
+                            value={renamingName}
+                            onChange={(e) => setRenamingName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") { renameProject(p.id, renamingName); setRenamingId(null); }
+                              if (e.key === "Escape") setRenamingId(null);
+                            }}
+                            style={{ flex: 1, padding: "5px 9px", borderRadius: 7, border: "1.5px solid rgba(37,99,235,0.40)", fontSize: 13, fontWeight: 600 }}
+                          />
+                          <button
+                            onClick={() => { renameProject(p.id, renamingName); setRenamingId(null); }}
+                            style={{ padding: "5px 10px", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", background: "#2563eb", color: "#fff" }}
+                          >✓</button>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                          <div
+                            style={{ flex: 1, fontSize: 14, fontWeight: 700, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
+                            onClick={() => openProject(p.id)}
+                          >
+                            {p.name || "Untitled Project"}
+                          </div>
+                          {/* Rename button */}
+                          <button
+                            onClick={() => { setRenamingId(p.id); setRenamingName(p.name); }}
+                            title="Rename project"
+                            style={{ flexShrink: 0, padding: "3px 7px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: "1px solid rgba(15,23,42,0.12)", background: "#f8fafc", color: "#64748b" }}
+                          >✎</button>
+                          {/* Delete button */}
+                          <button
+                            onClick={() => { if (window.confirm(`Delete "${p.name || "Untitled"}"?`)) deleteProject(p.id); }}
+                            title="Delete project"
+                            style={{ flexShrink: 0, padding: "3px 7px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: "1px solid rgba(220,38,38,0.22)", background: "rgba(220,38,38,0.05)", color: "#dc2626" }}
+                          >✕</button>
+                        </div>
+                      )}
+                      <div style={{ fontSize: 11, color: "#64748b" }}>
+                        {STEP_TITLE[p.step]} &nbsp;·&nbsp; {p.roofs.length} roof{p.roofs.length !== 1 ? "s" : ""}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── PROJECT SCREEN ──────────────────────────────────────────────────────────
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "420px 1fr", height: "100vh" }}>
+
+      {/* ── LEFT PANEL ── */}
+      <aside style={{
+        background: "#f8fafc",
+        borderRight: "1px solid rgba(15,23,42,0.08)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}>
+
+        {/* Sticky header */}
+        <div style={{
+          background: "#ffffff",
+          borderBottom: "1px solid rgba(15,23,42,0.08)",
+          padding: "16px 20px 14px",
+          flexShrink: 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              onClick={() => setScreen("MENU")}
+              style={{ padding: "6px 10px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.10)", background: "#f8fafc", color: "#475569", flexShrink: 0 }}
+            >
+              ← Menu
+            </button>
+            <Image src="/roofviz-logo.png" alt="RoofViz" width={148} height={43} priority />
+            {active && (
+              <div style={{ textAlign: "right", marginLeft: "auto" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#2563eb", letterSpacing: "0.05em" }}>
+                  STEP {stepIndex(liveStep) + 1} / {STEPS.length}
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2, letterSpacing: "0.02em" }}>
+                  Scroll · Zoom &nbsp;|&nbsp; Drag · Pan
                 </div>
               </div>
             )}
+          </div>
+          {active && (
+            <div style={{ marginTop: 12, height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
+              <div style={{
+                height: "100%",
+                width: `${((stepIndex(liveStep) + 1) / STEPS.length) * 100}%`,
+                background: "linear-gradient(90deg, #2563eb, #60a5fa)",
+                borderRadius: 99,
+                transition: "width 0.35s ease",
+              }} />
+            </div>
+          )}
+        </div>
 
-            <div style={card}>
-              <div style={{ fontWeight: 1000, fontSize: 14 }}>{active ? STEP_TITLE[liveStep] : "Steps"}</div>
+        {/* Scrollable body */}
+        <div style={{ flex: 1, overflow: "auto", padding: "16px" }}>
 
-              <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                <button style={btn} onClick={goBack} disabled={!active || stepIndex(liveStep) === 0}>Back</button>
-                <button style={btnBlue} onClick={goNext} disabled={!active || !canGoNext()}>Next</button>
+          {/* ── START screen ── */}
+          {liveStep === "START" && (
+            <div style={sectionCard}>
+              <div style={sectionLabel}>New Project</div>
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", margin: "10px 0 6px", lineHeight: 1.2 }}>
+                Create a roof visualization
+              </h2>
+              <p style={{ fontSize: 13, color: "#64748b", marginBottom: 20, lineHeight: 1.6 }}>
+                Upload a job photo, trace the roof, and walk your customer through every installation layer.
+              </p>
+              <label style={fieldLabel}>Project name</label>
+              <input
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                style={inputStyle}
+                placeholder="e.g. 123 Oak Street"
+              />
+              <button style={primaryBtn} onClick={startProject}>
+                {photos.length > 0 ? "Resume Project →" : "Start Project →"}
+              </button>
+            </div>
+          )}
+
+          {/* ── ACTIVE PROJECT ── */}
+          {liveStep !== "START" && (
+            <>
+              {/* Photo — current project only */}
+              <div style={sectionCard} className="rv-section-card">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={sectionLabel}>Photo</div>
+                  {active?.src && (
+                    <button
+                      className="rv-btn-small"
+                      onClick={() => setPhotos((prev) => prev.map((q) => q.id === activePhotoId ? { ...q, src: "" } : q))}
+                      style={{ ...smallBtn, fontSize: 11, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)", padding: "4px 9px" }}
+                    >
+                      Remove photo
+                    </button>
+                  )}
+                </div>
+
+                {active?.src ? (
+                  <div style={{ marginTop: 10, borderRadius: 10, overflow: "hidden", border: "1.5px solid rgba(15,23,42,0.08)" }}>
+                    <img src={active.src} alt={active.name} style={{ width: "100%", height: 120, objectFit: "cover", display: "block" }} />
+                  </div>
+                ) : (
+                  <label className="rv-upload-zone" style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    marginTop: 10,
+                    padding: "18px 16px",
+                    borderRadius: 10,
+                    border: "1.5px dashed rgba(37,99,235,0.28)",
+                    background: "rgba(37,99,235,0.03)",
+                    cursor: "pointer",
+                    gap: 6,
+                  }}>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(37,99,235,0.6)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="3"/>
+                      <circle cx="8.5" cy="8.5" r="1.5"/>
+                      <polyline points="21 15 16 10 5 21"/>
+                    </svg>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", letterSpacing: "0.04em" }}>Upload Photo</div>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>PNG or JPG</div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }}
+                      style={{ display: "none" }}
+                    />
+                  </label>
+                )}
+
+                {/* Allow re-uploading even when a photo exists */}
+                {active?.src && (
+                  <label className="rv-upload-zone" style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginTop: 8,
+                    padding: "8px 14px",
+                    borderRadius: 8,
+                    border: "1.5px dashed rgba(37,99,235,0.20)",
+                    background: "rgba(37,99,235,0.02)",
+                    cursor: "pointer",
+                    gap: 6,
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#2563eb" }}>Replace photo</div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }}
+                      style={{ display: "none" }}
+                    />
+                  </label>
+                )}
               </div>
 
-              {active && liveStep === "EXPORT" && (
-                <div style={{ marginTop: 12 }}>
-                  <button style={btnPrimary} onClick={exportPdfTwoPages}>Export 2-page PDF</button>
-                  <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>
-                    Page 1: Finished shingles • Page 2: Underlayments + metals
+              {/* Step navigation */}
+              {active && (
+                <div style={sectionCard}>
+                  <div style={sectionLabel}>{`Step ${stepIndex(liveStep) + 1} of ${STEPS.length}`}</div>
+                  <div style={{
+                    fontSize: 15, fontWeight: 700, color: "#0f172a",
+                    marginTop: 8, marginBottom: 6, lineHeight: 1.35,
+                  }}>
+                    {STEP_TITLE[liveStep]}
                   </div>
+                  {STEP_HINT[liveStep] && (
+                    <p style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, marginBottom: 14, marginTop: 0 }}>
+                      {STEP_HINT[liveStep]}
+                    </p>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <button
+                      className="rv-btn-ghost"
+                      style={ghostBtn}
+                      onClick={goBack}
+                      disabled={stepIndex(liveStep) === 0}
+                    >
+                      ← Back
+                    </button>
+                    <button
+                      className="rv-btn-primary"
+                      style={{ ...primaryBtn, margin: 0 }}
+                      onClick={goNext}
+                      disabled={!canGoNext()}
+                    >
+                      Continue →
+                    </button>
+                  </div>
+                  {liveStep === "EXPORT" && (
+                    <div style={{ marginTop: 12 }}>
+                      <button className="rv-btn-primary" style={greenBtn} onClick={exportPdfTwoPages}>
+                        ↓ Export 2-Page PDF
+                      </button>
+                      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, textAlign: "center" }}>
+                        Page 1: Shingles &nbsp;·&nbsp; Page 2: Underlayments + metals
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
 
-            {active && (
-              <div style={card}>
-                <div style={{ fontWeight: 1000, fontSize: 13 }}>Roofs</div>
-                <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>Multiple roofs in the same photo supported.</div>
+              {/* Roofs */}
+              {active && (
+                <div style={sectionCard}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={sectionLabel}>Roofs</div>
+                    <button style={smallBtn} onClick={addRoof}>+ Add Roof</button>
+                  </div>
 
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
-                  <button style={btnPrimary} onClick={addRoof}>+ Add roof</button>
-                  <button style={btn} onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}>
-                    {active.showGuidesDuringInstall ? "Hide guides during install" : "Show guides during install"}
-                  </button>
-                  <button style={btn} onClick={() => patchActive((p) => ({ ...p, showEditHandles: !p.showEditHandles }))}>
-                    {active.showEditHandles ? "Hide edit handles" : "Show edit handles"}
-                  </button>
-                </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+                    {active.roofs.map((r) => (
+                      <button
+                        key={r.id}
+                        onClick={() => patchActive((p) => ({ ...p, activeRoofId: r.id }))}
+                        style={{
+                          padding: "5px 14px",
+                          borderRadius: 99,
+                          fontSize: 12, fontWeight: 600,
+                          cursor: "pointer",
+                          border: r.id === active.activeRoofId
+                            ? "1.5px solid rgba(37,99,235,0.35)"
+                            : "1.5px solid rgba(15,23,42,0.10)",
+                          background: r.id === active.activeRoofId ? "rgba(37,99,235,0.08)" : "#fff",
+                          color: r.id === active.activeRoofId ? "#2563eb" : "#475569",
+                        }}
+                      >
+                        {r.name}{r.closed ? " ✓" : ""}
+                      </button>
+                    ))}
+                  </div>
 
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-                  {active.roofs.map((r) => (
+                  <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
                     <button
-                      key={r.id}
-                      onClick={() => patchActive((p) => ({ ...p, activeRoofId: r.id }))}
-                      style={{
-                        ...btn,
-                        background: r.id === active.activeRoofId ? "rgba(37,99,235,0.10)" : "#fff",
-                        border: r.id === active.activeRoofId ? "2px solid rgba(37,99,235,0.45)" : "1px solid rgba(15,23,42,0.16)",
-                      }}
+                      style={{ ...smallBtn, flex: 1 }}
+                      onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}
                     >
-                      {r.name} {r.closed ? "✓" : ""}
+                      {active.showGuidesDuringInstall ? "Hide guides" : "Show guides"}
                     </button>
-                  ))}
-                </div>
+                    <button
+                      style={{ ...smallBtn, flex: 1 }}
+                      onClick={() => patchActive((p) => ({ ...p, showEditHandles: !p.showEditHandles }))}
+                    >
+                      {active.showEditHandles ? "Hide handles" : "Edit handles"}
+                    </button>
+                  </div>
 
-                {activeRoof && liveStep === "TRACE" && (
-                  <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-                    {!activeRoof.closed ? (
-                      <>
-                        <button style={btnBlue} onClick={() => { setTool("TRACE_ROOF"); setDraftLine(null); setDraftHole(null); }}>
-                          Trace roof edge (tap around roof)
-                        </button>
-                        <button style={btn} onClick={undoOutlinePoint} disabled={activeRoof.outline.length < 2}>
-                          Undo last point
-                        </button>
-                        <div style={{ fontSize: 12, opacity: 0.7 }}>Tap the first dot to close the roof.</div>
-                      </>
-                    ) : (
-                      <>
-                        <div style={{ fontWeight: 1000, fontSize: 13 }}>Draw lines + exclusions</div>
-
+                  {/* Trace tools */}
+                  {activeRoof && liveStep === "TRACE" && (
+                    <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
+                      {!activeRoof.closed ? (
+                        /* ── Step A: outline the roof ── */
                         <div style={{ display: "grid", gap: 8 }}>
-                          <button style={btnBlue} onClick={() => beginDraw("EAVE")}>Draw EAVES</button>
-                          <button style={btnBlue} onClick={() => beginDraw("RAKE")}>Draw RAKES</button>
-                          <button style={btnBlue} onClick={() => beginDraw("VALLEY")}>Draw VALLEYS</button>
-                          <button style={btnBlue} onClick={() => beginDraw("RIDGE")}>Draw RIDGES</button>
-                          <button style={btnBlue} onClick={() => beginDraw("HIP")}>Draw HIPS</button>
+                          <div style={sectionLabel}>Step A — Outline the Roof</div>
 
-                          <div style={{ height: 8 }} />
+                          <button
+                            className={tool === "TRACE_ROOF" ? "rv-btn-tracing" : "rv-btn-ghost"}
+                            style={{
+                              ...ghostBtn,
+                              background: tool === "TRACE_ROOF" ? "rgba(37,99,235,0.10)" : "rgba(37,99,235,0.04)",
+                              border: `1.5px solid rgba(37,99,235,${tool === "TRACE_ROOF" ? "0.45" : "0.25"})`,
+                              color: "#1d4ed8",
+                              fontWeight: tool === "TRACE_ROOF" ? 700 : 600,
+                            }}
+                            onClick={() => { setTool("TRACE_ROOF"); setDraftLine(null); setDraftHole(null); }}
+                          >
+                            {tool === "TRACE_ROOF" ? "✦ Tracing — click the canvas" : "Start Tracing Roof Edge"}
+                          </button>
+                          <button style={ghostBtn} onClick={undoOutlinePoint} disabled={activeRoof.outline.length < 2}>
+                            Undo Last Point
+                          </button>
+                          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.55, background: "#f8fafc", borderRadius: 8, padding: "8px 10px" }}>
+                            Click around the roof edge on the photo. Click the <strong>first point again</strong> to close and finish the outline.
+                          </div>
+                        </div>
+                      ) : (
+                        /* ── Step B: label the edges ── */
+                        <div style={{ display: "grid", gap: 8 }}>
+                          <div style={sectionLabel}>Step B — Label Each Edge Type</div>
 
-                          <button style={btnBlue} onClick={beginHole}>Draw Dormer / Exclusion (hole)</button>
-
-                          {tool === "TRACE_HOLE" ? (
-                            <div style={{ display: "flex", gap: 10 }}>
-                              <button style={btn} onClick={finishHole} disabled={!draftHole || draftHole.length < 6}>Finish hole</button>
-                              <button style={btn} onClick={undoHolePoint} disabled={!draftHole || draftHole.length < 2}>Undo point</button>
-                            </div>
-                          ) : (
-                            <div style={{ display: "flex", gap: 10 }}>
-                              <button style={btn} onClick={finishDraftLine} disabled={!draftLine || draftLine.points.length < 4}>Finish line</button>
-                              <button style={btn} onClick={undoDraftPoint} disabled={!draftLine || draftLine.points.length < 2}>Undo point</button>
+                          {/* Auto-detect section — runs AFTER outline is closed so it works within your boundary */}
+                          {photoImg && (
+                            <div style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: 10, padding: "10px 12px", display: "grid", gap: 8 }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e" }}>✦ Auto-Detect Edges</div>
+                              {autoSuggest ? (
+                                <>
+                                  <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.55 }}>
+                                    Detected <strong>{autoSuggest.lines.length}</strong> edge lines (shown in amber). Review on the canvas, then accept or discard.
+                                  </div>
+                                  <div style={{ display: "flex", gap: 6 }}>
+                                    <button style={{ ...smallBtn, flex: 1, background: "rgba(245,158,11,0.12)", borderColor: "rgba(245,158,11,0.35)", color: "#92400e", fontWeight: 700 }} onClick={acceptAutoSuggest}>
+                                      Accept & Apply
+                                    </button>
+                                    <button style={smallBtn} onClick={() => setAutoSuggest(null)}>Discard</button>
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.55 }}>
+                                    Outline is set — now let the app suggest edge types (eaves, rakes, valleys, etc.) within your boundary.
+                                  </div>
+                                  <button
+                                    style={{ ...smallBtn, background: "rgba(245,158,11,0.10)", borderColor: "rgba(245,158,11,0.35)", color: "#92400e", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                                    onClick={runAutoDetect}
+                                    disabled={autoDetecting}
+                                  >
+                                    {autoDetecting && <span className="rv-spin" style={{ display: "inline-block", width: 12, height: 12, border: "2px solid rgba(146,64,14,0.3)", borderTop: "2px solid #92400e", borderRadius: "50%" }} />}
+                                    {autoDetecting ? "Detecting…" : "Auto-Detect Edge Types"}
+                                  </button>
+                                </>
+                              )}
                             </div>
                           )}
 
-                          <button style={btn} onClick={() => { setTool("NONE"); setDraftLine(null); setDraftHole(null); }}>
-                            Stop tool
-                          </button>
-                          <button style={btn} onClick={resetSelectedRoof}>Reset selected roof</button>
-
-                          <div style={{ fontSize: 12, opacity: 0.7 }}>
-                            Tip: dormers/exclusions: tap around the dormer, then tap the first dot to close.
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-
-                {/* Advanced */}
-                {activeRoof && (
-                  <div style={{ marginTop: 14 }}>
-                    <button style={btn} onClick={() => setAdvancedOpen((v) => !v)}>
-                      {advancedOpen ? "Hide advanced options" : "Show advanced options"}
-                    </button>
-
-                    {advancedOpen && (
-                      <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
-                        <div style={{ fontWeight: 1000, fontSize: 13 }}>Advanced (selected roof)</div>
-
-                        <div style={{ display: "grid", gap: 10 }}>
-                          <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>Shingle color</div>
-                          <select
-                            value={active.shingleColor}
-                            onChange={(e) => patchActive((p) => ({ ...p, shingleColor: e.target.value as ShingleColor }))}
-                            style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid rgba(15,23,42,0.16)", fontWeight: 900 }}
-                          >
-                            {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => (
-                              <option key={c} value={c}>{c}</option>
+                          <div style={{ fontSize: 11, color: "#94a3b8", textAlign: "center" }}>— or label manually —</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5 }}>
+                            {([
+                              ["EAVE",   "Bottom edge"],
+                              ["RAKE",   "Side edge"],
+                              ["VALLEY", "Valley"],
+                              ["RIDGE",  "Ridge (top)"],
+                              ["HIP",    "Hip"],
+                            ] as [LineKind, string][]).map(([kind, desc]) => (
+                              <button
+                                key={kind}
+                                style={{
+                                  ...lineKindBtn(kind),
+                                  background: tool === `DRAW_${kind}` ? lineKindBtn(kind).background : "rgba(15,23,42,0.03)",
+                                  opacity: tool === `DRAW_${kind}` ? 1 : 0.85,
+                                }}
+                                title={desc}
+                                onClick={() => beginDraw(kind)}
+                              >
+                                {kind}
+                              </button>
                             ))}
-                          </select>
+                            <button
+                              style={{ ...lineKindBtn("VALLEY"), background: "rgba(15,23,42,0.04)", borderColor: "rgba(15,23,42,0.12)", color: "#475569" }}
+                              onClick={beginHole}
+                            >
+                              DORMER
+                            </button>
+                          </div>
+
+                          {/* Active tool controls */}
+                          {(tool === "TRACE_HOLE" || tool.startsWith("DRAW_")) && (
+                            <div style={{ background: "rgba(37,99,235,0.04)", border: "1px solid rgba(37,99,235,0.15)", borderRadius: 8, padding: "8px 10px", display: "grid", gap: 6 }}>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: "#1d4ed8" }}>
+                                {tool === "TRACE_HOLE" ? "Drawing dormer/exclusion" : `Drawing ${tool.replace("DRAW_", "")} line`}
+                              </div>
+                              <div style={{ fontSize: 11, color: "#64748b" }}>Click points on the canvas · Press <kbd style={{ background: "#e2e8f0", borderRadius: 4, padding: "1px 5px", fontFamily: "monospace" }}>Enter</kbd> or tap Finish to save</div>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                {tool === "TRACE_HOLE" ? (
+                                  <button style={{ ...smallBtn, flex: 1 }} onClick={finishHole} disabled={!draftHole || draftHole.length < 6}>Finish hole</button>
+                                ) : (
+                                  <button style={{ ...smallBtn, flex: 1 }} onClick={finishDraftLine} disabled={!draftLine || draftLine.points.length < 4}>Finish line</button>
+                                )}
+                                <button style={{ ...smallBtn, flex: 1 }} onClick={tool === "TRACE_HOLE" ? undoHolePoint : undoDraftPoint}>Undo point</button>
+                                <button style={{ ...smallBtn }} onClick={() => { setTool("NONE"); setDraftLine(null); setDraftHole(null); }}>✕</button>
+                              </div>
+                            </div>
+                          )}
+
+                          <button
+                            style={{ ...smallBtn, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)", fontSize: 11 }}
+                            onClick={resetSelectedRoof}
+                          >
+                            Reset this roof outline
+                          </button>
                         </div>
+                      )}
+                    </div>
+                  )}
 
-                        <div style={{ display: "grid", gap: 10 }}>
-                          <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>Metal colors</div>
+                  {/* Advanced options */}
+                  {activeRoof && (
+                    <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
+                      <button
+                        style={{ ...smallBtn, width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                        onClick={() => setAdvancedOpen((v) => !v)}
+                      >
+                        <span>Advanced Options</span>
+                        <span style={{
+                          transform: advancedOpen ? "rotate(180deg)" : "none",
+                          transition: "transform 0.2s",
+                          display: "inline-block",
+                          opacity: 0.45,
+                          fontSize: 11,
+                        }}>▾</span>
+                      </button>
 
-                          <label style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>
-                            Gutter apron
+                      {advancedOpen && (
+                        <div style={{ marginTop: 14, display: "grid", gap: 16 }}>
+
+                          <div>
+                            <label style={fieldLabel}>Shingle Color</label>
                             <select
-                              value={activeRoof.gutterApronColor}
-                              onChange={(e) => patchActiveRoof((r) => ({ ...r, gutterApronColor: e.target.value as MetalColor }))}
-                              style={{ width: "100%", marginTop: 6, padding: 10, borderRadius: 12, border: "1px solid rgba(15,23,42,0.16)" }}
+                              value={active.shingleColor}
+                              onChange={(e) => patchActive((p) => ({ ...p, shingleColor: e.target.value as ShingleColor }))}
+                              style={selectStyle}
                             >
-                              {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                              {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
                             </select>
-                          </label>
+                          </div>
 
-                          <label style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>
-                            Drip edge
-                            <select
-                              value={activeRoof.dripEdgeColor}
-                              onChange={(e) => patchActiveRoof((r) => ({ ...r, dripEdgeColor: e.target.value as MetalColor }))}
-                              style={{ width: "100%", marginTop: 6, padding: 10, borderRadius: 12, border: "1px solid rgba(15,23,42,0.16)" }}
-                            >
-                              {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-                            </select>
-                          </label>
+                          {/* Pro-Start placement */}
+                          <div>
+                            <div style={fieldLabel}>Pro-Start Placement</div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                              {([
+                                [false, "Eaves Only"],
+                                [true,  "Eaves + Rakes"],
+                              ] as [boolean, string][]).map(([val, label]) => (
+                                <button
+                                  key={label}
+                                  onClick={() => patchActiveRoof((r) => ({ ...r, proStartOnRakes: val }))}
+                                  style={{
+                                    ...smallBtn,
+                                    background: activeRoof.proStartOnRakes === val ? "rgba(37,99,235,0.10)" : "#fff",
+                                    borderColor: activeRoof.proStartOnRakes === val ? "rgba(37,99,235,0.40)" : "rgba(15,23,42,0.10)",
+                                    color: activeRoof.proStartOnRakes === val ? "#1d4ed8" : "#475569",
+                                    fontWeight: activeRoof.proStartOnRakes === val ? 700 : 600,
+                                  }}
+                                >{label}</button>
+                              ))}
+                            </div>
+                          </div>
 
-                          <label style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>
-                            Valley metal
-                            <select
-                              value={activeRoof.valleyMetalColor}
-                              onChange={(e) => patchActiveRoof((r) => ({ ...r, valleyMetalColor: e.target.value as MetalColor }))}
-                              style={{ width: "100%", marginTop: 6, padding: 10, borderRadius: 12, border: "1px solid rgba(15,23,42,0.16)" }}
-                            >
-                              {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-                            </select>
-                          </label>
-                        </div>
+                          <div>
+                            <div style={fieldLabel}>Metal Colors</div>
+                            <div style={{ display: "grid", gap: 8 }}>
+                              {([
+                                ["Gutter Apron", "gutterApronColor"],
+                                ["Drip Edge", "dripEdgeColor"],
+                                ["Valley Metal", "valleyMetalColor"],
+                              ] as const).map(([label, key]) => (
+                                <label key={key} style={{ display: "block" }}>
+                                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>{label}</div>
+                                  <select
+                                    value={(activeRoof as any)[key]}
+                                    onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: e.target.value as MetalColor }))}
+                                    style={selectStyle}
+                                  >
+                                    {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                                  </select>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
 
-                        <div style={{ display: "grid", gap: 10 }}>
-                          <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>Widths (px)</div>
+                          <div>
+                            <div style={fieldLabel}>Product Widths</div>
+                            <div style={{ display: "grid", gap: 10 }}>
+                              {([
+                                ["Gutter apron", "gutterApronW", 4, 24],
+                                ["Drip edge", "dripEdgeW", 4, 24],
+                                ["Ice & water (eaves)", "iceWaterEaveW", 10, 90],
+                                ["Ice & water (valleys)", "iceWaterValleyW", 6, 70],
+                                ["Valley metal", "valleyMetalW", 4, 35],
+                                ["Pro-start", "proStartW", 6, 45],
+                                ["Ridge vent", "ridgeVentW", 6, 45],
+                                ["Cap shingles", "capW", 4, 30],
+                              ] as const).map(([label, key, min, max]) => (
+                                <label key={key} style={{ display: "block" }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                                    <span>{label}</span>
+                                    <span style={{ fontWeight: 700, color: "#334155" }}>{(activeRoof as any)[key]}px</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={min}
+                                    max={max}
+                                    step={1}
+                                    value={(activeRoof as any)[key]}
+                                    onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: Number(e.target.value) } as any))}
+                                    style={{ width: "100%", accentColor: "#2563eb" }}
+                                  />
+                                </label>
+                              ))}
+                            </div>
+                          </div>
 
-                          {([
-                            ["Gutter apron", "gutterApronW", 4, 24],
-                            ["Drip edge", "dripEdgeW", 4, 24],
-                            ["Ice & water (eaves)", "iceWaterEaveW", 10, 90],
-                            ["Ice & water (valleys)", "iceWaterValleyW", 6, 70],
-                            ["Valley metal", "valleyMetalW", 4, 35],
-                            ["Pro-start", "proStartW", 6, 45],
-                            ["Ridge vent", "ridgeVentW", 6, 45],
-                            ["Cap shingles", "capW", 4, 30],
-                          ] as const).map(([label, key, min, max]) => (
-                            <label key={key} style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>
-                              {label}: {(activeRoof as any)[key]}
+                          <div>
+                            <div style={fieldLabel}>Shingle Scale</div>
+                            <label style={{ display: "block" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                                <span>Size</span>
+                                <span style={{ fontWeight: 700, color: "#334155" }}>{activeRoof.shingleScale.toFixed(2)}</span>
+                              </div>
                               <input
                                 type="range"
-                                min={min}
-                                max={max}
-                                step={1}
-                                value={(activeRoof as any)[key]}
-                                onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: Number(e.target.value) } as any))}
-                                style={{ width: "100%" }}
+                                min={0.12}
+                                max={0.32}
+                                step={0.01}
+                                value={activeRoof.shingleScale}
+                                onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleScale: Number(e.target.value) }))}
+                                style={{ width: "100%", accentColor: "#2563eb" }}
                               />
                             </label>
-                          ))}
-                        </div>
+                          </div>
 
-                        <div style={{ display: "grid", gap: 10 }}>
-                          <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>Shingle size</div>
-                          <label style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>
-                            Scale: {activeRoof.shingleScale.toFixed(2)}
-                            <input
-                              type="range"
-                              min={0.12}
-                              max={0.32}
-                              step={0.01}
-                              value={activeRoof.shingleScale}
-                              onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleScale: Number(e.target.value) }))}
-                              style={{ width: "100%" }}
-                            />
-                          </label>
+                          <div>
+                            <div style={fieldLabel}>Shingle Rotation</div>
+                            <label style={{ display: "block" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                                <span>Angle (degrees)</span>
+                                <span style={{ fontWeight: 700, color: "#334155" }}>{(activeRoof.shingleRotation ?? 0).toFixed(0)}°</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={-45}
+                                max={45}
+                                step={1}
+                                value={activeRoof.shingleRotation ?? 0}
+                                onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleRotation: Number(e.target.value) }))}
+                                style={{ width: "100%", accentColor: "#2563eb" }}
+                              />
+                            </label>
+                            <button
+                              style={{ ...smallBtn, marginTop: 6, width: "100%", fontSize: 11 }}
+                              onClick={() => {
+                                const firstEave = activeRoof.lines.find((l) => l.kind === "EAVE");
+                                if (!firstEave || firstEave.points.length < 4) {
+                                  patchActiveRoof((r) => ({ ...r, shingleRotation: 0 }));
+                                  return;
+                                }
+                                const angle = Math.atan2(
+                                  firstEave.points[3] - firstEave.points[1],
+                                  firstEave.points[2] - firstEave.points[0]
+                                ) * 180 / Math.PI;
+                                patchActiveRoof((r) => ({ ...r, shingleRotation: Math.round(angle) }));
+                              }}
+                            >
+                              Auto-align to Eave Line
+                            </button>
+                          </div>
+
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </aside>
 
-      {/* CANVAS */}
-      <main ref={containerRef} style={{ background: "#0f172a", position: "relative", overflow: "hidden" }}>
+      {/* ── CANVAS ── */}
+      <main ref={containerRef} style={{
+        background: "#0c1524",
+        backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)",
+        backgroundSize: "28px 28px",
+        position: "relative",
+        overflow: "hidden",
+      }}>
         <Stage
           ref={stageRef}
           width={w}
@@ -1364,15 +2308,27 @@ export default function Page() {
         >
           <Layer>
             {!photoImg && liveStep !== "START" && (
-              <Text
-                text="Upload a photo on the left to begin"
-                x={0}
-                y={h / 2 - 12}
-                width={w}
-                align="center"
-                fill="rgba(255,255,255,0.68)"
-                fontSize={18}
-              />
+              <>
+                <Text
+                  text="Upload a photo to begin"
+                  x={0}
+                  y={h / 2 - 22}
+                  width={w}
+                  align="center"
+                  fill="rgba(255,255,255,0.55)"
+                  fontSize={17}
+                  fontStyle="600"
+                />
+                <Text
+                  text="Use the Photo panel on the left"
+                  x={0}
+                  y={h / 2 + 6}
+                  width={w}
+                  align="center"
+                  fill="rgba(255,255,255,0.28)"
+                  fontSize={13}
+                />
+              </>
             )}
 
             {photoImg && <KonvaImage image={photoImg} width={w} height={h} />}
@@ -1502,40 +2458,60 @@ export default function Page() {
                     <ShinyMetalStroke key={`drip-${r.id}-${l.id}`} points={l.points} width={r.dripEdgeW} color={r.dripEdgeColor} />
                   ))}
 
-                  {/* VALLEY METAL (valleys) */}
+                  {/* VALLEY METAL (valleys) — Galvanized: narrow strip; W-Valley (colored): wider channel */}
                   {atLeast(currentStep, "VALLEY_METAL") && valleys.map((l) => (
-                    <ShinyMetalStroke key={`vm-${r.id}-${l.id}`} points={l.points} width={r.valleyMetalW} color={r.valleyMetalColor} opacity={0.995} />
+                    <ShinyMetalStroke
+                      key={`vm-${r.id}-${l.id}`}
+                      points={l.points}
+                      width={r.valleyMetalColor === "Galvanized" ? r.valleyMetalW : r.valleyMetalW * 2.5}
+                      color={r.valleyMetalColor}
+                      opacity={0.995}
+                    />
                   ))}
 
-                  {/* PRO-START (eaves + rakes ONLY) */}
+                  {/* PRO-START (eaves always; rakes optional based on proStartOnRakes) */}
                   {atLeast(currentStep, "PRO_START") && (
                     <>
                       {eaves.map((l) => (
                         <StarterStroke key={`ps-e-${r.id}-${l.id}`} points={l.points} width={r.proStartW} />
                       ))}
-                      {rakes.map((l) => (
+                      {r.proStartOnRakes && rakes.map((l) => (
                         <StarterStroke key={`ps-r-${r.id}-${l.id}`} points={l.points} width={r.proStartW} />
                       ))}
                     </>
                   )}
 
-                  {/* SHINGLES */}
-                  {atLeast(currentStep, "SHINGLES") && shinglesImg && (
-                    <>
-                      <Rect
-                        x={-5000}
-                        y={-5000}
-                        width={12000}
-                        height={12000}
-                        opacity={0.98}
-                        fillPatternImage={shinglesImg}
-                        fillPatternRepeat="repeat"
-                        fillPatternScaleX={r.shingleScale}
-                        fillPatternScaleY={r.shingleScale}
-                      />
-                      <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
-                    </>
-                  )}
+                  {/* SHINGLES — aligned to eave line via fillPatternOffsetY */}
+                  {atLeast(currentStep, "SHINGLES") && shinglesImg && (() => {
+                    // Compute the average Y of all eave points so shingle courses align
+                    // parallel to the eave (courses run level with the gutter line).
+                    const eaveYs = eaves.flatMap((l) => l.points.filter((_, i) => i % 2 === 1));
+                    const eaveY = eaveYs.length > 0
+                      ? eaveYs.reduce((a, b) => a + b, 0) / eaveYs.length
+                      : 0;
+                    // courseH in texture pixels must match makeShingleTexture (11px).
+                    const courseH = 11;
+                    // Shift the pattern so a course boundary lands exactly on eaveY.
+                    const shingleOffsetY = ((-(eaveY + 5000) / r.shingleScale % courseH) + courseH) % courseH;
+                    return (
+                      <>
+                        <Rect
+                          x={-5000}
+                          y={-5000}
+                          width={12000}
+                          height={12000}
+                          opacity={0.98}
+                          fillPatternImage={shinglesImg}
+                          fillPatternRepeat="repeat"
+                          fillPatternScaleX={r.shingleScale}
+                          fillPatternScaleY={r.shingleScale}
+                          fillPatternOffsetY={shingleOffsetY}
+                          fillPatternRotation={r.shingleRotation ?? 0}
+                        />
+                        <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
+                      </>
+                    );
+                  })()}
 
                   {/* RIDGE VENT */}
                   {atLeast(currentStep, "RIDGE_VENT") && ridges.map((l) => (
@@ -1547,21 +2523,46 @@ export default function Page() {
                     <CapBand key={`cap-${r.id}-${l.id}`} points={l.points} width={r.capW} shinglesImg={shinglesImg} patternScale={r.shingleScale} />
                   ))}
 
-                  {/* keep valley line after shingles */}
-                  {atLeast(currentStep, "SHINGLES") && valleys.map((l) => (
-                    <Group key={`vline-${r.id}-${l.id}`}>
-                      <Line points={l.points} stroke="rgba(255,255,255,0.70)" strokeWidth={2} lineCap="round" lineJoin="round" opacity={0.9} />
-                      <Line points={l.points} stroke="rgba(0,0,0,0.45)" strokeWidth={1} lineCap="round" lineJoin="round" opacity={0.9} />
+                  {/* Valley seam / W-Valley on top of shingles */}
+                  {atLeast(currentStep, "SHINGLES") && valleys.map((l) =>
+                    r.valleyMetalColor === "Galvanized" ? (
+                      /* Galvanized open valley: subtle crease visible through shingles */
+                      <Group key={`vline-${r.id}-${l.id}`}>
+                        <Line points={l.points} stroke="rgba(0,0,0,0.32)"      strokeWidth={6}   lineCap="round" lineJoin="round" />
+                        <Line points={l.points} stroke="rgba(210,215,220,0.65)" strokeWidth={3}   lineCap="round" lineJoin="round" />
+                        <Line points={l.points} stroke="rgba(255,255,255,0.25)" strokeWidth={1.2} lineCap="round" lineJoin="round" />
+                      </Group>
+                    ) : (
+                      /* W-Valley: colored metal channel sits ON TOP of shingles — shingles woven around it */
+                      <ShinyMetalStroke
+                        key={`vline-${r.id}-${l.id}`}
+                        points={l.points}
+                        width={r.valleyMetalW * 2.5}
+                        color={r.valleyMetalColor}
+                        opacity={0.99}
+                      />
+                    )
+                  )}
+
+                  {/* Hip seam — subtle crease visible through shingles */}
+                  {atLeast(currentStep, "SHINGLES") && hips.map((l) => (
+                    <Group key={`hline-${r.id}-${l.id}`}>
+                      <Line points={l.points} stroke="rgba(0,0,0,0.30)"      strokeWidth={5}   lineCap="round" lineJoin="round" />
+                      <Line points={l.points} stroke="rgba(210,215,220,0.55)" strokeWidth={2.5} lineCap="round" lineJoin="round" />
                     </Group>
                   ))}
 
-                  {/* keep hip line after shingles */}
-                  {atLeast(currentStep, "SHINGLES") && hips.map((l) => (
-                    <Group key={`hline-${r.id}-${l.id}`}>
-                      <Line points={l.points} stroke="rgba(255,255,255,0.70)" strokeWidth={2} lineCap="round" lineJoin="round" opacity={0.9} />
-                      <Line points={l.points} stroke="rgba(0,0,0,0.45)" strokeWidth={1} lineCap="round" lineJoin="round" opacity={0.9} />
-                    </Group>
-                  ))}
+                  {/* Ridge fold — crease tinted to match shingle color so it blends naturally */}
+                  {atLeast(currentStep, "SHINGLES") && !atLeast(currentStep, "CAP_SHINGLES") && (() => {
+                    const [rr, rg, rb] = shingleRGB(active.shingleColor);
+                    return ridges.map((l) => (
+                      <Group key={`ridgefold-${r.id}-${l.id}`}>
+                        <Line points={l.points} stroke="rgba(0,0,0,0.22)"                    strokeWidth={5}   lineCap="round" lineJoin="round" />
+                        <Line points={l.points} stroke={`rgba(${rr},${rg},${rb},0.55)`}      strokeWidth={2.5} lineCap="round" lineJoin="round" />
+                        <Line points={l.points} stroke={`rgba(${rr+30},${rg+30},${rb+30},0.22)`} strokeWidth={1} lineCap="round" lineJoin="round" />
+                      </Group>
+                    ));
+                  })()}
 
                   {/* dormer holes reveal original photo */}
                   {photoImg && r.holes.map((holePts, idx) => (
@@ -1592,6 +2593,32 @@ export default function Page() {
                   onDragMove={(e) => updateOutlinePoint(idx, e.target.x(), e.target.y())}
                 />
               ))}
+
+            {/* Auto-detect overlay — shown as amber suggestion before the user commits */}
+            {autoSuggest && active?.step === "TRACE" && (
+              <>
+                <Line
+                  points={autoSuggest.outline}
+                  closed
+                  stroke="rgba(245,158,11,0.85)"
+                  strokeWidth={2.5}
+                  dash={[8, 5]}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+                {autoSuggest.lines.map((l, i) => (
+                  <Line
+                    key={`suggest-${i}`}
+                    points={l.points}
+                    stroke={kindColor(l.kind)}
+                    strokeWidth={2}
+                    dash={[10, 6]}
+                    lineCap="round"
+                    opacity={0.75}
+                  />
+                ))}
+              </>
+            )}
           </Layer>
         </Stage>
       </main>

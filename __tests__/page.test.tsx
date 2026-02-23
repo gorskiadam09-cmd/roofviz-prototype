@@ -238,7 +238,7 @@ async function startProject() {
 // Helper — starts project and opens advanced options
 async function openAdvanced() {
   const user = await startProject();
-  await user.click(screen.getByRole("button", { name: "Show advanced options" }));
+  await user.click(screen.getByRole("button", { name: /advanced options/i }));
   return user;
 }
 
@@ -262,8 +262,8 @@ describe("Page — initial (START) screen", () => {
 
   it("does not show step navigation buttons before starting", () => {
     render(<Page />);
-    expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Next" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "← Back" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue →" })).not.toBeInTheDocument();
   });
 
   it("allows the user to change the project name", async () => {
@@ -292,7 +292,7 @@ describe("Page — after starting project", () => {
   it("shows placeholder text when no photo is loaded", async () => {
     await startProject();
     expect(
-      screen.getByText("Upload a photo on the left to begin")
+      screen.getByText("Upload a photo to begin")
     ).toBeInTheDocument();
   });
 
@@ -315,12 +315,12 @@ describe("Page — step navigation", () => {
   it("Back button is enabled on the TRACE step (can return to START)", async () => {
     await startProject();
     // TRACE is step index 1, so goBack is allowed — button is enabled
-    expect(screen.getByRole("button", { name: "Back" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "← Back" })).not.toBeDisabled();
   });
 
   it("Next button is disabled when no roof outline is closed", async () => {
     await startProject();
-    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Continue →" })).toBeDisabled();
   });
 });
 
@@ -330,36 +330,36 @@ describe("Page — roof management", () => {
     expect(screen.getByRole("button", { name: /Roof 1/i })).toBeInTheDocument();
   });
 
-  it("adds a second roof when '+ Add roof' is clicked", async () => {
+  it("adds a second roof when '+ Add Roof' is clicked", async () => {
     const user = await startProject();
-    await user.click(screen.getByRole("button", { name: "+ Add roof" }));
+    await user.click(screen.getByRole("button", { name: "+ Add Roof" }));
     expect(screen.getByRole("button", { name: /Roof 2/i })).toBeInTheDocument();
   });
 
   it("shows trace-roof button for unclosed roof", async () => {
     await startProject();
     expect(
-      screen.getByRole("button", { name: /Trace roof edge/i })
+      screen.getByRole("button", { name: /Start Tracing Roof Edge/i })
     ).toBeInTheDocument();
   });
 
   it("can toggle edit handles on/off", async () => {
     const user = await startProject();
     await user.click(
-      screen.getByRole("button", { name: "Show edit handles" })
+      screen.getByRole("button", { name: "Edit handles" })
     );
     expect(
-      screen.getByRole("button", { name: "Hide edit handles" })
+      screen.getByRole("button", { name: "Hide handles" })
     ).toBeInTheDocument();
   });
 
   it("can toggle guides-during-install on/off", async () => {
     const user = await startProject();
     await user.click(
-      screen.getByRole("button", { name: "Show guides during install" })
+      screen.getByRole("button", { name: "Show guides" })
     );
     expect(
-      screen.getByRole("button", { name: "Hide guides during install" })
+      screen.getByRole("button", { name: "Hide guides" })
     ).toBeInTheDocument();
   });
 });
@@ -367,17 +367,16 @@ describe("Page — roof management", () => {
 describe("Page — advanced options panel", () => {
   it("opens when toggled", async () => {
     await openAdvanced();
-    expect(screen.getByText("Shingle color")).toBeInTheDocument();
-    expect(screen.getByText("Metal colors")).toBeInTheDocument();
-    expect(screen.getByText("Widths (px)")).toBeInTheDocument();
+    expect(screen.getByText("Shingle Color")).toBeInTheDocument();
+    expect(screen.getByText("Metal Colors")).toBeInTheDocument();
+    expect(screen.getByText("Product Widths")).toBeInTheDocument();
   });
 
   it("closes when toggled again", async () => {
     const user = await openAdvanced();
-    await user.click(
-      screen.getByRole("button", { name: "Hide advanced options" })
-    );
-    expect(screen.queryByText("Shingle color")).not.toBeInTheDocument();
+    // The toggle button keeps the same label; clicking it again collapses the panel
+    await user.click(screen.getByRole("button", { name: /advanced options/i }));
+    expect(screen.queryByText("Shingle Color")).not.toBeInTheDocument();
   });
 
   it("shingle color dropdown has all 7 options", async () => {
@@ -403,16 +402,16 @@ describe("Page — advanced options panel", () => {
 
   it("metal color dropdowns are present for apron, drip edge, and valley", async () => {
     await openAdvanced();
-    expect(screen.getByText("Gutter apron")).toBeInTheDocument();
-    expect(screen.getByText("Drip edge")).toBeInTheDocument();
-    expect(screen.getByText("Valley metal")).toBeInTheDocument();
+    expect(screen.getByText("Gutter Apron")).toBeInTheDocument();
+    expect(screen.getByText("Drip Edge")).toBeInTheDocument();
+    expect(screen.getByText("Valley Metal")).toBeInTheDocument();
   });
 });
 
-describe("Page — photo list", () => {
-  it("shows the project in the photos list after starting", async () => {
+describe("Page — photo section", () => {
+  it("shows the upload zone when no photo is loaded", async () => {
     await startProject();
-    // Initial project has no src yet
-    expect(screen.getByText(/no photo yet/i)).toBeInTheDocument();
+    // The photo section shows an upload zone with label text when no photo is present
+    expect(screen.getByText(/PNG or JPG/i)).toBeInTheDocument();
   });
 });
