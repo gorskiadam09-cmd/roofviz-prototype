@@ -842,7 +842,7 @@ export default function Page() {
   const [customerStep, setCustomerStep] = useState<Step>("TEAROFF");
   const [customerShingleColor, setCustomerShingleColor] = useState<ShingleColor>("Barkwood");
   const [showShareModal, setShowShareModal] = useState(false);
-  const [shareUrlCopied, setShareUrlCopied] = useState(false);
+  const [shareEmail, setShareEmail] = useState("");
 
   const active = useMemo(() => {
     if (screen === "CUSTOMER_VIEW" && customerViewData) {
@@ -2308,29 +2308,35 @@ export default function Page() {
                       </div>
                       <button
                         style={{ ...ghostBtn, width: "100%", marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, boxSizing: "border-box" as const }}
-                        onClick={() => { setShowShareModal((v) => !v); setShareUrlCopied(false); }}
+                        onClick={() => { setShowShareModal((v) => !v); setShareEmail(""); }}
                       >
                         Share with Customer
                       </button>
                       {showShareModal && (() => {
                         const url = generateShareUrl();
+                        const projectName = active?.name || "Your Roof";
+                        const subject = encodeURIComponent(`${projectName} — Roof Installation Preview`);
+                        const body = encodeURIComponent(
+                          `Hi,\n\nHere is a link to preview your roof installation with different shingle colors:\n\n${url}\n\nYou can step through each layer of the installation and try different shingle colors. No sign-up required — just open the link.\n\nLet me know if you have any questions!\n`
+                        );
                         return (
                           <div style={{ marginTop: 10, padding: 14, background: "#f8fafc", borderRadius: 10, border: "1.5px solid rgba(37,99,235,0.18)" }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Customer Link</div>
-                            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.55 }}>
-                              Send this link to your customer. They can step through the installation and try shingle colors — no editing tools.
-                            </div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Email to Customer</div>
                             <input
-                              readOnly
-                              value={url}
-                              style={{ ...inputStyle, fontSize: 10, padding: "8px 10px", marginBottom: 8, color: "#334155", fontFamily: "monospace" }}
-                              onClick={(e) => (e.target as HTMLInputElement).select()}
+                              type="email"
+                              placeholder="customer@email.com"
+                              value={shareEmail}
+                              onChange={(e) => setShareEmail(e.target.value)}
+                              style={{ ...inputStyle, fontSize: 13, padding: "9px 12px", marginBottom: 8 }}
                             />
                             <button
-                              style={{ ...primaryBtn, marginTop: 0, padding: "9px 14px", fontSize: 12 }}
-                              onClick={() => { navigator.clipboard?.writeText(url); setShareUrlCopied(true); setTimeout(() => setShareUrlCopied(false), 2500); }}
+                              style={{ ...primaryBtn, marginTop: 0, padding: "9px 14px", fontSize: 12, width: "100%", boxSizing: "border-box" as const, opacity: shareEmail.includes("@") ? 1 : 0.45 }}
+                              disabled={!shareEmail.includes("@")}
+                              onClick={() => {
+                                window.location.href = `mailto:${encodeURIComponent(shareEmail)}?subject=${subject}&body=${body}`;
+                              }}
                             >
-                              {shareUrlCopied ? "✓ Copied!" : "Copy Link"}
+                              Send Email
                             </button>
                           </div>
                         );
