@@ -136,6 +136,7 @@ type PhotoProject = {
   id: string;
   name: string;
   src: string;
+  photoSrcs: string[]; // all uploaded photos for this project
 
   step: Step;
 
@@ -851,8 +852,13 @@ export default function Page() {
       if (raw) {
         const parsed = JSON.parse(raw) as PhotoProject[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setPhotos(parsed);
-          setActivePhotoId(parsed[0].id);
+          // Migrate old format: ensure photoSrcs exists
+          const migrated = parsed.map((p) => ({
+            ...p,
+            photoSrcs: p.photoSrcs ?? (p.src ? [p.src] : []),
+          }));
+          setPhotos(migrated);
+          setActivePhotoId(migrated[0].id);
         }
       }
     } catch {}
@@ -878,6 +884,7 @@ export default function Page() {
       id,
       name: projectName || "My Roof Project",
       src: "",
+      photoSrcs: [],
       step: "TRACE",
       roofs: [roof1],
       activeRoofId: roof1.id,
@@ -939,26 +946,35 @@ export default function Page() {
     setTool("NONE");
   }
 
-  // Upload a photo into the currently active project.
-  // Never renames the project — the name stays whatever the user set.
-  // Only the first selected file is used; each project keeps its own photo.
+  // Upload one or more photos into the currently active project.
+  // All selected files are added to photoSrcs; src switches to the first new one.
   function addFiles(files: FileList | null) {
     if (!files || files.length === 0 || !activePhotoId) return;
-    // Capture the target project ID *before* the async FileReader callback
-    // so a subsequent activePhotoId change never redirects the photo to the
-    // wrong project.
     const targetId = activePhotoId;
-    const fr = new FileReader();
-    fr.onload = () => {
+    const promises = Array.from(files).map(
+      (file) =>
+        new Promise<string>((resolve) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result));
+          fr.readAsDataURL(file);
+        })
+    );
+    Promise.all(promises).then((newSrcs) => {
       setPhotos((prev) =>
-        prev.map((p) =>
-          p.id === targetId
-            ? { ...p, src: String(fr.result), stageScale: 1, stagePos: { x: 0, y: 0 } }
-            : p
-        )
+        prev.map((p) => {
+          if (p.id !== targetId) return p;
+          const existing = p.photoSrcs ?? [];
+          const merged = [...existing, ...newSrcs];
+          return {
+            ...p,
+            photoSrcs: merged,
+            src: newSrcs[0], // switch to first newly added photo
+            stageScale: 1,
+            stagePos: { x: 0, y: 0 },
+          };
+        })
       );
-    };
-    fr.readAsDataURL(files[0]);
+    });
   }
 
   function addRoof() {
@@ -1317,7 +1333,7 @@ export default function Page() {
     const hasHip    = allLines.some((l) => l.kind === "HIP");
 
     // Logo dimensions: maintain 165:48 aspect ratio
-    const logoW = 108, logoH = Math.round(108 * 48 / 165);
+    const logoW = 150, logoH = Math.round(150 * 48 / 165);
 
     // ── Page 1: Finished Shingles ──
     const img1 = await snap("PDF_SHINGLES");
@@ -1815,14 +1831,20 @@ export default function Page() {
               {/* Photo — current project only */}
               <div style={sectionCard} className="rv-section-card">
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={sectionLabel}>Photo</div>
+                  <div style={sectionLabel}>
+                    Photo{(active?.photoSrcs?.length ?? 0) > 1 ? ` (${(active?.photoSrcs?.indexOf(active?.src) ?? 0) + 1}/${active?.photoSrcs?.length})` : ""}
+                  </div>
                   {active?.src && (
                     <button
                       className="rv-btn-small"
-                      onClick={() => setPhotos((prev) => prev.map((q) => q.id === activePhotoId ? { ...q, src: "" } : q))}
+                      onClick={() => setPhotos((prev) => prev.map((q) => {
+                        if (q.id !== activePhotoId) return q;
+                        const newSrcs = (q.photoSrcs ?? []).filter((s) => s !== q.src);
+                        return { ...q, photoSrcs: newSrcs, src: newSrcs[0] ?? "" };
+                      }))}
                       style={{ ...smallBtn, fontSize: 11, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)", padding: "4px 9px" }}
                     >
-                      Remove photo
+                      Remove
                     </button>
                   )}
                 </div>
@@ -1861,7 +1883,28 @@ export default function Page() {
                   </label>
                 )}
 
-                {/* Allow re-uploading even when a photo exists */}
+                {/* Thumbnail strip — shown when multiple photos exist */}
+                {(active?.photoSrcs?.length ?? 0) > 1 && (
+                  <div style={{ display: "flex", gap: 5, marginTop: 8, overflowX: "auto", paddingBottom: 2 }}>
+                    {active!.photoSrcs.map((s, i) => (
+                      <div
+                        key={i}
+                        onClick={() => patchActive((p) => ({ ...p, src: s }))}
+                        style={{
+                          width: 48, height: 34, borderRadius: 6, overflow: "hidden",
+                          cursor: "pointer", flexShrink: 0,
+                          border: s === active!.src ? "2px solid #2563eb" : "2px solid rgba(15,23,42,0.08)",
+                          opacity: s === active!.src ? 1 : 0.55,
+                          transition: "opacity 0.15s, border-color 0.15s",
+                        }}
+                      >
+                        <img src={s} alt={`Photo ${i + 1}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add more photos */}
                 {active?.src && (
                   <label className="rv-upload-zone" style={{
                     display: "flex",
@@ -1875,10 +1918,11 @@ export default function Page() {
                     cursor: "pointer",
                     gap: 6,
                   }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#2563eb" }}>Replace photo</div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#2563eb" }}>+ Add more photos</div>
                     <input
                       type="file"
                       accept="image/*"
+                      multiple
                       onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }}
                       style={{ display: "none" }}
                     />
@@ -2010,41 +2054,6 @@ export default function Page() {
                         <div style={{ display: "grid", gap: 8 }}>
                           <div style={sectionLabel}>Step B — Label Each Edge Type</div>
 
-                          {/* Auto-detect section — runs AFTER outline is closed so it works within your boundary */}
-                          {photoImg && (
-                            <div style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: 10, padding: "10px 12px", display: "grid", gap: 8 }}>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e" }}>✦ Auto-Detect Edges</div>
-                              {autoSuggest ? (
-                                <>
-                                  <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.55 }}>
-                                    Detected <strong>{autoSuggest.lines.length}</strong> edge lines (shown in amber). Review on the canvas, then accept or discard.
-                                  </div>
-                                  <div style={{ display: "flex", gap: 6 }}>
-                                    <button style={{ ...smallBtn, flex: 1, background: "rgba(245,158,11,0.12)", borderColor: "rgba(245,158,11,0.35)", color: "#92400e", fontWeight: 700 }} onClick={acceptAutoSuggest}>
-                                      Accept & Apply
-                                    </button>
-                                    <button style={smallBtn} onClick={() => setAutoSuggest(null)}>Discard</button>
-                                  </div>
-                                </>
-                              ) : (
-                                <>
-                                  <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.55 }}>
-                                    Outline is set — now let the app suggest edge types (eaves, rakes, valleys, etc.) within your boundary.
-                                  </div>
-                                  <button
-                                    style={{ ...smallBtn, background: "rgba(245,158,11,0.10)", borderColor: "rgba(245,158,11,0.35)", color: "#92400e", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
-                                    onClick={runAutoDetect}
-                                    disabled={autoDetecting}
-                                  >
-                                    {autoDetecting && <span className="rv-spin" style={{ display: "inline-block", width: 12, height: 12, border: "2px solid rgba(146,64,14,0.3)", borderTop: "2px solid #92400e", borderRadius: "50%" }} />}
-                                    {autoDetecting ? "Detecting…" : "Auto-Detect Edge Types"}
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          )}
-
-                          <div style={{ fontSize: 11, color: "#94a3b8", textAlign: "center" }}>— or label manually —</div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5 }}>
                             {([
                               ["EAVE",   "Bottom edge"],
@@ -2404,6 +2413,21 @@ export default function Page() {
                   {/* Tearoff (decking) */}
 {atLeast(currentStep, "TEAROFF") && deckingImg && (
   <KonvaImage image={deckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
+)}
+
+{/* Subtle structure guides — faint valley/hip/ridge lines visible during install */}
+{atLeast(currentStep, "TEAROFF") && !atLeast(currentStep, "SHINGLES") && (
+  <>
+    {valleys.map((l) => (
+      <Line key={`guide-v-${r.id}-${l.id}`} points={l.points} stroke="rgba(255,255,255,0.13)" strokeWidth={3} dash={[10, 8]} lineCap="round" lineJoin="round" />
+    ))}
+    {ridges.map((l) => (
+      <Line key={`guide-r-${r.id}-${l.id}`} points={l.points} stroke="rgba(255,255,255,0.10)" strokeWidth={2} dash={[8, 7]} lineCap="round" lineJoin="round" />
+    ))}
+    {hips.map((l) => (
+      <Line key={`guide-h-${r.id}-${l.id}`} points={l.points} stroke="rgba(255,255,255,0.11)" strokeWidth={2} dash={[9, 7]} lineCap="round" lineJoin="round" />
+    ))}
+  </>
 )}
 
 {/*
