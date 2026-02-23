@@ -2076,7 +2076,15 @@ export default function Page() {
             )}
           </div>
           {active && (
-            <div style={{ marginTop: 12, height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
+            <input
+              value={active.name}
+              onChange={(e) => patchActive((p) => ({ ...p, name: e.target.value }))}
+              placeholder="Project name"
+              style={{ marginTop: 10, width: "100%", fontSize: 13, fontWeight: 700, color: "#0f172a", background: "transparent", border: "none", borderBottom: "1.5px solid rgba(15,23,42,0.10)", padding: "4px 2px", outline: "none", boxSizing: "border-box" as const }}
+            />
+          )}
+          {active && (
+            <div style={{ marginTop: 8, height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
               <div style={{
                 height: "100%",
                 width: `${((stepIndex(liveStep) + 1) / STEPS.length) * 100}%`,
@@ -2108,8 +2116,8 @@ export default function Page() {
                 style={inputStyle}
                 placeholder="e.g. 123 Oak Street"
               />
-              <button style={primaryBtn} onClick={photos.length > 0 ? () => openProject(photos[0].id) : startProject}>
-                {photos.length > 0 ? "Resume Project →" : "Start Project →"}
+              <button style={primaryBtn} onClick={startProject}>
+                Start Project →
               </button>
             </div>
           )}
