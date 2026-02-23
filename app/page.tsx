@@ -895,20 +895,47 @@ export default function Page() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Customer share link takes priority
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const shareParam = params.get("share");
-      if (shareParam) {
-        const json = atob(shareParam.replace(/-/g, "+").replace(/_/g, "/"));
-        const data = JSON.parse(json) as { name: string; roofs: Roof[]; shingleColor: ShingleColor };
-        setCustomerViewData(data);
-        setCustomerShingleColor(data.shingleColor);
+    // Customer share link takes priority — if ?share= is present, ALWAYS
+    // show customer view, never fall through to the full editor.
+    const params = new URLSearchParams(window.location.search);
+    const shareParam = params.get("share");
+    if (shareParam) {
+      try {
+        const json = decodeURIComponent(escape(atob(shareParam.replace(/-/g, "+").replace(/_/g, "/"))));
+        const raw = JSON.parse(json);
+        // Support both compact keys (new) and full keys (legacy links)
+        const name = raw.n ?? raw.name ?? "Roof Preview";
+        const shingleColor: ShingleColor = raw.c ?? raw.shingleColor ?? "Barkwood";
+        const roofs: Roof[] = (raw.r ?? raw.roofs ?? []).map((r: any) => ({
+          id: r.id ?? uid(),
+          name: r.name ?? "Roof 1",
+          closed: r.cl === 1 || r.closed === true,
+          outline: r.o ?? r.outline ?? [],
+          holes: r.h ?? r.holes ?? [],
+          lines: (r.l ?? r.lines ?? []).map((l: any) => ({
+            id: l.id ?? uid(),
+            kind: l.k ?? l.kind,
+            points: l.p ?? l.points ?? [],
+          })),
+          shingleScale: r.sc ?? r.shingleScale ?? 0.20,
+          valleyMetalColor: r.vc ?? r.valleyMetalColor ?? "Galvanized",
+          valleyMetalW: r.vw ?? r.valleyMetalW ?? 18,
+          // defaults for unused fields
+          gutterApronW: 5, gutterApronColor: "Aluminum",
+          dripEdgeW: 5, dripEdgeColor: "Aluminum",
+          iceWaterW: 36, syntheticW: 72, proStartW: 7, ridgeVentW: 12,
+          showEditHandles: false,
+        }));
+        setCustomerViewData({ name, roofs, shingleColor });
+        setCustomerShingleColor(shingleColor);
         setCustomerStep("TEAROFF");
-        setScreen("CUSTOMER_VIEW");
-        return;
+      } catch {
+        // Decode failed — show blank customer view rather than exposing the editor
+        setCustomerViewData({ name: "Preview", roofs: [], shingleColor: "Barkwood" });
       }
-    } catch { /* malformed share param — fall through */ }
+      setScreen("CUSTOMER_VIEW");
+      return;
+    }
 
     // Load saved projects and auto-navigate back to active project
     try {
@@ -1400,20 +1427,27 @@ export default function Page() {
   }, [customerViewData]);
   const customerStepIdx = customerNavSteps.indexOf(customerStep);
 
-  // Generate a shareable read-only URL encoding the current project structure (no photos)
+  // Generate a shareable read-only URL encoding the current project structure (no photos).
+  // Only encodes the minimum data needed for the customer preview to keep the URL short.
   function generateShareUrl(): string {
     if (!active || screen === "CUSTOMER_VIEW") return "";
     const shareData = {
-      name: active.name,
-      shingleColor: active.shingleColor,
-      roofs: active.roofs.map((r) => ({
-        ...r,
-        outline: r.outline.map((n) => Math.round(n * 10) / 10),
-        holes: r.holes.map((h) => h.map((n) => Math.round(n * 10) / 10)),
-        lines: r.lines.map((l) => ({ ...l, points: l.points.map((n) => Math.round(n * 10) / 10) })),
+      n: active.name,
+      c: active.shingleColor,
+      r: active.roofs.map((r) => ({
+        id: r.id,
+        cl: r.closed ? 1 : 0,
+        o: r.outline.map((n) => Math.round(n)),
+        h: r.holes.map((h) => h.map((n) => Math.round(n))),
+        l: r.lines.map((l) => ({ k: l.kind, p: l.points.map((n) => Math.round(n)) })),
+        // include just the display properties customers can see
+        sc: r.shingleScale,
+        vc: r.valleyMetalColor,
+        vw: r.valleyMetalW,
       })),
     };
-    const encoded = btoa(JSON.stringify(shareData))
+    const json = JSON.stringify(shareData);
+    const encoded = btoa(unescape(encodeURIComponent(json)))
       .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
     const base = process.env.NEXT_PUBLIC_APP_URL ||
       (typeof window !== "undefined" ? window.location.origin + window.location.pathname : "");
@@ -2351,12 +2385,19 @@ export default function Page() {
                                   onClick={async () => {
                                     setShareEmailSending(true);
                                     try {
-                                      await fetch("/api/send-email", {
+                                      const res = await fetch("/api/send-email", {
                                         method: "POST",
                                         headers: { "Content-Type": "application/json" },
                                         body: JSON.stringify({ to: shareEmail, shareUrl: url, projectName }),
                                       });
-                                      setShareEmailSent(true);
+                                      const json = await res.json();
+                                      if (!res.ok || json.error) {
+                                        alert(`Failed to send: ${json.error || res.status}`);
+                                      } else {
+                                        setShareEmailSent(true);
+                                      }
+                                    } catch (e) {
+                                      alert(`Network error: ${e}`);
                                     } finally {
                                       setShareEmailSending(false);
                                     }
