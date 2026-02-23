@@ -10,10 +10,12 @@
     "test": "jest"
   },
   "dependencies": {
+    "@types/nodemailer": "^7.0.11",
     "jspdf": "^4.2.0",
     "konva": "^10.2.0",
     "next": "16.1.6",
     "next-pwa": "^5.6.0",
+    "nodemailer": "^8.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-konva": "^19.2.2",
