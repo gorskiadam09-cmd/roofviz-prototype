@@ -150,6 +150,13 @@ type PhotoProject = {
 
   stageScale: number;
   stagePos: { x: number; y: number };
+
+  photoStates: Record<string, {
+    roofs: Roof[];
+    activeRoofId: string;
+    stageScale: number;
+    stagePos: { x: number; y: number };
+  }>;
 };
 
 type ExportView = "LIVE" | "PDF_SHINGLES" | "PDF_UNDERLAY";
@@ -643,6 +650,7 @@ function CapBand({
         fillPatternScaleY={patternScale}
         opacity={0.98}
       />
+      <Rect x={-5000} y={-5000} width={12000} height={12000} fill="rgba(255,255,255,0.35)" />
       <Line
         points={points}
         stroke="rgba(0,0,0,0.18)"
@@ -867,10 +875,11 @@ export default function Page() {
       if (raw) {
         const parsed = JSON.parse(raw) as PhotoProject[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Migrate old format: ensure photoSrcs exists
+          // Migrate old format: ensure photoSrcs and photoStates exist
           const migrated = parsed.map((p) => ({
             ...p,
             photoSrcs: p.photoSrcs ?? (p.src ? [p.src] : []),
+            photoStates: p.photoStates ?? {},
           }));
           setPhotos(migrated);
           setActivePhotoId(migrated[0].id);
@@ -908,6 +917,7 @@ export default function Page() {
       showEditHandles: false,
       stageScale: 1,
       stagePos: { x: 0, y: 0 },
+      photoStates: {},
     };
     setPhotos((prev) => [item, ...prev]);
     setActivePhotoId(id);
@@ -980,10 +990,22 @@ export default function Page() {
           if (p.id !== targetId) return p;
           const existing = p.photoSrcs ?? [];
           const merged = [...existing, ...newSrcs];
+          // Save current photo's state before switching
+          const saved = { ...p.photoStates };
+          if (p.src) {
+            saved[p.src] = { roofs: p.roofs, activeRoofId: p.activeRoofId,
+                             stageScale: p.stageScale, stagePos: p.stagePos };
+          }
+          // New photos start with fresh state (not inherited from current)
+          const firstNewSrc = newSrcs[0];
+          const freshRoof = defaultRoof("Roof 1");
           return {
             ...p,
             photoSrcs: merged,
-            src: newSrcs[0], // switch to first newly added photo
+            src: firstNewSrc,
+            photoStates: saved,
+            roofs: [freshRoof],
+            activeRoofId: freshRoof.id,
             stageScale: 1,
             stagePos: { x: 0, y: 0 },
           };
@@ -1004,6 +1026,50 @@ export default function Page() {
     setTool("TRACE_ROOF");
     setDraftLine(null);
     setDraftHole(null);
+  }
+
+  function switchToPhoto(newSrc: string) {
+    patchActive((p) => {
+      const saved = { ...p.photoStates };
+      if (p.src) {
+        saved[p.src] = { roofs: p.roofs, activeRoofId: p.activeRoofId,
+                         stageScale: p.stageScale, stagePos: p.stagePos };
+      }
+      const next = saved[newSrc];
+      if (next) {
+        return { ...p, src: newSrc, photoStates: saved, roofs: next.roofs,
+                 activeRoofId: next.activeRoofId, stageScale: next.stageScale, stagePos: next.stagePos };
+      }
+      const freshRoof = defaultRoof("Roof 1");
+      return { ...p, src: newSrc, photoStates: saved, roofs: [freshRoof],
+               activeRoofId: freshRoof.id, stageScale: 1, stagePos: { x: 0, y: 0 } };
+    });
+    setTool("NONE"); setDraftLine(null); setDraftHole(null);
+  }
+
+  function removeCurrentPhoto() {
+    if (!active || !active.src) return;
+    const removedSrc = active.src;
+    patchActive((p) => {
+      const saved = { ...p.photoStates };
+      // Save current state before removing
+      saved[removedSrc] = { roofs: p.roofs, activeRoofId: p.activeRoofId,
+                             stageScale: p.stageScale, stagePos: p.stagePos };
+      const newSrcs = (p.photoSrcs ?? []).filter((s) => s !== removedSrc);
+      // Remove the deleted photo's saved state
+      delete saved[removedSrc];
+      const nextSrc = newSrcs[0] ?? "";
+      const nextState = nextSrc ? saved[nextSrc] : null;
+      if (nextState) {
+        return { ...p, photoSrcs: newSrcs, src: nextSrc, photoStates: saved,
+                 roofs: nextState.roofs, activeRoofId: nextState.activeRoofId,
+                 stageScale: nextState.stageScale, stagePos: nextState.stagePos };
+      }
+      const freshRoof = defaultRoof("Roof 1");
+      return { ...p, photoSrcs: newSrcs, src: nextSrc, photoStates: saved,
+               roofs: [freshRoof], activeRoofId: freshRoof.id, stageScale: 1, stagePos: { x: 0, y: 0 } };
+    });
+    setTool("NONE"); setDraftLine(null); setDraftHole(null);
   }
 
   function deleteLine(lineId: string) {
@@ -1282,7 +1348,7 @@ export default function Page() {
 
   const showGuides = (active?.step === "TRACE") || !!active?.showGuidesDuringInstall;
 
-  // Two-page PDF with material legends
+  // Two-page PDF with material legends (multi-photo grid)
   async function exportPdfTwoPages() {
     if (!active || !stageRef.current) return;
 
@@ -1306,7 +1372,7 @@ export default function Page() {
 
     async function snap(view: ExportView) {
       setExportView(view);
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 200));
       return stageRef.current.toDataURL({ pixelRatio: 2 });
     }
 
@@ -1351,68 +1417,56 @@ export default function Page() {
       });
     }
 
-    // Use the first roof's colors for the legend (most common case).
-    const r0 = active.roofs[0] ?? null;
+    // Build a map of all per-photo states (including the live current photo)
+    const fullStates: Record<string, { roofs: Roof[]; activeRoofId: string; stageScale: number; stagePos: { x: number; y: number } }> = { ...active.photoStates };
+    if (active.src) {
+      fullStates[active.src] = { roofs: active.roofs, activeRoofId: active.activeRoofId,
+                                  stageScale: active.stageScale, stagePos: active.stagePos };
+    }
+    const allPhotos = active.photoSrcs ?? [];
+    const originalSrc = active.src;
+
+    // Helper: switch the canvas to show a specific photo's saved state
+    async function showPhoto(src: string) {
+      await new Promise<void>((resolve) => {
+        setPhotos((prev) => prev.map((p) => {
+          if (p.id !== activePhotoId) return p;
+          const st = fullStates[src];
+          if (!st) return { ...p, src, roofs: [], activeRoofId: "", stageScale: 1, stagePos: { x: 0, y: 0 } };
+          return { ...p, src, roofs: st.roofs, activeRoofId: st.activeRoofId,
+                   stageScale: st.stageScale, stagePos: st.stagePos };
+        }));
+        setTimeout(resolve, 200);
+      });
+    }
+
+    // Use the first photo's first roof for legend colors
+    const firstState = fullStates[allPhotos[0]];
+    const r0 = firstState ? (firstState.roofs[0] ?? null) : null;
     const sc = active.shingleColor;
 
-    // Determine which line types actually exist across all roofs.
-    const allLines = active.roofs.flatMap((r) => r.lines);
-    const hasEave   = allLines.some((l) => l.kind === "EAVE");
-    const hasRake   = allLines.some((l) => l.kind === "RAKE");
-    const hasValley = allLines.some((l) => l.kind === "VALLEY");
-    const hasRidge  = allLines.some((l) => l.kind === "RIDGE");
-    const hasHip    = allLines.some((l) => l.kind === "HIP");
+    // Determine which line types exist across all photos' roofs
+    const allRoofLines = Object.values(fullStates).flatMap((st) => st.roofs.flatMap((r) => r.lines));
+    const hasEave   = allRoofLines.some((l) => l.kind === "EAVE");
+    const hasRake   = allRoofLines.some((l) => l.kind === "RAKE");
+    const hasValley = allRoofLines.some((l) => l.kind === "VALLEY");
+    const hasRidge  = allRoofLines.some((l) => l.kind === "RIDGE");
+    const hasHip    = allRoofLines.some((l) => l.kind === "HIP");
 
     // Logo dimensions: maintain 165:48 aspect ratio
     const logoW = 150, logoH = Math.round(150 * 48 / 165);
 
-    // ── Page 1: Finished Shingles ──
-    const img1 = await snap("PDF_SHINGLES");
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(16);
-    pdf.setTextColor(15, 23, 42);
-    pdf.text(active.name || projectName, imgX, 28);
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(10);
-    pdf.setTextColor(100, 116, 139);
-    pdf.text("Page 1 of 2  ·  Finished Roof", imgX, 46);
-    if (logoDataUrl) pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
-    pdf.addImage(img1, "PNG", imgX, imgY, imgW, imgH);
-
-    // Legend row – Page 1 (only include items that have relevant lines)
     const [sr, sg, sb] = shingleRGB(sc);
+    const [ar, ag, ab] = r0 ? metalRGB(r0.gutterApronColor) : [198, 205, 211];
+    const [dr, dg, db] = r0 ? metalRGB(r0.dripEdgeColor)    : [198, 205, 211];
+    const [vr, vg, vb] = r0 ? metalRGB(r0.valleyMetalColor) : [198, 205, 211];
+
     const page1Items = [
       { r: sr,  g: sg,  b: sb,  label: `${sc} Shingles (field)` },
       ...(hasRidge ? [{ r: sr,  g: sg,  b: sb,  label: "Cap Shingles (ridge)" }] : []),
       ...(hasValley ? [{ r: 200, g: 200, b: 200, label: "Valley seam", lineStyle: true }] : []),
       ...(hasHip    ? [{ r: 200, g: 200, b: 200, label: "Hip seam",    lineStyle: true }] : []),
     ];
-    drawLegend(page1Items);
-
-    // Legend title
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(7.5);
-    pdf.setTextColor(148, 163, 184);
-    pdf.text("MATERIAL KEY", imgX, legendY - 4);
-
-    // ── Page 2: Underlayments + Metals ──
-    pdf.addPage();
-    const img2 = await snap("PDF_UNDERLAY");
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(16);
-    pdf.setTextColor(15, 23, 42);
-    pdf.text(active.name || projectName, imgX, 28);
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(10);
-    pdf.setTextColor(100, 116, 139);
-    pdf.text("Page 2 of 2  ·  Underlayments & Metals", imgX, 46);
-    if (logoDataUrl) pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
-    pdf.addImage(img2, "PNG", imgX, imgY, imgW, imgH);
-
-    const [ar, ag, ab] = r0 ? metalRGB(r0.gutterApronColor) : [198, 205, 211];
-    const [dr, dg, db] = r0 ? metalRGB(r0.dripEdgeColor)    : [198, 205, 211];
-    const [vr, vg, vb] = r0 ? metalRGB(r0.valleyMetalColor) : [198, 205, 211];
-    // Only include legend entries for materials that are actually used.
     const page2Items = [
       { r: 18,  g: 23,  b: 38,  label: "Ice & Water Shield (eaves + valleys)" },
       { r: 215, g: 230, b: 245, label: "Synthetic Underlayment (field)" },
@@ -1421,14 +1475,60 @@ export default function Page() {
       ...(hasValley ? [{ r: vr, g: vg, b: vb, label: `Valley Metal — ${r0?.valleyMetalColor ?? ""}` }] : []),
       ...((hasEave || hasRake) ? [{ r: 18, g: 18, b: 20, label: "Pro-Start Starter Strip" }] : []),
     ];
-    drawLegend(page2Items);
 
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(7.5);
-    pdf.setTextColor(148, 163, 184);
-    pdf.text("MATERIAL KEY", imgX, legendY - 4);
+    const totalPhotos = allPhotos.length;
+    const totalPages = totalPhotos * 2;
 
+    // One pair of pages per photo (shingles + underlayments)
+    for (let i = 0; i < totalPhotos; i++) {
+      const src = allPhotos[i];
+      const photoLabel = totalPhotos > 1 ? `  ·  Photo ${i + 1} of ${totalPhotos}` : "";
+
+      await showPhoto(src);
+
+      // ── Shingles page ──
+      if (i > 0) pdf.addPage();
+      const imgShingles = await snap("PDF_SHINGLES");
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(16);
+      pdf.setTextColor(15, 23, 42);
+      pdf.text(active.name || projectName, imgX, 28);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.setTextColor(100, 116, 139);
+      pdf.text(`Page ${i * 2 + 1} of ${totalPages}  ·  Finished Roof${photoLabel}`, imgX, 46);
+      if (logoDataUrl) pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
+      pdf.addImage(imgShingles, "PNG", imgX, imgY, imgW, imgH);
+      drawLegend(page1Items);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(148, 163, 184);
+      pdf.text("MATERIAL KEY", imgX, legendY - 4);
+
+      // ── Underlayments page ──
+      pdf.addPage();
+      const imgUnderlay = await snap("PDF_UNDERLAY");
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(16);
+      pdf.setTextColor(15, 23, 42);
+      pdf.text(active.name || projectName, imgX, 28);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.setTextColor(100, 116, 139);
+      pdf.text(`Page ${i * 2 + 2} of ${totalPages}  ·  Underlayments & Metals${photoLabel}`, imgX, 46);
+      if (logoDataUrl) pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
+      pdf.addImage(imgUnderlay, "PNG", imgX, imgY, imgW, imgH);
+      drawLegend(page2Items);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(148, 163, 184);
+      pdf.text("MATERIAL KEY", imgX, legendY - 4);
+    }
+
+    // Restore original photo
+    await showPhoto(originalSrc);
     setExportView("LIVE");
+
     pdf.save(`${projectName.replaceAll(" ", "_")}_RoofViz.pdf`);
   }
 
@@ -1850,7 +1950,7 @@ export default function Page() {
                 style={inputStyle}
                 placeholder="e.g. 123 Oak Street"
               />
-              <button style={primaryBtn} onClick={startProject}>
+              <button style={primaryBtn} onClick={photos.length > 0 ? () => openProject(photos[0].id) : startProject}>
                 {photos.length > 0 ? "Resume Project →" : "Start Project →"}
               </button>
             </div>
@@ -1868,11 +1968,7 @@ export default function Page() {
                   {active?.src && (
                     <button
                       className="rv-btn-small"
-                      onClick={() => setPhotos((prev) => prev.map((q) => {
-                        if (q.id !== activePhotoId) return q;
-                        const newSrcs = (q.photoSrcs ?? []).filter((s) => s !== q.src);
-                        return { ...q, photoSrcs: newSrcs, src: newSrcs[0] ?? "" };
-                      }))}
+                      onClick={removeCurrentPhoto}
                       style={{ ...smallBtn, fontSize: 11, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)", padding: "4px 9px" }}
                     >
                       Remove
@@ -1920,7 +2016,7 @@ export default function Page() {
                     {active!.photoSrcs.map((s, i) => (
                       <div
                         key={i}
-                        onClick={() => patchActive((p) => ({ ...p, src: s }))}
+                        onClick={() => switchToPhoto(s)}
                         style={{
                           width: 48, height: 34, borderRadius: 6, overflow: "hidden",
                           cursor: "pointer", flexShrink: 0,
@@ -2685,9 +2781,9 @@ export default function Page() {
                     r.valleyMetalColor === "Galvanized" ? (
                       /* Galvanized open valley: subtle crease visible through shingles */
                       <Group key={`vline-${r.id}-${l.id}`}>
-                        <Line points={l.points} stroke="rgba(0,0,0,0.32)"      strokeWidth={6}   lineCap="round" lineJoin="round" />
-                        <Line points={l.points} stroke="rgba(210,215,220,0.65)" strokeWidth={3}   lineCap="round" lineJoin="round" />
-                        <Line points={l.points} stroke="rgba(255,255,255,0.25)" strokeWidth={1.2} lineCap="round" lineJoin="round" />
+                        <Line points={l.points} stroke="rgba(0,0,0,0.12)"      strokeWidth={5}   lineCap="round" lineJoin="round" />
+                        <Line points={l.points} stroke="rgba(220,225,230,0.28)" strokeWidth={2.5} lineCap="round" lineJoin="round" />
+                        <Line points={l.points} stroke="rgba(255,255,255,0.12)" strokeWidth={1}   lineCap="round" lineJoin="round" />
                       </Group>
                     ) : (
                       /* W-Valley: colored metal channel sits ON TOP of shingles — shingles woven around it */
