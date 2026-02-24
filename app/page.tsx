@@ -279,8 +279,12 @@ function useHtmlImage(src?: string) {
     setImg(null);
     if (!src) return;
     const i = new window.Image();
-    i.crossOrigin = "anonymous";
+    // crossOrigin only for data: URLs — needed for canvas export.
+    // External URLs (Vercel Blob CDN) load without it; setting it can block
+    // the load if the CDN doesn't return the expected CORS header.
+    if (src.startsWith("data:")) i.crossOrigin = "anonymous";
     i.onload = () => setImg(i);
+    i.onerror = () => setImg(null);
     i.src = src;
   }, [src]);
 
@@ -828,8 +832,8 @@ export default function Page() {
     const el = containerRef.current;
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect();
-      setW(Math.max(420, Math.floor(r.width)));
-      setH(Math.max(420, Math.floor(r.height)));
+      setW(Math.max(1, Math.floor(r.width)));
+      setH(Math.max(1, Math.floor(r.height)));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -838,7 +842,7 @@ export default function Page() {
   const [photos, setPhotos] = useState<PhotoProject[]>([]);
   const [activePhotoId, setActivePhotoId] = useState<string>("");
   const [screen, setScreen] = useState<"MENU" | "PROJECT" | "CUSTOMER_VIEW">("MENU");
-  const [customerViewData, setCustomerViewData] = useState<{ name: string; roofs: Roof[]; shingleColor: ShingleColor; src?: string } | null>(null);
+  const [customerViewData, setCustomerViewData] = useState<{ name: string; roofs: Roof[]; shingleColor: ShingleColor; src?: string; canvasW: number; canvasH: number } | null>(null);
   const [customerStep, setCustomerStep] = useState<Step>("TEAROFF");
   const [customerShingleColor, setCustomerShingleColor] = useState<ShingleColor>("Barkwood");
   const [showShareModal, setShowShareModal] = useState(false);
@@ -848,6 +852,23 @@ export default function Page() {
 
   const active = useMemo(() => {
     if (screen === "CUSTOMER_VIEW" && customerViewData) {
+      // Use stored canvas dimensions to reconstruct the contractor's coordinate space.
+      // Fall back to the polygon bounding box if dimensions weren't stored (old links).
+      let cw = customerViewData.canvasW || 0;
+      let ch = customerViewData.canvasH || 0;
+      if (!cw || !ch) {
+        const pts = customerViewData.roofs.flatMap((r) => r.outline);
+        const xs = pts.filter((_, i) => i % 2 === 0);
+        const ys = pts.filter((_, i) => i % 2 === 1);
+        cw = xs.length ? Math.max(...xs) + 40 : 1100;
+        ch = ys.length ? Math.max(...ys) + 40 : 700;
+      }
+      // Scale the stage so the contractor's full canvas fits inside the customer's canvas
+      const fitScale = w > 0 && h > 0 && cw > 0 && ch > 0
+        ? Math.min(w / cw, h / ch) * 0.92
+        : 1;
+      const fitX = (w - cw * fitScale) / 2;
+      const fitY = (h - ch * fitScale) / 2;
       return {
         id: "customer-view",
         name: customerViewData.name,
@@ -859,13 +880,15 @@ export default function Page() {
         shingleColor: customerShingleColor,
         showGuidesDuringInstall: false,
         showEditHandles: false,
-        stageScale: 1,
-        stagePos: { x: 0, y: 0 },
+        stageScale: fitScale,
+        stagePos: { x: fitX, y: fitY },
         photoStates: {},
-      } as PhotoProject;
+        _customerCanvasW: cw,
+        _customerCanvasH: ch,
+      } as PhotoProject & { _customerCanvasW: number; _customerCanvasH: number };
     }
     return photos.find((p) => p.id === activePhotoId) || null;
-  }, [photos, activePhotoId, screen, customerViewData, customerStep, customerShingleColor]);
+  }, [photos, activePhotoId, screen, customerViewData, customerStep, customerShingleColor, w, h]);
   const photoImg = useHtmlImage(active?.src);
 
   const activeRoof = useMemo(() => {
@@ -927,12 +950,14 @@ export default function Page() {
           showEditHandles: false,
         }));
         const src: string = raw.p ?? "";
-        setCustomerViewData({ name, roofs, shingleColor, src });
+        const canvasW: number = raw.cw ?? 0;
+        const canvasH: number = raw.ch ?? 0;
+        setCustomerViewData({ name, roofs, shingleColor, src, canvasW, canvasH });
         setCustomerShingleColor(shingleColor);
         setCustomerStep("TEAROFF");
       } catch {
         // Decode failed — show blank customer view rather than exposing the editor
-        setCustomerViewData({ name: "Preview", roofs: [], shingleColor: "Barkwood", src: "" });
+        setCustomerViewData({ name: "Preview", roofs: [], shingleColor: "Barkwood", src: "", canvasW: 0, canvasH: 0 });
       }
       setScreen("CUSTOMER_VIEW");
       return;
@@ -1435,6 +1460,9 @@ export default function Page() {
     const shareData: Record<string, unknown> = {
       n: active.name,
       c: active.shingleColor,
+      // canvas dimensions so the customer view can reconstruct world-space coords
+      cw: w,
+      ch: h,
       r: active.roofs.map((r) => ({
         id: r.id,
         cl: r.closed ? 1 : 0,
@@ -2024,90 +2052,89 @@ export default function Page() {
         : { display: "grid", gridTemplateColumns: "420px 1fr", height: "100vh" }
     }>
 
+      {/* ── CUSTOMER BOTTOM PANEL ── rendered outside aside, as a flex-column footer */}
+      {screen === "CUSTOMER_VIEW" && customerViewData && (
+        <div style={{
+          order: 2,
+          flexShrink: 0,
+          background: "#fff",
+          borderTop: "1px solid rgba(15,23,42,0.10)",
+          padding: "12px 16px",
+          overflowY: "auto",
+        }}>
+          {/* Top row: logo + project name + step counter */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <Image src="/roofviz-logo.png" alt="RoofViz" width={90} height={26} priority />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{customerViewData.name}</div>
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#2563eb", flexShrink: 0 }}>
+              {customerStepIdx + 1} / {customerNavSteps.length}
+            </div>
+          </div>
+          {/* Progress bar */}
+          <div style={{ height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden", marginBottom: 10 }}>
+            <div style={{ height: "100%", width: `${((customerStepIdx + 1) / Math.max(customerNavSteps.length, 1)) * 100}%`, background: "linear-gradient(90deg, #2563eb, #60a5fa)", borderRadius: 99, transition: "width 0.35s ease" }} />
+          </div>
+          {/* Step name + nav buttons */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: atLeast(customerStep, "SHINGLES") ? 12 : 0 }}>
+            <button
+              style={{ ...ghostBtn, padding: "7px 14px", fontSize: 12, margin: 0, opacity: customerStepIdx > 0 ? 1 : 0.3 }}
+              disabled={customerStepIdx <= 0}
+              onClick={() => setCustomerStep(customerNavSteps[customerStepIdx - 1])}
+            >← Back</button>
+            <div style={{ flex: 1, textAlign: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", lineHeight: 1.2 }}>{STEP_TITLE[customerStep]}</div>
+              {STEP_HINT[customerStep] && (
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{STEP_HINT[customerStep]}</div>
+              )}
+            </div>
+            <button
+              style={{ ...primaryBtn, padding: "7px 14px", fontSize: 12, margin: 0, opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.3 }}
+              disabled={customerStepIdx >= customerNavSteps.length - 1}
+              onClick={() => setCustomerStep(customerNavSteps[customerStepIdx + 1])}
+            >Next →</button>
+          </div>
+          {/* Shingle color swatches — only shown once shingles step is reached */}
+          {atLeast(customerStep, "SHINGLES") && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 8, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                Shingle Color &nbsp;·&nbsp; <span style={{ color: "#0f172a" }}>{customerShingleColor}</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+                {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => {
+                  const [cr, cg, cb] = shingleRGB(c);
+                  return (
+                    <div
+                      key={c}
+                      onClick={() => setCustomerShingleColor(c)}
+                      title={c}
+                      style={{
+                        aspectRatio: "1",
+                        borderRadius: 7,
+                        background: `rgb(${cr},${cg},${cb})`,
+                        cursor: "pointer",
+                        border: c === customerShingleColor ? "3px solid #2563eb" : "2px solid rgba(15,23,42,0.10)",
+                        boxShadow: c === customerShingleColor ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
+                        transition: "border-color 0.15s",
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── LEFT PANEL ── */}
       <aside style={{
         background: "#f8fafc",
         borderRight: "1px solid rgba(15,23,42,0.08)",
-        display: "flex",
+        display: screen === "CUSTOMER_VIEW" ? "none" : "flex",
         flexDirection: "column",
         overflow: "hidden",
-        ...(screen === "CUSTOMER_VIEW" ? { order: 2, flex: "0 0 auto", maxHeight: "45dvh", overflowY: "auto" } : {}),
       }}>
-
-        {/* ── CUSTOMER VIEW PANEL ── */}
-        {screen === "CUSTOMER_VIEW" && customerViewData && (
-          <>
-            {/* Header */}
-            <div style={{ background: "#fff", borderBottom: "1px solid rgba(15,23,42,0.08)", padding: "16px 20px", flexShrink: 0 }}>
-              <Image src="/roofviz-logo.png" alt="RoofViz" width={148} height={43} priority />
-              <div style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", marginTop: 10, lineHeight: 1.2 }}>{customerViewData.name}</div>
-              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>Your Roof Installation Preview</div>
-              <div style={{ marginTop: 10, height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${((customerStepIdx + 1) / Math.max(customerNavSteps.length, 1)) * 100}%`, background: "linear-gradient(90deg, #2563eb, #60a5fa)", borderRadius: 99, transition: "width 0.35s ease" }} />
-              </div>
-            </div>
-            {/* Body */}
-            <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
-              {/* Step card */}
-              <div style={sectionCard}>
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#94a3b8", textTransform: "uppercase", marginBottom: 8 }}>
-                  Step {customerStepIdx + 1} of {customerNavSteps.length}
-                </div>
-                <div style={{ fontSize: 14, fontWeight: 800, color: "#0f172a", marginBottom: 6 }}>{STEP_TITLE[customerStep]}</div>
-                {STEP_HINT[customerStep] && (
-                  <p style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, margin: "0 0 14px" }}>{STEP_HINT[customerStep]}</p>
-                )}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  <button
-                    style={{ ...ghostBtn, opacity: customerStepIdx > 0 ? 1 : 0.3 }}
-                    disabled={customerStepIdx <= 0}
-                    onClick={() => setCustomerStep(customerNavSteps[customerStepIdx - 1])}
-                  >← Back</button>
-                  <button
-                    style={{ ...primaryBtn, margin: 0, opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.3 }}
-                    disabled={customerStepIdx >= customerNavSteps.length - 1}
-                    onClick={() => setCustomerStep(customerNavSteps[customerStepIdx + 1])}
-                  >Next →</button>
-                </div>
-              </div>
-              {/* Shingle color swatches — only active once shingles step is reached */}
-              {atLeast(customerStep, "SHINGLES") ? (
-                <div style={sectionCard}>
-                  <div style={sectionLabel}>Shingle Color</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 10 }}>
-                    {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => {
-                      const [cr, cg, cb] = shingleRGB(c);
-                      return (
-                        <div
-                          key={c}
-                          onClick={() => setCustomerShingleColor(c)}
-                          title={c}
-                          style={{
-                            aspectRatio: "1",
-                            borderRadius: 8,
-                            background: `rgb(${cr},${cg},${cb})`,
-                            cursor: "pointer",
-                            border: c === customerShingleColor ? "3px solid #2563eb" : "2px solid rgba(15,23,42,0.10)",
-                            boxShadow: c === customerShingleColor ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
-                            transition: "border-color 0.15s",
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#475569", marginTop: 8, fontWeight: 600 }}>{customerShingleColor}</div>
-                </div>
-              ) : (
-                <div style={{ ...sectionCard, textAlign: "center", color: "#94a3b8", fontSize: 12, padding: "14px 16px" }}>
-                  Shingle color selection unlocks when you reach the shingles step.
-                </div>
-              )}
-              <div style={{ textAlign: "center", padding: "4px 0 12px", fontSize: 10, color: "#cbd5e1", letterSpacing: "0.04em" }}>
-                POWERED BY ROOFVIZ
-              </div>
-            </div>
-          </>
-        )}
 
         {/* ── PROJECT EDITOR PANEL ── */}
         {screen !== "CUSTOMER_VIEW" && (<>
@@ -2833,7 +2860,7 @@ export default function Page() {
         backgroundSize: "28px 28px",
         position: "relative",
         overflow: "hidden",
-        ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "0 0 55dvh" } : {}),
+        ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minHeight: 0 } : {}),
       }}>
         <Stage
           ref={stageRef}
@@ -2883,7 +2910,11 @@ export default function Page() {
               </>
             )}
 
-            {photoImg && <KonvaImage image={photoImg} width={w} height={h} />}
+            {photoImg && <KonvaImage
+              image={photoImg}
+              width={screen === "CUSTOMER_VIEW" ? ((active as any)?._customerCanvasW || w) : w}
+              height={screen === "CUSTOMER_VIEW" ? ((active as any)?._customerCanvasH || h) : h}
+            />}
 
             {/* Draft visuals */}
             {active?.step === "TRACE" && draftLine && (
