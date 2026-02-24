@@ -838,7 +838,7 @@ export default function Page() {
   const [photos, setPhotos] = useState<PhotoProject[]>([]);
   const [activePhotoId, setActivePhotoId] = useState<string>("");
   const [screen, setScreen] = useState<"MENU" | "PROJECT" | "CUSTOMER_VIEW">("MENU");
-  const [customerViewData, setCustomerViewData] = useState<{ name: string; roofs: Roof[]; shingleColor: ShingleColor } | null>(null);
+  const [customerViewData, setCustomerViewData] = useState<{ name: string; roofs: Roof[]; shingleColor: ShingleColor; src?: string } | null>(null);
   const [customerStep, setCustomerStep] = useState<Step>("TEAROFF");
   const [customerShingleColor, setCustomerShingleColor] = useState<ShingleColor>("Barkwood");
   const [showShareModal, setShowShareModal] = useState(false);
@@ -851,7 +851,7 @@ export default function Page() {
       return {
         id: "customer-view",
         name: customerViewData.name,
-        src: "",
+        src: customerViewData.src ?? "",
         photoSrcs: [],
         step: customerStep,
         roofs: customerViewData.roofs,
@@ -926,12 +926,13 @@ export default function Page() {
           iceWaterW: 36, syntheticW: 72, proStartW: 7, ridgeVentW: 12,
           showEditHandles: false,
         }));
-        setCustomerViewData({ name, roofs, shingleColor });
+        const src: string = raw.p ?? "";
+        setCustomerViewData({ name, roofs, shingleColor, src });
         setCustomerShingleColor(shingleColor);
         setCustomerStep("TEAROFF");
       } catch {
         // Decode failed — show blank customer view rather than exposing the editor
-        setCustomerViewData({ name: "Preview", roofs: [], shingleColor: "Barkwood" });
+        setCustomerViewData({ name: "Preview", roofs: [], shingleColor: "Barkwood", src: "" });
       }
       setScreen("CUSTOMER_VIEW");
       return;
@@ -1427,11 +1428,11 @@ export default function Page() {
   }, [customerViewData]);
   const customerStepIdx = customerNavSteps.indexOf(customerStep);
 
-  // Generate a shareable read-only URL encoding the current project structure (no photos).
-  // Only encodes the minimum data needed for the customer preview to keep the URL short.
-  function generateShareUrl(): string {
+  // Generate a shareable read-only URL encoding the current project structure.
+  // photoUrl is the Vercel Blob URL of the compressed uploaded photo.
+  function generateShareUrl(photoUrl = ""): string {
     if (!active || screen === "CUSTOMER_VIEW") return "";
-    const shareData = {
+    const shareData: Record<string, unknown> = {
       n: active.name,
       c: active.shingleColor,
       r: active.roofs.map((r) => ({
@@ -1440,18 +1441,35 @@ export default function Page() {
         o: r.outline.map((n) => Math.round(n)),
         h: r.holes.map((h) => h.map((n) => Math.round(n))),
         l: r.lines.map((l) => ({ k: l.kind, p: l.points.map((n) => Math.round(n)) })),
-        // include just the display properties customers can see
         sc: r.shingleScale,
         vc: r.valleyMetalColor,
         vw: r.valleyMetalW,
       })),
     };
+    if (photoUrl) shareData.p = photoUrl;
     const json = JSON.stringify(shareData);
     const encoded = btoa(unescape(encodeURIComponent(json)))
       .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
     const base = process.env.NEXT_PUBLIC_APP_URL ||
       (typeof window !== "undefined" ? window.location.origin + window.location.pathname : "");
     return `${base}?share=${encoded}`;
+  }
+
+  // Compress the current photo to a JPEG at reduced resolution for blob storage.
+  async function compressPhoto(src: string, maxWidth = 1200, quality = 0.55): Promise<string> {
+    return new Promise((resolve) => {
+      const img = new window.Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = () => resolve(src); // fallback: use original
+      img.src = src;
+    });
   }
 
   // Two-page PDF with material legends (multi-photo grid)
@@ -2000,7 +2018,11 @@ export default function Page() {
 
   // ── PROJECT SCREEN ──────────────────────────────────────────────────────────
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "420px 1fr", height: "100vh" }}>
+    <div style={
+      screen === "CUSTOMER_VIEW"
+        ? { display: "flex", flexDirection: "column", height: "100dvh", overflow: "hidden" }
+        : { display: "grid", gridTemplateColumns: "420px 1fr", height: "100vh" }
+    }>
 
       {/* ── LEFT PANEL ── */}
       <aside style={{
@@ -2009,6 +2031,7 @@ export default function Page() {
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        ...(screen === "CUSTOMER_VIEW" ? { order: 2, flex: "0 0 auto", maxHeight: "45dvh", overflowY: "auto" } : {}),
       }}>
 
         {/* ── CUSTOMER VIEW PANEL ── */}
@@ -2047,32 +2070,38 @@ export default function Page() {
                   >Next →</button>
                 </div>
               </div>
-              {/* Shingle color swatches */}
-              <div style={sectionCard}>
-                <div style={sectionLabel}>Shingle Color</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 10 }}>
-                  {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => {
-                    const [cr, cg, cb] = shingleRGB(c);
-                    return (
-                      <div
-                        key={c}
-                        onClick={() => setCustomerShingleColor(c)}
-                        title={c}
-                        style={{
-                          aspectRatio: "1",
-                          borderRadius: 8,
-                          background: `rgb(${cr},${cg},${cb})`,
-                          cursor: "pointer",
-                          border: c === customerShingleColor ? "3px solid #2563eb" : "2px solid rgba(15,23,42,0.10)",
-                          boxShadow: c === customerShingleColor ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
-                          transition: "border-color 0.15s",
-                        }}
-                      />
-                    );
-                  })}
+              {/* Shingle color swatches — only active once shingles step is reached */}
+              {atLeast(customerStep, "SHINGLES") ? (
+                <div style={sectionCard}>
+                  <div style={sectionLabel}>Shingle Color</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 10 }}>
+                    {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => {
+                      const [cr, cg, cb] = shingleRGB(c);
+                      return (
+                        <div
+                          key={c}
+                          onClick={() => setCustomerShingleColor(c)}
+                          title={c}
+                          style={{
+                            aspectRatio: "1",
+                            borderRadius: 8,
+                            background: `rgb(${cr},${cg},${cb})`,
+                            cursor: "pointer",
+                            border: c === customerShingleColor ? "3px solid #2563eb" : "2px solid rgba(15,23,42,0.10)",
+                            boxShadow: c === customerShingleColor ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
+                            transition: "border-color 0.15s",
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#475569", marginTop: 8, fontWeight: 600 }}>{customerShingleColor}</div>
                 </div>
-                <div style={{ fontSize: 12, color: "#475569", marginTop: 8, fontWeight: 600 }}>{customerShingleColor}</div>
-              </div>
+              ) : (
+                <div style={{ ...sectionCard, textAlign: "center", color: "#94a3b8", fontSize: 12, padding: "14px 16px" }}>
+                  Shingle color selection unlocks when you reach the shingles step.
+                </div>
+              )}
               <div style={{ textAlign: "center", padding: "4px 0 12px", fontSize: 10, color: "#cbd5e1", letterSpacing: "0.04em" }}>
                 POWERED BY ROOFVIZ
               </div>
@@ -2385,10 +2414,27 @@ export default function Page() {
                                   onClick={async () => {
                                     setShareEmailSending(true);
                                     try {
+                                      // 1. Compress + upload photo to get a short blob URL
+                                      let photoUrl = "";
+                                      if (active?.src) {
+                                        try {
+                                          const compressed = await compressPhoto(active.src, 1200, 0.55);
+                                          const uploadRes = await fetch("/api/store-photo", {
+                                            method: "POST",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ imageData: compressed }),
+                                          });
+                                          const uploadData = await uploadRes.json() as { url?: string };
+                                          photoUrl = uploadData.url ?? "";
+                                        } catch { /* no photo — send without */ }
+                                      }
+                                      // 2. Build share URL with photo blob URL
+                                      const shareUrl = generateShareUrl(photoUrl);
+                                      // 3. Send email
                                       const res = await fetch("/api/send-email", {
                                         method: "POST",
                                         headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ to: shareEmail, shareUrl: url, projectName }),
+                                        body: JSON.stringify({ to: shareEmail, shareUrl, projectName }),
                                       });
                                       const text = await res.text();
                                       let body: { ok?: boolean; error?: string } = {};
@@ -2787,6 +2833,7 @@ export default function Page() {
         backgroundSize: "28px 28px",
         position: "relative",
         overflow: "hidden",
+        ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "0 0 55dvh" } : {}),
       }}>
         <Stage
           ref={stageRef}
