@@ -852,23 +852,35 @@ export default function Page() {
 
   const active = useMemo(() => {
     if (screen === "CUSTOMER_VIEW" && customerViewData) {
-      // Use stored canvas dimensions to reconstruct the contractor's coordinate space.
-      // Fall back to the polygon bounding box if dimensions weren't stored (old links).
-      let cw = customerViewData.canvasW || 0;
-      let ch = customerViewData.canvasH || 0;
-      if (!cw || !ch) {
-        const pts = customerViewData.roofs.flatMap((r) => r.outline);
-        const xs = pts.filter((_, i) => i % 2 === 0);
-        const ys = pts.filter((_, i) => i % 2 === 1);
-        cw = xs.length ? Math.max(...xs) + 40 : 1100;
-        ch = ys.length ? Math.max(...ys) + 40 : 700;
+      const cw = customerViewData.canvasW || 0;
+      const ch = customerViewData.canvasH || 0;
+
+      // Fit the stage to the roof polygon bounding box so the roof fills the view.
+      // This ensures correct alignment regardless of device size.
+      const allPts = customerViewData.roofs.flatMap((r) => r.closed ? r.outline : []);
+      const ptXs = allPts.filter((_, i) => i % 2 === 0);
+      const ptYs = allPts.filter((_, i) => i % 2 === 1);
+      let fitScale = 1, fitX = 0, fitY = 0;
+
+      if (ptXs.length >= 2 && w > 0 && h > 0) {
+        const minX = Math.min(...ptXs), maxX = Math.max(...ptXs);
+        const minY = Math.min(...ptYs), maxY = Math.max(...ptYs);
+        const bboxW = maxX - minX || 1;
+        const bboxH = maxY - minY || 1;
+        const pad = 0.14; // 14% padding around the polygon
+        fitScale = Math.min(
+          (w * (1 - 2 * pad)) / bboxW,
+          (h * (1 - 2 * pad)) / bboxH,
+        );
+        // Center the bounding box in the canvas
+        fitX = w / 2 - ((minX + maxX) / 2) * fitScale;
+        fitY = h / 2 - ((minY + maxY) / 2) * fitScale;
+      } else if (cw > 0 && ch > 0 && w > 0 && h > 0) {
+        fitScale = Math.min(w / cw, h / ch) * 0.90;
+        fitX = (w - cw * fitScale) / 2;
+        fitY = (h - ch * fitScale) / 2;
       }
-      // Scale the stage so the contractor's full canvas fits inside the customer's canvas
-      const fitScale = w > 0 && h > 0 && cw > 0 && ch > 0
-        ? Math.min(w / cw, h / ch) * 0.92
-        : 1;
-      const fitX = (w - cw * fitScale) / 2;
-      const fitY = (h - ch * fitScale) / 2;
+
       return {
         id: "customer-view",
         name: customerViewData.name,
@@ -2052,56 +2064,52 @@ export default function Page() {
         : { display: "grid", gridTemplateColumns: "420px 1fr", height: "100vh" }
     }>
 
-      {/* ── CUSTOMER BOTTOM PANEL ── rendered outside aside, as a flex-column footer */}
+      {/* ── CUSTOMER BOTTOM PANEL ── */}
       {screen === "CUSTOMER_VIEW" && customerViewData && (
         <div style={{
           order: 2,
           flexShrink: 0,
-          background: "#fff",
-          borderTop: "1px solid rgba(15,23,42,0.10)",
-          padding: "12px 16px",
-          overflowY: "auto",
+          background: "#ffffff",
+          borderTop: "2px solid #e2e8f0",
+          padding: "10px 14px 12px",
         }}>
-          {/* Top row: logo + project name + step counter */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-            <Image src="/roofviz-logo.png" alt="RoofViz" width={90} height={26} priority />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{customerViewData.name}</div>
+          {/* Row 1: logo left, project name center, step count right */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <Image src="/roofviz-logo.png" alt="RoofViz" width={80} height={23} priority />
+            <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: "#334155", textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {customerViewData.name}
             </div>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#2563eb", flexShrink: 0 }}>
-              {customerStepIdx + 1} / {customerNavSteps.length}
+              {customerStepIdx + 1}/{customerNavSteps.length}
             </div>
           </div>
           {/* Progress bar */}
-          <div style={{ height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden", marginBottom: 10 }}>
-            <div style={{ height: "100%", width: `${((customerStepIdx + 1) / Math.max(customerNavSteps.length, 1)) * 100}%`, background: "linear-gradient(90deg, #2563eb, #60a5fa)", borderRadius: 99, transition: "width 0.35s ease" }} />
+          <div style={{ height: 4, background: "#e2e8f0", borderRadius: 99, overflow: "hidden", marginBottom: 8 }}>
+            <div style={{ height: "100%", width: `${((customerStepIdx + 1) / Math.max(customerNavSteps.length, 1)) * 100}%`, background: "linear-gradient(90deg,#2563eb,#60a5fa)", borderRadius: 99, transition: "width 0.35s ease" }} />
           </div>
-          {/* Step name + nav buttons */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: atLeast(customerStep, "SHINGLES") ? 12 : 0 }}>
+          {/* Row 2: Back | Step title | Next */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <button
-              style={{ ...ghostBtn, padding: "7px 14px", fontSize: 12, margin: 0, opacity: customerStepIdx > 0 ? 1 : 0.3 }}
-              disabled={customerStepIdx <= 0}
               onClick={() => setCustomerStep(customerNavSteps[customerStepIdx - 1])}
+              disabled={customerStepIdx <= 0}
+              style={{ flexShrink: 0, padding: "8px 12px", borderRadius: 8, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 13, fontWeight: 600, cursor: customerStepIdx > 0 ? "pointer" : "default", opacity: customerStepIdx > 0 ? 1 : 0.3, color: "#475569" }}
             >← Back</button>
-            <div style={{ flex: 1, textAlign: "center" }}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", lineHeight: 1.2 }}>{STEP_TITLE[customerStep]}</div>
-              {STEP_HINT[customerStep] && (
-                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{STEP_HINT[customerStep]}</div>
-              )}
+            <div style={{ flex: 1, textAlign: "center", fontSize: 13, fontWeight: 800, color: "#0f172a", lineHeight: 1.25, padding: "0 4px" }}>
+              {STEP_TITLE[customerStep].replace(/^Step \d+ — /, "").replace(/^Finish — /, "")}
             </div>
             <button
-              style={{ ...primaryBtn, padding: "7px 14px", fontSize: 12, margin: 0, opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.3 }}
-              disabled={customerStepIdx >= customerNavSteps.length - 1}
               onClick={() => setCustomerStep(customerNavSteps[customerStepIdx + 1])}
+              disabled={customerStepIdx >= customerNavSteps.length - 1}
+              style={{ flexShrink: 0, padding: "8px 12px", borderRadius: 8, border: "none", background: customerStepIdx < customerNavSteps.length - 1 ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : "#e2e8f0", fontSize: 13, fontWeight: 700, cursor: customerStepIdx < customerNavSteps.length - 1 ? "pointer" : "default", opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.4, color: customerStepIdx < customerNavSteps.length - 1 ? "#fff" : "#94a3b8" }}
             >Next →</button>
           </div>
-          {/* Shingle color swatches — only shown once shingles step is reached */}
+          {/* Row 3: shingle colors — only at shingles step */}
           {atLeast(customerStep, "SHINGLES") && (
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 8, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-                Shingle Color &nbsp;·&nbsp; <span style={{ color: "#0f172a" }}>{customerShingleColor}</span>
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #f1f5f9" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 7 }}>
+                Shingle Color — <span style={{ color: "#0f172a" }}>{customerShingleColor}</span>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+              <div style={{ display: "flex", gap: 7 }}>
                 {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => {
                   const [cr, cg, cb] = shingleRGB(c);
                   return (
@@ -2110,11 +2118,12 @@ export default function Page() {
                       onClick={() => setCustomerShingleColor(c)}
                       title={c}
                       style={{
+                        flex: 1,
                         aspectRatio: "1",
-                        borderRadius: 7,
+                        borderRadius: 8,
                         background: `rgb(${cr},${cg},${cb})`,
                         cursor: "pointer",
-                        border: c === customerShingleColor ? "3px solid #2563eb" : "2px solid rgba(15,23,42,0.10)",
+                        border: c === customerShingleColor ? "3px solid #2563eb" : "2px solid rgba(15,23,42,0.08)",
                         boxShadow: c === customerShingleColor ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
                         transition: "border-color 0.15s",
                       }}
@@ -2855,8 +2864,8 @@ export default function Page() {
 
       {/* ── CANVAS ── */}
       <main ref={containerRef} style={{
-        background: "#0c1524",
-        backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)",
+        background: screen === "CUSTOMER_VIEW" ? "#e8edf2" : "#0c1524",
+        backgroundImage: screen === "CUSTOMER_VIEW" ? "none" : "radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)",
         backgroundSize: "28px 28px",
         position: "relative",
         overflow: "hidden",
@@ -2881,9 +2890,9 @@ export default function Page() {
           style={{ touchAction: "none" }}
         >
           <Layer>
-            {/* Customer view: light background so roof overlays are visible without a photo */}
+            {/* Customer view: light background covers entire world space */}
             {screen === "CUSTOMER_VIEW" && (
-              <Rect x={0} y={0} width={w} height={h} fill="#dde4ea" />
+              <Rect x={-50000} y={-50000} width={200000} height={200000} fill="#e8edf2" />
             )}
 
             {!photoImg && liveStep !== "START" && screen !== "CUSTOMER_VIEW" && (
