@@ -2390,9 +2390,11 @@ export default function Page() {
                                         headers: { "Content-Type": "application/json" },
                                         body: JSON.stringify({ to: shareEmail, shareUrl: url, projectName }),
                                       });
-                                      const json = await res.json();
-                                      if (!res.ok || json.error) {
-                                        alert(`Failed to send: ${json.error || res.status}`);
+                                      const text = await res.text();
+                                      let body: { ok?: boolean; error?: string } = {};
+                                      try { body = JSON.parse(text); } catch { /* non-JSON response */ }
+                                      if (!res.ok || body.error) {
+                                        alert(`Failed to send (${res.status}): ${body.error || text.slice(0, 200)}`);
                                       } else {
                                         setShareEmailSent(true);
                                       }
