@@ -93,7 +93,8 @@ type Tool =
   | "DRAW_RAKE"
   | "DRAW_VALLEY"
   | "DRAW_RIDGE"
-  | "DRAW_HIP";
+  | "DRAW_HIP"
+  | "BRUSH_ICE_WATER";
 
 type Polyline = {
   id: string;
@@ -142,6 +143,11 @@ type Roof = {
   shingleScale: number;
   shingleRotation: number; // degrees, -45..45; 0 = horizontal
   proStartOnRakes: boolean;
+
+  iceWaterOnEaves: boolean;     // default true
+  iceWaterOnValleys: boolean;   // default true
+  iceWaterBrush: { id: string; points: number[]; size: number }[];
+  iceWaterBrushSize: number;    // default 30
 };
 
 type PhotoProject = {
@@ -338,6 +344,11 @@ function defaultRoof(name: string): Roof {
     shingleScale: 0.20,
     shingleRotation: 0,
     proStartOnRakes: true,
+
+    iceWaterOnEaves: true,
+    iceWaterOnValleys: true,
+    iceWaterBrush: [],
+    iceWaterBrushSize: 30,
   };
 }
 
@@ -954,6 +965,8 @@ export default function Page() {
   const [tool, setTool] = useState<Tool>("NONE");
   const [draftLine, setDraftLine] = useState<Polyline | null>(null);
   const [draftHole, setDraftHole] = useState<number[] | null>(null);
+  const [brushStroke, setBrushStroke] = useState<number[] | null>(null);
+  const [brushPainting, setBrushPainting] = useState(false);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
@@ -1083,7 +1096,10 @@ export default function Page() {
             ridgeVentW: r.rvw ?? 12,
             capW: r.cpw ?? 8,
             proStartOnRakes: r.por === 1,
-            showEditHandles: false,
+            iceWaterOnEaves: r.iwe_on !== false,
+            iceWaterOnValleys: r.iwv_on !== false,
+            iceWaterBrush: [],
+            iceWaterBrushSize: r.iwbs ?? 30,
           }));
         }
 
@@ -1999,6 +2015,40 @@ export default function Page() {
       }
       return;
     }
+
+    // Brush ice & water painting — start a new stroke
+    if (active.step === "TRACE" && tool === "BRUSH_ICE_WATER" && activeRoof.closed) {
+      setBrushPainting(true);
+      setBrushStroke([pos.x, pos.y]);
+      return;
+    }
+  }
+
+  function onStageMove(e: any) {
+    if (!brushPainting || tool !== "BRUSH_ICE_WATER") return;
+    const stage = e.target.getStage ? e.target.getStage() : e.target;
+    const rawPos = stage.getPointerPosition();
+    if (!rawPos) return;
+    const scale = stage.scaleX();
+    const x = (rawPos.x - stage.x()) / scale;
+    const y = (rawPos.y - stage.y()) / scale;
+    setBrushStroke((prev) => {
+      if (!prev || prev.length < 2) return [x, y];
+      const lx = prev[prev.length - 2], ly = prev[prev.length - 1];
+      if ((x - lx) ** 2 + (y - ly) ** 2 < 25) return prev; // skip if <5px movement
+      return [...prev, x, y];
+    });
+  }
+
+  function onStageUp() {
+    if (!brushPainting) return;
+    if (activeRoof && brushStroke && brushStroke.length >= 4) {
+      const size = activeRoof.iceWaterBrushSize ?? 30;
+      const newStroke = { id: uid(), points: brushStroke, size };
+      patchActiveRoof((r) => ({ ...r, iceWaterBrush: [...(r.iceWaterBrush ?? []), newStroke] }));
+    }
+    setBrushPainting(false);
+    setBrushStroke(null);
   }
 
   function updateOutlinePoint(i: number, x: number, y: number) {
@@ -3860,6 +3910,60 @@ export default function Page() {
                           )}
 
 
+                          {/* ── Brush Ice & Water ── */}
+                          <div style={{ paddingTop: 8, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>
+                              Paint Tools
+                            </div>
+                            <button
+                              style={{
+                                ...ghostBtn,
+                                width: "100%",
+                                background: tool === "BRUSH_ICE_WATER" ? "rgba(18,23,38,0.10)" : "#ffffff",
+                                border: `1.5px solid ${tool === "BRUSH_ICE_WATER" ? "rgba(18,23,38,0.45)" : "rgba(15,23,42,0.12)"}`,
+                                color: tool === "BRUSH_ICE_WATER" ? "#0f172a" : "#475569",
+                                fontWeight: tool === "BRUSH_ICE_WATER" ? 700 : 600,
+                                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                              }}
+                              onClick={() => {
+                                setTool(tool === "BRUSH_ICE_WATER" ? "NONE" : "BRUSH_ICE_WATER");
+                                setDraftLine(null);
+                                setDraftHole(null);
+                              }}
+                            >
+                              🖌 {tool === "BRUSH_ICE_WATER" ? "Painting — drag on canvas" : "Brush Ice & Water"}
+                            </button>
+                            {tool === "BRUSH_ICE_WATER" && (
+                              <div style={{ marginTop: 6, background: "rgba(18,23,38,0.06)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "#334155" }}>
+                                Drag on the roof to paint ice & water. Appears at Ice & Water step and beyond.
+                                <div style={{ marginTop: 6 }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                                    <span>Brush size</span>
+                                    <span style={{ fontWeight: 700 }}>{activeRoof.iceWaterBrushSize ?? 30}px</span>
+                                  </div>
+                                  <input
+                                    type="range" min={5} max={100} step={1}
+                                    value={activeRoof.iceWaterBrushSize ?? 30}
+                                    onChange={(e) => patchActiveRoof((r) => ({ ...r, iceWaterBrushSize: Number(e.target.value) }))}
+                                    style={{ width: "100%", accentColor: "#0f172a" }}
+                                  />
+                                </div>
+                                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                                  <button
+                                    style={{ ...smallBtn, flex: 1, fontSize: 11 }}
+                                    onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: (r.iceWaterBrush ?? []).slice(0, -1) }))}
+                                    disabled={!(activeRoof.iceWaterBrush ?? []).length}
+                                  >↩ Undo</button>
+                                  <button
+                                    style={{ ...smallBtn, flex: 1, fontSize: 11, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
+                                    onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: [] }))}
+                                    disabled={!(activeRoof.iceWaterBrush ?? []).length}
+                                  >Clear all</button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
                           <button
                             style={{ ...smallBtn, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)", fontSize: 11 }}
                             onClick={resetSelectedRoof}
@@ -3879,8 +3983,73 @@ export default function Page() {
           {/* ── SETTINGS TAB ── */}
           {uiTab === "settings" && active && (
             <div style={{ padding: "4px 0 16px" }}>
+
+              {/* Roof selector */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={fieldLabel}>Editing roof</label>
+                <select
+                  value={active.activeRoofId}
+                  onChange={(e) => patchActive((p) => ({ ...p, activeRoofId: e.target.value }))}
+                  style={selectStyle}
+                >
+                  {active.roofs.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+
               {activeRoof && (
                 <div style={{ display: "grid", gap: 16 }}>
+
+                  {/* Ice & Water Placement */}
+                  <div>
+                    <div style={fieldLabel}>Ice & Water Placement</div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {([
+                        ["On Eaves", "iceWaterOnEaves"],
+                        ["On Valleys", "iceWaterOnValleys"],
+                      ] as [string, "iceWaterOnEaves" | "iceWaterOnValleys"][]).map(([label, key]) => (
+                        <label key={key} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={(activeRoof as any)[key] !== false}
+                            onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: e.target.checked }))}
+                            style={{ accentColor: "#2563eb", width: 14, height: 14 }}
+                          />
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Ice & Water Brush */}
+                  <div>
+                    <div style={fieldLabel}>Ice & Water Brush</div>
+                    <label style={{ display: "block", marginBottom: 10 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                        <span>Brush size</span>
+                        <span style={{ fontWeight: 700, color: "#334155" }}>{activeRoof.iceWaterBrushSize ?? 30}px</span>
+                      </div>
+                      <input
+                        type="range" min={5} max={100} step={1}
+                        value={activeRoof.iceWaterBrushSize ?? 30}
+                        onChange={(e) => patchActiveRoof((r) => ({ ...r, iceWaterBrushSize: Number(e.target.value) }))}
+                        style={{ width: "100%", accentColor: "#2563eb" }}
+                      />
+                    </label>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        style={{ ...smallBtn, flex: 1 }}
+                        onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: (r.iceWaterBrush ?? []).slice(0, -1) }))}
+                        disabled={!(activeRoof.iceWaterBrush ?? []).length}
+                      >↩ Undo stroke</button>
+                      <button
+                        style={{ ...smallBtn, flex: 1, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
+                        onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: [] }))}
+                        disabled={!(activeRoof.iceWaterBrush ?? []).length}
+                      >Clear all</button>
+                    </div>
+                  </div>
 
                   <div>
                     <label style={fieldLabel}>Shingle Color</label>
@@ -4048,9 +4217,13 @@ export default function Page() {
           width={w}
           height={h}
           onMouseDown={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
+          onMouseMove={screen !== "CUSTOMER_VIEW" && tool === "BRUSH_ICE_WATER" ? onStageMove : undefined}
+          onMouseUp={screen !== "CUSTOMER_VIEW" && tool === "BRUSH_ICE_WATER" ? onStageUp : undefined}
           onTouchStart={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
+          onTouchMove={screen !== "CUSTOMER_VIEW" && tool === "BRUSH_ICE_WATER" ? onStageMove : undefined}
+          onTouchEnd={screen !== "CUSTOMER_VIEW" && tool === "BRUSH_ICE_WATER" ? onStageUp : undefined}
           onWheel={screen !== "CUSTOMER_VIEW" ? onWheel : undefined}
-          draggable={!!active && screen !== "CUSTOMER_VIEW"}
+          draggable={!!active && screen !== "CUSTOMER_VIEW" && tool !== "BRUSH_ICE_WATER"}
           scaleX={active?.stageScale ?? 1}
           scaleY={active?.stageScale ?? 1}
           x={active?.stagePos?.x ?? 0}
@@ -4362,7 +4535,7 @@ export default function Page() {
 {/* Ice & water — always visible once reached */}
 {atLeast(currentStep, "ICE_WATER") && (
   <>
-    {eaves.map((l) => (
+    {(r.iceWaterOnEaves !== false) && eaves.map((l) => (
       <Line
         key={`iwe-${r.id}-${l.id}`}
         points={l.points}
@@ -4373,7 +4546,7 @@ export default function Page() {
         opacity={0.92}
       />
     ))}
-    {valleys.map((l) => (
+    {(r.iceWaterOnValleys !== false) && valleys.map((l) => (
       <Line
         key={`iwv-${r.id}-${l.id}`}
         points={l.points}
@@ -4384,7 +4557,31 @@ export default function Page() {
         opacity={0.92}
       />
     ))}
+    {(r.iceWaterBrush ?? []).map((stroke) => (
+      <Line
+        key={`iwb-${r.id}-${stroke.id}`}
+        points={stroke.points}
+        stroke="rgba(18,23,38,0.92)"
+        strokeWidth={stroke.size}
+        lineCap="round"
+        lineJoin="round"
+        opacity={0.92}
+        listening={false}
+      />
+    ))}
   </>
+)}
+{/* Live brush stroke preview while painting */}
+{tool === "BRUSH_ICE_WATER" && brushPainting && brushStroke && brushStroke.length >= 4 && r.id === active?.activeRoofId && (
+  <Line
+    points={brushStroke}
+    stroke="rgba(18,23,38,0.85)"
+    strokeWidth={activeRoof?.iceWaterBrushSize ?? 30}
+    lineCap="round"
+    lineJoin="round"
+    opacity={0.75}
+    listening={false}
+  />
 )}
 
                   {/* GUTTER APRON (eaves) */}
