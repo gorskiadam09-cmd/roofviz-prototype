@@ -2919,7 +2919,11 @@ export default function Page() {
                   border: presentationMode ? "none" : "1.5px solid rgba(15,23,42,0.12)",
                   fontWeight: 700,
                 }}
-                onClick={() => setPresentationMode((v) => !v)}
+                onClick={() => {
+                  const next = !presentationMode;
+                  setPresentationMode(next);
+                  if (next && active) patchActive((p) => ({ ...p, step: "TEAROFF" }));
+                }}
               >
                 {presentationMode ? "✦ Presenting" : "✦ Present"}
               </button>
