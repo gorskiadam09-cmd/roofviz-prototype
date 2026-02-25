@@ -2,6 +2,9 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { cleanupGeometry, strengthToOptions } from "@/app/lib/cleanupGeometry";
+import { detectEdges, autoDetectMode, type LabeledSegment } from "@/app/lib/edgeDetection";
+import { suggestPlanes, type PlaneSuggestion } from "@/app/lib/planeSuggestion";
 import {
   Circle,
   Group,
@@ -842,22 +845,30 @@ export default function Page() {
   const [photos, setPhotos] = useState<PhotoProject[]>([]);
   const [activePhotoId, setActivePhotoId] = useState<string>("");
   const [screen, setScreen] = useState<"MENU" | "PROJECT" | "CUSTOMER_VIEW">("MENU");
-  const [customerViewData, setCustomerViewData] = useState<{ name: string; roofs: Roof[]; shingleColor: ShingleColor; src?: string; canvasW: number; canvasH: number } | null>(null);
+  const [customerViewData, setCustomerViewData] = useState<{
+    name: string;
+    shingleColor: ShingleColor;
+    photos: Array<{ src: string; roofs: Roof[]; canvasW: number; canvasH: number }>;
+  } | null>(null);
+  const [customerPhotoIdx, setCustomerPhotoIdx] = useState(0);
   const [customerStep, setCustomerStep] = useState<Step>("TEAROFF");
   const [customerShingleColor, setCustomerShingleColor] = useState<ShingleColor>("Barkwood");
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
   const [shareEmailSending, setShareEmailSending] = useState(false);
   const [shareEmailSent, setShareEmailSent] = useState(false);
+  const [shareStatus, setShareStatus] = useState<"" | "compressing" | "uploading" | "sending" | "copied">("");
+  const [shareErrorMsg, setShareErrorMsg] = useState("");
 
   const active = useMemo(() => {
     if (screen === "CUSTOMER_VIEW" && customerViewData) {
-      const cw = customerViewData.canvasW || 0;
-      const ch = customerViewData.canvasH || 0;
+      const photoData = customerViewData.photos[customerPhotoIdx] ?? customerViewData.photos[0];
+      if (!photoData) return null;
+      const cw = photoData.canvasW || 0;
+      const ch = photoData.canvasH || 0;
 
       // Fit the stage to the roof polygon bounding box so the roof fills the view.
-      // This ensures correct alignment regardless of device size.
-      const allPts = customerViewData.roofs.flatMap((r) => r.closed ? r.outline : []);
+      const allPts = photoData.roofs.flatMap((r) => r.closed ? r.outline : []);
       const ptXs = allPts.filter((_, i) => i % 2 === 0);
       const ptYs = allPts.filter((_, i) => i % 2 === 1);
       let fitScale = 1, fitX = 0, fitY = 0;
@@ -867,12 +878,11 @@ export default function Page() {
         const minY = Math.min(...ptYs), maxY = Math.max(...ptYs);
         const bboxW = maxX - minX || 1;
         const bboxH = maxY - minY || 1;
-        const pad = 0.14; // 14% padding around the polygon
+        const pad = 0.14;
         fitScale = Math.min(
           (w * (1 - 2 * pad)) / bboxW,
           (h * (1 - 2 * pad)) / bboxH,
         );
-        // Center the bounding box in the canvas
         fitX = w / 2 - ((minX + maxX) / 2) * fitScale;
         fitY = h / 2 - ((minY + maxY) / 2) * fitScale;
       } else if (cw > 0 && ch > 0 && w > 0 && h > 0) {
@@ -884,11 +894,11 @@ export default function Page() {
       return {
         id: "customer-view",
         name: customerViewData.name,
-        src: customerViewData.src ?? "",
+        src: photoData.src,
         photoSrcs: [],
         step: customerStep,
-        roofs: customerViewData.roofs,
-        activeRoofId: customerViewData.roofs[0]?.id ?? "",
+        roofs: photoData.roofs,
+        activeRoofId: photoData.roofs[0]?.id ?? "",
         shingleColor: customerShingleColor,
         showGuidesDuringInstall: false,
         showEditHandles: false,
@@ -900,7 +910,7 @@ export default function Page() {
       } as PhotoProject & { _customerCanvasW: number; _customerCanvasH: number };
     }
     return photos.find((p) => p.id === activePhotoId) || null;
-  }, [photos, activePhotoId, screen, customerViewData, customerStep, customerShingleColor, w, h]);
+  }, [photos, activePhotoId, screen, customerViewData, customerPhotoIdx, customerStep, customerShingleColor, w, h]);
   const photoImg = useHtmlImage(active?.src);
 
   const activeRoof = useMemo(() => {
@@ -913,6 +923,61 @@ export default function Page() {
   const [draftHole, setDraftHole] = useState<number[] | null>(null);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // ── Cleanup state ─────────────────────────────────────────────────────────
+  const [cleanupOpen, setCleanupOpen]           = useState(false);
+  const [cleanupStrength, setCleanupStrength]   = useState(0.5);       // 0–1
+  const [cleanupSnapAngles, setCleanupSnapAngles] = useState(false);
+  const [cleanupLockedIds, setCleanupLockedIds] = useState<Set<string>>(new Set());
+  // Snapshot of the roof BEFORE the last applied cleanup — enables one-step undo
+  const [cleanupUndoRoof, setCleanupUndoRoof]   = useState<Roof | null>(null);
+
+  // ── Edge Detection + Plane Suggestion state ────────────────────────────────
+  const [edgePanel, setEdgePanel]               = useState(false);
+  const [edgeDetecting, setEdgeDetecting]       = useState(false);
+  const [detectedSegs, setDetectedSegs]         = useState<LabeledSegment[]>([]);
+  const [erasedSegIds, setErasedSegIds]         = useState<Set<string>>(new Set());
+  // Spatial erase mask: midpoints of erased segments — survives re-detection
+  const [edgeErasedMask, setEdgeErasedMask]     = useState<Array<{x: number; y: number}>>([]);
+  const [userAddedSegs, setUserAddedSegs]       = useState<LabeledSegment[]>([]);
+  const [edgeSensitivity, setEdgeSensitivity]   = useState(0.5);
+  const [edgeDetailSuppression, setEdgeDetailSuppression] = useState(0.5);
+  const [edgeMinLine, setEdgeMinLine]           = useState(0.06); // 6% default (roof-optimised)
+  const [edgeDominantOnly, setEdgeDominantOnly] = useState(true);
+  const [edgeNumDirections, setEdgeNumDirections] = useState(3);
+  const [edgeMaxLines, setEdgeMaxLines]         = useState(80);
+  const [showDetectedLayer, setShowDetectedLayer] = useState(true);
+  const [edgeTool, setEdgeTool]                 = useState<"NONE" | "ERASE_EDGE" | "ADD_EDGE">("NONE");
+  const [edgeAddDraft, setEdgeAddDraft]         = useState<[number, number] | null>(null);
+  const [planeSuggs, setPlaneSuggs]             = useState<PlaneSuggestion[]>([]);
+  const [hoveredSuggId, setHoveredSuggId]       = useState<string | null>(null);
+  const [suggestingPlanes, setSuggestingPlanes] = useState(false);
+  // Facade vs top-down mode
+  const [edgeMode, setEdgeMode]                 = useState<"facade" | "topDown">("topDown");
+  const [edgeRoofRegionFraction, setEdgeRoofRegionFraction] = useState(0.5);
+  const [edgeIgnoreVertical, setEdgeIgnoreVertical] = useState(true);
+  const [edgeSkyBoundaryBias, setEdgeSkyBoundaryBias] = useState(true);
+  const [edgeContrastThreshold, setEdgeContrastThreshold] = useState(0.06);
+  const [edgePerDirectionCap, setEdgePerDirectionCap] = useState(2);
+
+  // All visible segments (detected − erased + user-added), capped + sorted for display
+  const visibleSegs = useMemo<LabeledSegment[]>(() => {
+    const base = detectedSegs.filter((s) => !erasedSegIds.has(s.id));
+    return [...base, ...userAddedSegs];
+  }, [detectedSegs, erasedSegIds, userAddedSegs]);
+
+  // Display-capped version sorted by length descending
+  const displaySegs = useMemo<LabeledSegment[]>(() => {
+    return visibleSegs.slice().sort((a, b) => b.length - a.length).slice(0, edgeMaxLines);
+  }, [visibleSegs, edgeMaxLines]);
+
+  // Live preview of cleaned geometry — recomputed whenever the panel is open or settings change
+  const cleanupPreview = useMemo<Roof | null>(() => {
+    if (!cleanupOpen || !activeRoof) return null;
+    const opts = strengthToOptions(cleanupStrength, cleanupSnapAngles, cleanupLockedIds);
+    return cleanupGeometry(activeRoof, opts) as Roof;
+  }, [cleanupOpen, activeRoof, cleanupStrength, cleanupSnapAngles, cleanupLockedIds]);
+
   const [exportView, setExportView] = useState<ExportView>("LIVE");
   const [autoSuggest, setAutoSuggest] = useState<AutoSuggest | null>(null);
   const [autoDetecting, setAutoDetecting] = useState(false);
@@ -941,35 +1006,64 @@ export default function Page() {
         // Support both compact keys (new) and full keys (legacy links)
         const name = raw.n ?? raw.name ?? "Roof Preview";
         const shingleColor: ShingleColor = raw.c ?? raw.shingleColor ?? "Barkwood";
-        const roofs: Roof[] = (raw.r ?? raw.roofs ?? []).map((r: any) => ({
-          id: r.id ?? uid(),
-          name: r.name ?? "Roof 1",
-          closed: r.cl === 1 || r.closed === true,
-          outline: r.o ?? r.outline ?? [],
-          holes: r.h ?? r.holes ?? [],
-          lines: (r.l ?? r.lines ?? []).map((l: any) => ({
-            id: l.id ?? uid(),
-            kind: l.k ?? l.kind,
-            points: l.p ?? l.points ?? [],
-          })),
-          shingleScale: r.sc ?? r.shingleScale ?? 0.20,
-          valleyMetalColor: r.vc ?? r.valleyMetalColor ?? "Galvanized",
-          valleyMetalW: r.vw ?? r.valleyMetalW ?? 18,
-          // defaults for unused fields
-          gutterApronW: 5, gutterApronColor: "Aluminum",
-          dripEdgeW: 5, dripEdgeColor: "Aluminum",
-          iceWaterW: 36, syntheticW: 72, proStartW: 7, ridgeVentW: 12,
-          showEditHandles: false,
-        }));
-        const src: string = raw.p ?? "";
-        const canvasW: number = raw.cw ?? 0;
-        const canvasH: number = raw.ch ?? 0;
-        setCustomerViewData({ name, roofs, shingleColor, src, canvasW, canvasH });
+
+        function decodeRoofs(rawRoofs: any[]): Roof[] {
+          return rawRoofs.map((r: any) => ({
+            id: r.id ?? uid(),
+            name: r.name ?? "Roof 1",
+            closed: r.cl === 1 || r.closed === true,
+            outline: r.o ?? r.outline ?? [],
+            holes: r.h ?? r.holes ?? [],
+            lines: (r.l ?? r.lines ?? []).map((l: any) => ({
+              id: l.id ?? uid(),
+              kind: l.k ?? l.kind,
+              points: l.p ?? l.points ?? [],
+            })),
+            shingleScale: r.sc ?? r.shingleScale ?? 0.20,
+            shingleRotation: r.sr ?? 0,
+            valleyMetalColor: r.vc ?? r.valleyMetalColor ?? "Galvanized",
+            valleyMetalW: r.vw ?? r.valleyMetalW ?? 18,
+            gutterApronW: r.gaw ?? 8,
+            gutterApronColor: r.gac ?? "Aluminum",
+            dripEdgeW: r.dew ?? 8,
+            dripEdgeColor: r.dec ?? "Aluminum",
+            iceWaterEaveW: r.iwe ?? 40,
+            iceWaterValleyW: r.iwv ?? 20,
+            proStartW: r.psw ?? 12,
+            ridgeVentW: r.rvw ?? 12,
+            capW: r.cpw ?? 8,
+            proStartOnRakes: r.por === 1,
+            showEditHandles: false,
+          }));
+        }
+
+        // New multi-photo format: raw.photos array
+        // Legacy single-photo format: raw.r + raw.p + raw.cw + raw.ch
+        let photos: Array<{ src: string; roofs: Roof[]; canvasW: number; canvasH: number }>;
+        if (Array.isArray(raw.photos) && raw.photos.length > 0) {
+          photos = raw.photos.map((ph: any) => ({
+            src: ph.p ?? "",
+            roofs: decodeRoofs(ph.r ?? []),
+            canvasW: ph.cw ?? 0,
+            canvasH: ph.ch ?? 0,
+          }));
+        } else {
+          // Legacy: single photo
+          photos = [{
+            src: raw.p ?? "",
+            roofs: decodeRoofs(raw.r ?? raw.roofs ?? []),
+            canvasW: raw.cw ?? 0,
+            canvasH: raw.ch ?? 0,
+          }];
+        }
+
+        setCustomerViewData({ name, shingleColor, photos });
+        setCustomerPhotoIdx(0);
         setCustomerShingleColor(shingleColor);
         setCustomerStep("TEAROFF");
       } catch {
         // Decode failed — show blank customer view rather than exposing the editor
-        setCustomerViewData({ name: "Preview", roofs: [], shingleColor: "Barkwood", src: "", canvasW: 0, canvasH: 0 });
+        setCustomerViewData({ name: "Preview", shingleColor: "Barkwood", photos: [{ src: "", roofs: [], canvasW: 0, canvasH: 0 }] });
       }
       setScreen("CUSTOMER_VIEW");
       return;
@@ -990,7 +1084,7 @@ export default function Page() {
           const restoredId = migrated.find((p) => p.id === savedActiveId)?.id ?? migrated[0].id;
           setPhotos(migrated);
           setActivePhotoId(restoredId);
-          setScreen("PROJECT");
+          setScreen("MENU");
         }
       }
     } catch {}
@@ -1386,6 +1480,61 @@ export default function Page() {
       setDraftLine((d) => (d ? { ...d, points: [...d.points, pos.x, pos.y] } : d));
       return;
     }
+
+    // Edge detection tools
+    if (active.step === "TRACE" && edgeTool === "ERASE_EDGE") {
+      const ERASE_RADIUS = 20 / (active.stageScale || 1);
+      const toErase = visibleSegs.filter((s) => {
+        const dx = s.x2 - s.x1, dy = s.y2 - s.y1;
+        const len2 = dx * dx + dy * dy;
+        if (len2 < 1) return false;
+        const t = Math.max(0, Math.min(1, ((pos.x - s.x1) * dx + (pos.y - s.y1) * dy) / len2));
+        const nearX = s.x1 + t * dx, nearY = s.y1 + t * dy;
+        const d2 = (pos.x - nearX) ** 2 + (pos.y - nearY) ** 2;
+        return d2 <= ERASE_RADIUS * ERASE_RADIUS;
+      });
+      if (toErase.length > 0) {
+        const ids = new Set(erasedSegIds);
+        const addIds = new Set(userAddedSegs.map((s) => s.id));
+        const newMask: Array<{x: number; y: number}> = [];
+        toErase.forEach((s) => {
+          if (addIds.has(s.id)) setUserAddedSegs((prev) => prev.filter((u) => u.id !== s.id));
+          else {
+            ids.add(s.id);
+            newMask.push({ x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 });
+          }
+        });
+        setErasedSegIds(ids);
+        if (newMask.length > 0) setEdgeErasedMask((prev) => [...prev, ...newMask]);
+        setPlaneSuggs([]);
+      }
+      return;
+    }
+
+    if (active.step === "TRACE" && edgeTool === "ADD_EDGE") {
+      if (!edgeAddDraft) {
+        setEdgeAddDraft([pos.x, pos.y]);
+      } else {
+        const dx = pos.x - edgeAddDraft[0], dy = pos.y - edgeAddDraft[1];
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len > 5) {
+          let angle = Math.atan2(dy, dx);
+          if (angle < 0) angle += Math.PI;
+          setUserAddedSegs((prev) => [...prev, {
+            id: Math.random().toString(16).slice(2),
+            x1: edgeAddDraft[0], y1: edgeAddDraft[1],
+            x2: pos.x, y2: pos.y,
+            angle, length: len,
+            label: "unknown" as const,
+            confidence: 0.5,
+            source: "auto-detect" as const,
+          }]);
+          setPlaneSuggs([]); // reset suggestions
+        }
+        setEdgeAddDraft(null);
+      }
+      return;
+    }
   }
 
   function updateOutlinePoint(i: number, x: number, y: number) {
@@ -1459,34 +1608,61 @@ export default function Page() {
   // Customer view step navigation
   const customerNavSteps = useMemo(() => {
     if (!customerViewData) return [] as Step[];
-    const rel = relevantSteps(customerViewData.roofs);
+    const currentRoofs = customerViewData.photos[customerPhotoIdx]?.roofs ?? customerViewData.photos[0]?.roofs ?? [];
+    const rel = relevantSteps(currentRoofs);
     rel.delete("START"); rel.delete("TRACE"); rel.delete("EXPORT");
     return STEPS.filter((s) => rel.has(s));
-  }, [customerViewData]);
+  }, [customerViewData, customerPhotoIdx]);
   const customerStepIdx = customerNavSteps.indexOf(customerStep);
 
   // Generate a shareable read-only URL encoding the current project structure.
   // photoUrl is the Vercel Blob URL of the compressed uploaded photo.
-  function generateShareUrl(photoUrl = ""): string {
+  function generateShareUrl(urlMap: Map<string, string> = new Map()): string {
     if (!active || screen === "CUSTOMER_VIEW") return "";
-    const shareData: Record<string, unknown> = {
-      n: active.name,
-      c: active.shingleColor,
-      // canvas dimensions so the customer view can reconstruct world-space coords
-      cw: w,
-      ch: h,
-      r: active.roofs.map((r) => ({
+
+    // Merge live state for the current photo into the full state map
+    const allStates: Record<string, { roofs: Roof[] }> = { ...active.photoStates };
+    if (active.src) {
+      allStates[active.src] = { ...active.photoStates[active.src], roofs: active.roofs };
+    }
+
+    function encodeRoofs(roofs: Roof[]) {
+      return roofs.map((r) => ({
         id: r.id,
         cl: r.closed ? 1 : 0,
         o: r.outline.map((n) => Math.round(n)),
-        h: r.holes.map((h) => h.map((n) => Math.round(n))),
+        h: r.holes.map((hole) => hole.map((n) => Math.round(n))),
         l: r.lines.map((l) => ({ k: l.kind, p: l.points.map((n) => Math.round(n)) })),
         sc: r.shingleScale,
+        sr: r.shingleRotation,
         vc: r.valleyMetalColor,
         vw: r.valleyMetalW,
-      })),
+        gaw: r.gutterApronW,
+        gac: r.gutterApronColor,
+        dew: r.dripEdgeW,
+        dec: r.dripEdgeColor,
+        iwe: r.iceWaterEaveW,
+        iwv: r.iceWaterValleyW,
+        psw: r.proStartW,
+        rvw: r.ridgeVentW,
+        cpw: r.capW,
+        por: r.proStartOnRakes ? 1 : 0,
+      }));
+    }
+
+    const photos = (active.photoSrcs ?? []).map((src) => ({
+      p: urlMap.get(src) ?? "",
+      cw: w,
+      ch: h,
+      r: encodeRoofs(allStates[src]?.roofs ?? []),
+    }));
+
+    const shareData = {
+      n: active.name,
+      c: active.shingleColor,
+      photos,
     };
-    if (photoUrl) shareData.p = photoUrl;
+
     const json = JSON.stringify(shareData);
     const encoded = btoa(unescape(encodeURIComponent(json)))
       .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
@@ -1510,6 +1686,31 @@ export default function Page() {
       img.onerror = () => resolve(src); // fallback: use original
       img.src = src;
     });
+  }
+
+  // Compress + upload all photos in the project; returns Map<src, blobUrl>.
+  async function prepareAllPhotoUrls(): Promise<Map<string, string>> {
+    if (!active) return new Map();
+    const srcs = active.photoSrcs ?? [];
+    const urlMap = new Map<string, string>();
+    for (const src of srcs) {
+      try {
+        setShareStatus("compressing");
+        const compressed = await compressPhoto(src, 1200, 0.55);
+        setShareStatus("uploading");
+        const uploadRes = await fetch("/api/store-photo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageData: compressed }),
+        });
+        const uploadData = await uploadRes.json() as { url?: string; error?: string };
+        if (!uploadRes.ok || uploadData.error) throw new Error(uploadData.error ?? `store-photo ${uploadRes.status}`);
+        if (uploadData.url) urlMap.set(src, uploadData.url);
+      } catch {
+        // Continue without this photo's blob URL rather than blocking the whole share
+      }
+    }
+    return urlMap;
   }
 
   // Two-page PDF with material legends (multi-photo grid)
@@ -2060,56 +2261,117 @@ export default function Page() {
   return (
     <div style={
       screen === "CUSTOMER_VIEW"
-        ? { display: "flex", flexDirection: "column", height: "100dvh", overflow: "hidden" }
+        ? { display: "flex", flexDirection: "row", height: "100dvh", overflow: "hidden" }
         : { display: "grid", gridTemplateColumns: "420px 1fr", height: "100vh" }
     }>
 
-      {/* ── CUSTOMER BOTTOM PANEL ── */}
+      {/* ── CUSTOMER RIGHT SIDEBAR ── */}
       {screen === "CUSTOMER_VIEW" && customerViewData && (
         <div style={{
           order: 2,
+          width: 176,
           flexShrink: 0,
           background: "#ffffff",
-          borderTop: "2px solid #e2e8f0",
-          padding: "10px 14px 12px",
+          borderLeft: "1.5px solid #e2e8f0",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          height: "100dvh",
         }}>
-          {/* Row 1: logo left, project name center, step count right */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <Image src="/roofviz-logo.png" alt="RoofViz" width={80} height={23} priority />
-            <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: "#334155", textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {/* Logo + project name */}
+          <div style={{ padding: "14px 14px 12px", borderBottom: "1px solid #f1f5f9", flexShrink: 0 }}>
+            <Image src="/roofviz-logo.png" alt="RoofViz" width={120} height={35} priority />
+            <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: "#1e293b", lineHeight: 1.35, wordBreak: "break-word" as const }}>
               {customerViewData.name}
             </div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#2563eb", flexShrink: 0 }}>
-              {customerStepIdx + 1}/{customerNavSteps.length}
-            </div>
           </div>
-          {/* Progress bar */}
-          <div style={{ height: 4, background: "#e2e8f0", borderRadius: 99, overflow: "hidden", marginBottom: 8 }}>
-            <div style={{ height: "100%", width: `${((customerStepIdx + 1) / Math.max(customerNavSteps.length, 1)) * 100}%`, background: "linear-gradient(90deg,#2563eb,#60a5fa)", borderRadius: 99, transition: "width 0.35s ease" }} />
+
+          {/* Step checklist — scrollable */}
+          <div style={{ flex: "1 1 0", overflowY: "auto", padding: "6px 0", scrollbarWidth: "none" as any }}>
+            {customerNavSteps.map((s, i) => {
+              const isPast = i < customerStepIdx;
+              const isCurrent = i === customerStepIdx;
+              return (
+                <button
+                  key={s}
+                  onClick={() => setCustomerStep(s)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    width: "100%",
+                    padding: "8px 14px",
+                    border: "none",
+                    background: isCurrent ? "#eff6ff" : "transparent",
+                    borderLeft: isCurrent ? "3px solid #2563eb" : "3px solid transparent",
+                    cursor: "pointer",
+                    textAlign: "left" as const,
+                  }}
+                >
+                  <span style={{
+                    flexShrink: 0,
+                    width: 18,
+                    height: 18,
+                    borderRadius: "50%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 9,
+                    fontWeight: 700,
+                    background: isCurrent ? "#2563eb" : isPast ? "#dcfce7" : "#f1f5f9",
+                    color: isCurrent ? "#fff" : isPast ? "#16a34a" : "#cbd5e1",
+                    border: isCurrent ? "none" : isPast ? "1.5px solid #86efac" : "1.5px solid #e2e8f0",
+                  }}>
+                    {isPast ? "✓" : ""}
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: isCurrent ? 700 : 500, color: isCurrent ? "#1e40af" : isPast ? "#334155" : "#94a3b8", lineHeight: 1.3 }}>
+                    {STEP_SHORT[s] ?? s}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          {/* Row 2: Back | Step title | Next */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+
+          {/* Prev / Next navigation */}
+          <div style={{ borderTop: "1px solid #f1f5f9", padding: "10px 14px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
             <button
-              onClick={() => setCustomerStep(customerNavSteps[customerStepIdx - 1])}
+              onClick={() => customerStepIdx > 0 && setCustomerStep(customerNavSteps[customerStepIdx - 1])}
               disabled={customerStepIdx <= 0}
-              style={{ flexShrink: 0, padding: "8px 12px", borderRadius: 8, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 13, fontWeight: 600, cursor: customerStepIdx > 0 ? "pointer" : "default", opacity: customerStepIdx > 0 ? 1 : 0.3, color: "#475569" }}
-            >← Back</button>
-            <div style={{ flex: 1, textAlign: "center", fontSize: 13, fontWeight: 800, color: "#0f172a", lineHeight: 1.25, padding: "0 4px" }}>
-              {STEP_TITLE[customerStep].replace(/^Step \d+ — /, "").replace(/^Finish — /, "")}
-            </div>
+              style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 12, fontWeight: 600, color: "#475569", cursor: customerStepIdx > 0 ? "pointer" : "default", opacity: customerStepIdx > 0 ? 1 : 0.35 }}
+            >← Previous</button>
             <button
-              onClick={() => setCustomerStep(customerNavSteps[customerStepIdx + 1])}
+              onClick={() => customerStepIdx < customerNavSteps.length - 1 && setCustomerStep(customerNavSteps[customerStepIdx + 1])}
               disabled={customerStepIdx >= customerNavSteps.length - 1}
-              style={{ flexShrink: 0, padding: "8px 12px", borderRadius: 8, border: "none", background: customerStepIdx < customerNavSteps.length - 1 ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : "#e2e8f0", fontSize: 13, fontWeight: 700, cursor: customerStepIdx < customerNavSteps.length - 1 ? "pointer" : "default", opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.4, color: customerStepIdx < customerNavSteps.length - 1 ? "#fff" : "#94a3b8" }}
+              style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", background: customerStepIdx < customerNavSteps.length - 1 ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : "#e2e8f0", fontSize: 12, fontWeight: 700, color: customerStepIdx < customerNavSteps.length - 1 ? "#fff" : "#94a3b8", cursor: customerStepIdx < customerNavSteps.length - 1 ? "pointer" : "default", opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.5 }}
             >Next →</button>
           </div>
-          {/* Row 3: shingle colors — only at shingles step */}
-          {atLeast(customerStep, "SHINGLES") && (
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #f1f5f9" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 7 }}>
-                Shingle Color — <span style={{ color: "#0f172a" }}>{customerShingleColor}</span>
+
+          {/* Photo switcher — only if multiple photos */}
+          {customerViewData.photos.length > 1 && (
+            <div style={{ borderTop: "1px solid #f1f5f9", padding: "8px 14px", flexShrink: 0 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 7 }}>Photos</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <button
+                  onClick={() => setCustomerPhotoIdx(Math.max(0, customerPhotoIdx - 1))}
+                  disabled={customerPhotoIdx === 0}
+                  style={{ padding: "4px 10px", borderRadius: 6, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 14, fontWeight: 600, cursor: customerPhotoIdx > 0 ? "pointer" : "default", opacity: customerPhotoIdx > 0 ? 1 : 0.3, color: "#475569" }}
+                >‹</button>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "#475569" }}>{customerPhotoIdx + 1} / {customerViewData.photos.length}</span>
+                <button
+                  onClick={() => setCustomerPhotoIdx(Math.min(customerViewData.photos.length - 1, customerPhotoIdx + 1))}
+                  disabled={customerPhotoIdx >= customerViewData.photos.length - 1}
+                  style={{ padding: "4px 10px", borderRadius: 6, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 14, fontWeight: 600, cursor: customerPhotoIdx < customerViewData.photos.length - 1 ? "pointer" : "default", opacity: customerPhotoIdx < customerViewData.photos.length - 1 ? 1 : 0.3, color: "#475569" }}
+                >›</button>
               </div>
-              <div style={{ display: "flex", gap: 7 }}>
+            </div>
+          )}
+
+          {/* Shingle color swatches — only at SHINGLES+ */}
+          {atLeast(customerStep, "SHINGLES") && (
+            <div style={{ borderTop: "1px solid #f1f5f9", padding: "10px 14px 12px", flexShrink: 0 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 3 }}>Shingle Color</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b", marginBottom: 8 }}>{customerShingleColor}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
                 {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => {
                   const [cr, cg, cb] = shingleRGB(c);
                   return (
@@ -2118,14 +2380,15 @@ export default function Page() {
                       onClick={() => setCustomerShingleColor(c)}
                       title={c}
                       style={{
-                        flex: 1,
-                        aspectRatio: "1",
-                        borderRadius: 8,
+                        width: 30,
+                        height: 30,
+                        borderRadius: "50%",
                         background: `rgb(${cr},${cg},${cb})`,
                         cursor: "pointer",
-                        border: c === customerShingleColor ? "3px solid #2563eb" : "2px solid rgba(15,23,42,0.08)",
-                        boxShadow: c === customerShingleColor ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
-                        transition: "border-color 0.15s",
+                        border: c === customerShingleColor ? "2.5px solid #2563eb" : "2px solid rgba(15,23,42,0.12)",
+                        boxShadow: c === customerShingleColor ? "0 0 0 2px rgba(37,99,235,0.3)" : "none",
+                        transition: "box-shadow 0.15s",
+                        flexShrink: 0,
                       }}
                     />
                   );
@@ -2418,17 +2681,18 @@ export default function Page() {
                       </div>
                       <button
                         style={{ ...ghostBtn, width: "100%", marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, boxSizing: "border-box" as const }}
-                        onClick={() => { setShowShareModal((v) => !v); setShareEmail(""); setShareEmailSent(false); }}
+                        onClick={() => { setShowShareModal((v) => !v); setShareEmail(""); setShareEmailSent(false); setShareErrorMsg(""); setShareStatus(""); }}
                       >
                         Share with Customer
                       </button>
                       {showShareModal && (() => {
-                        const url = generateShareUrl();
                         const projectName = active?.name || "Your Roof";
                         const canSend = shareEmail.includes("@") && shareEmail.includes(".");
+                        const isBusy = shareEmailSending || shareStatus === "compressing" || shareStatus === "uploading";
+                        const statusLabel = shareStatus === "compressing" ? "Preparing photos…" : shareStatus === "uploading" ? "Uploading photos…" : shareStatus === "sending" ? "Sending email…" : "";
                         return (
                           <div style={{ marginTop: 10, padding: 14, background: "#f8fafc", borderRadius: 10, border: "1.5px solid rgba(37,99,235,0.18)" }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Email Preview to Customer</div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Share with Customer</div>
                             {shareEmailSent ? (
                               <div style={{ textAlign: "center", padding: "14px 0" }}>
                                 <div style={{ fontSize: 22, marginBottom: 6 }}>✓</div>
@@ -2437,36 +2701,24 @@ export default function Page() {
                               </div>
                             ) : (
                               <>
+                                {/* Email input + send */}
                                 <input
                                   type="email"
                                   placeholder="customer@email.com"
                                   value={shareEmail}
-                                  onChange={(e) => { setShareEmail(e.target.value); }}
-                                  style={{ ...inputStyle, fontSize: 13, padding: "9px 12px", marginBottom: 8 }}
+                                  onChange={(e) => { setShareEmail(e.target.value); setShareErrorMsg(""); }}
+                                  style={{ ...inputStyle, fontSize: 13, padding: "9px 12px", marginBottom: 6 }}
                                 />
                                 <button
-                                  style={{ ...primaryBtn, marginTop: 0, padding: "9px 14px", fontSize: 12, width: "100%", boxSizing: "border-box" as const, opacity: canSend && !shareEmailSending ? 1 : 0.45 }}
-                                  disabled={!canSend || shareEmailSending}
+                                  style={{ ...primaryBtn, marginTop: 0, padding: "9px 14px", fontSize: 12, width: "100%", boxSizing: "border-box" as const, opacity: canSend && !isBusy ? 1 : 0.45 }}
+                                  disabled={!canSend || isBusy}
                                   onClick={async () => {
                                     setShareEmailSending(true);
+                                    setShareErrorMsg("");
                                     try {
-                                      // 1. Compress + upload photo to get a short blob URL
-                                      let photoUrl = "";
-                                      if (active?.src) {
-                                        try {
-                                          const compressed = await compressPhoto(active.src, 1200, 0.55);
-                                          const uploadRes = await fetch("/api/store-photo", {
-                                            method: "POST",
-                                            headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ imageData: compressed }),
-                                          });
-                                          const uploadData = await uploadRes.json() as { url?: string };
-                                          photoUrl = uploadData.url ?? "";
-                                        } catch { /* no photo — send without */ }
-                                      }
-                                      // 2. Build share URL with photo blob URL
-                                      const shareUrl = generateShareUrl(photoUrl);
-                                      // 3. Send email
+                                      const urlMap = await prepareAllPhotoUrls();
+                                      const shareUrl = generateShareUrl(urlMap);
+                                      setShareStatus("sending");
                                       const res = await fetch("/api/send-email", {
                                         method: "POST",
                                         headers: { "Content-Type": "application/json" },
@@ -2474,20 +2726,53 @@ export default function Page() {
                                       });
                                       const text = await res.text();
                                       let body: { ok?: boolean; error?: string } = {};
-                                      try { body = JSON.parse(text); } catch { /* non-JSON response */ }
+                                      try { body = JSON.parse(text); } catch { /* non-JSON */ }
                                       if (!res.ok || body.error) {
-                                        alert(`Failed to send (${res.status}): ${body.error || text.slice(0, 200)}`);
+                                        setShareErrorMsg(`Send failed (${res.status}): ${body.error || text.slice(0, 120)}`);
                                       } else {
                                         setShareEmailSent(true);
                                       }
                                     } catch (e) {
-                                      alert(`Network error: ${e}`);
+                                      setShareErrorMsg(`Network error: ${e}`);
                                     } finally {
                                       setShareEmailSending(false);
+                                      setShareStatus("");
                                     }
                                   }}
                                 >
-                                  {shareEmailSending ? "Sending…" : "Send Link"}
+                                  {statusLabel || "Send Link"}
+                                </button>
+                                {shareErrorMsg && (
+                                  <div style={{ fontSize: 11, color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6, padding: "7px 10px", marginTop: 6, lineHeight: 1.4 }}>
+                                    {shareErrorMsg}
+                                  </div>
+                                )}
+
+                                {/* Divider */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
+                                  <div style={{ flex: 1, height: 1, background: "rgba(15,23,42,0.10)" }} />
+                                  <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 500 }}>or copy link</span>
+                                  <div style={{ flex: 1, height: 1, background: "rgba(15,23,42,0.10)" }} />
+                                </div>
+
+                                {/* Copy link button */}
+                                <button
+                                  style={{ ...primaryBtn, marginTop: 0, padding: "8px 14px", fontSize: 12, width: "100%", boxSizing: "border-box" as const, background: shareStatus === "copied" ? "linear-gradient(135deg,#16a34a,#15803d)" : "linear-gradient(135deg,#475569,#334155)", opacity: isBusy ? 0.45 : 1 }}
+                                  disabled={isBusy}
+                                  onClick={async () => {
+                                    setShareErrorMsg("");
+                                    const urlMap = await prepareAllPhotoUrls();
+                                    const shareUrl = generateShareUrl(urlMap);
+                                    try {
+                                      await navigator.clipboard.writeText(shareUrl);
+                                      setShareStatus("copied");
+                                      setTimeout(() => setShareStatus(""), 2500);
+                                    } catch {
+                                      setShareErrorMsg("Clipboard unavailable — link: " + shareUrl.slice(0, 80));
+                                    }
+                                  }}
+                                >
+                                  {shareStatus === "copied" ? "Copied!" : statusLabel || "Copy Link"}
                                 </button>
                               </>
                             )}
@@ -2671,6 +2956,544 @@ export default function Page() {
                                   >×</button>
                                 </div>
                               ))}
+                            </div>
+                          )}
+
+                          {/* ── Clean Up Lines ── */}
+                          {!cleanupOpen ? (
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <button
+                                style={{ ...smallBtn, flex: 1, background: "linear-gradient(135deg,#eff6ff,#dbeafe)", borderColor: "#93c5fd", color: "#1d4ed8", fontWeight: 700 }}
+                                onClick={() => { setCleanupOpen(true); setCleanupLockedIds(new Set()); }}
+                              >
+                                ✦ Clean Up Lines
+                              </button>
+                              {cleanupUndoRoof && (
+                                <button
+                                  title="Undo last cleanup"
+                                  style={{ ...smallBtn, color: "#7c3aed", borderColor: "rgba(124,58,237,0.3)", flexShrink: 0 }}
+                                  onClick={() => {
+                                    if (!activeRoof || !cleanupUndoRoof) return;
+                                    patchActiveRoof(() => cleanupUndoRoof);
+                                    setCleanupUndoRoof(null);
+                                  }}
+                                >↩ Undo</button>
+                              )}
+                            </div>
+                          ) : (
+                            /* ── Cleanup panel (inline) ── */
+                            <div style={{ background: "#f0f9ff", border: "1.5px solid #93c5fd", borderRadius: 10, padding: "12px 12px 10px", display: "grid", gap: 10 }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                <div style={{ fontSize: 12, fontWeight: 800, color: "#1e40af" }}>✦ Clean Up Lines</div>
+                                <button
+                                  style={{ ...smallBtn, padding: "2px 7px", fontSize: 11, color: "#475569" }}
+                                  onClick={() => setCleanupOpen(false)}
+                                >✕</button>
+                              </div>
+
+                              {/* Strength slider */}
+                              <div>
+                                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: "#334155" }}>Strength</span>
+                                  <span style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8" }}>{Math.round(cleanupStrength * 100)}%</span>
+                                </div>
+                                <input
+                                  type="range" min={0} max={100}
+                                  value={Math.round(cleanupStrength * 100)}
+                                  onChange={(e) => setCleanupStrength(Number(e.target.value) / 100)}
+                                  style={{ width: "100%", accentColor: "#2563eb" }}
+                                />
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#94a3b8", marginTop: 1 }}>
+                                  <span>Conservative</span><span>Aggressive</span>
+                                </div>
+                              </div>
+
+                              {/* Angle snap toggle */}
+                              <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11, fontWeight: 600, color: "#334155", cursor: "pointer" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={cleanupSnapAngles}
+                                  onChange={(e) => setCleanupSnapAngles(e.target.checked)}
+                                  style={{ accentColor: "#2563eb", width: 14, height: 14 }}
+                                />
+                                Snap to 0° / 45° / 90°
+                              </label>
+
+                              {/* Lock lines */}
+                              {activeRoof && activeRoof.lines.length > 0 && (
+                                <div>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 }}>
+                                    Lock lines (skip cleanup)
+                                  </div>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                    {activeRoof.lines.map((l, i) => (
+                                      <label key={l.id} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "3px 6px", borderRadius: 6, background: "rgba(255,255,255,0.6)" }}>
+                                        <input
+                                          type="checkbox"
+                                          checked={cleanupLockedIds.has(l.id)}
+                                          onChange={(e) => {
+                                            setCleanupLockedIds((prev) => {
+                                              const next = new Set(prev);
+                                              if (e.target.checked) next.add(l.id); else next.delete(l.id);
+                                              return next;
+                                            });
+                                          }}
+                                          style={{ accentColor: "#7c3aed", width: 13, height: 13 }}
+                                        />
+                                        <span style={{ flex: 1, fontSize: 11, color: "#475569", fontWeight: 500 }}>
+                                          {l.kind} {activeRoof.lines.filter((x) => x.kind === l.kind).indexOf(l) + 1}
+                                        </span>
+                                        <span style={{ width: 10, height: 10, borderRadius: "50%", background: kindColor(l.kind), flexShrink: 0, display: "inline-block" }} />
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Preview hint */}
+                              <div style={{ fontSize: 10, color: "#60a5fa", fontStyle: "italic", lineHeight: 1.4 }}>
+                                Green lines show the result. Adjust strength, then Apply.
+                              </div>
+
+                              {/* Action buttons */}
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button
+                                  style={{ ...smallBtn, flex: 1, color: "#475569" }}
+                                  onClick={() => setCleanupOpen(false)}
+                                >Cancel</button>
+                                <button
+                                  style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#2563eb,#1d4ed8)", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer" }}
+                                  onClick={() => {
+                                    if (!activeRoof || !cleanupPreview) return;
+                                    setCleanupUndoRoof({ ...activeRoof });
+                                    patchActiveRoof(() => cleanupPreview);
+                                    setCleanupOpen(false);
+                                  }}
+                                >Apply</button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* ── Detect Edges + Suggest Planes ── */}
+                          {!edgePanel ? (
+                            <button
+                              style={{ ...smallBtn, flex: 1, background: "linear-gradient(135deg,#fefce8,#fef9c3)", borderColor: "#fde047", color: "#854d0e", fontWeight: 700 }}
+                              onClick={async () => {
+                                setEdgePanel(true);
+                                if (photoImg) {
+                                  const detected = await autoDetectMode(photoImg, w, h);
+                                  setEdgeMode(detected);
+                                }
+                              }}
+                            >
+                              ◈ Detect Edges
+                            </button>
+                          ) : (
+                            <div style={{ background: "#fefce8", border: "1.5px solid #fde047", borderRadius: 10, padding: "12px 12px 10px", display: "grid", gap: 10 }}>
+                              {/* Header */}
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                <div style={{ fontSize: 12, fontWeight: 800, color: "#854d0e" }}>
+                                  {edgeMode === "facade" ? "◈ Roof Edge Assist" : "◈ Edge Detection"}
+                                </div>
+                                <button
+                                  style={{ ...smallBtn, padding: "2px 7px", fontSize: 11, color: "#475569" }}
+                                  onClick={() => {
+                                    setEdgePanel(false);
+                                    setEdgeTool("NONE");
+                                    setEdgeAddDraft(null);
+                                    setDetectedSegs([]);
+                                    setErasedSegIds(new Set());
+                                    setEdgeErasedMask([]);
+                                    setUserAddedSegs([]);
+                                    setPlaneSuggs([]);
+                                  }}
+                                >✕</button>
+                              </div>
+
+                              {/* Mode toggle */}
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                                {(["facade", "topDown"] as const).map((m) => (
+                                  <button
+                                    key={m}
+                                    style={{ ...smallBtn, fontSize: 10, padding: "5px 4px",
+                                      background: edgeMode === m ? (m === "facade" ? "#e0f2fe" : "#fef9c3") : undefined,
+                                      borderColor: edgeMode === m ? (m === "facade" ? "#7dd3fc" : "#fde047") : undefined,
+                                      color: edgeMode === m ? (m === "facade" ? "#0369a1" : "#854d0e") : "#64748b",
+                                      fontWeight: edgeMode === m ? 700 : 400,
+                                    }}
+                                    onClick={() => { setEdgeMode(m); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                  >
+                                    {m === "facade" ? "🏠 Facade View" : "🛰 Top-Down View"}
+                                  </button>
+                                ))}
+                              </div>
+                              {edgeMode === "facade" && (
+                                <div style={{ fontSize: 10, color: "#0369a1", background: "#e0f2fe", borderRadius: 6, padding: "5px 8px", lineHeight: 1.5 }}>
+                                  Facade mode restricts detection to the roof region and filters window/door edges.
+                                </div>
+                              )}
+
+                              {/* ── Sliders ── */}
+                              {([
+                                { label: "Edge Sensitivity", key: "sens", val: edgeSensitivity, set: setEdgeSensitivity, lo: "Fewer", hi: "More" },
+                                { label: "Detail Suppression", key: "sup",  val: edgeDetailSuppression, set: setEdgeDetailSuppression, lo: "Light", hi: "Heavy" },
+                              ] as const).map(({ label, key, val, set, lo, hi }) => (
+                                <div key={key}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                                    <span style={{ fontSize: 11, color: "#78350f", fontWeight: 600 }}>{label}</span>
+                                    <span style={{ fontSize: 10, color: "#92400e" }}>{Math.round((val as number) * 100)}%</span>
+                                  </div>
+                                  <input
+                                    type="range" min={0} max={1} step={0.05}
+                                    value={val as number}
+                                    onChange={(e) => { (set as (v: number) => void)(parseFloat(e.target.value)); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                    style={{ width: "100%", accentColor: "#ca8a04" }}
+                                  />
+                                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                    <span style={{ fontSize: 9, color: "#a16207" }}>{lo}</span>
+                                    <span style={{ fontSize: 9, color: "#a16207" }}>{hi}</span>
+                                  </div>
+                                </div>
+                              ))}
+
+                              {/* Min line length */}
+                              <div>
+                                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                                  <span style={{ fontSize: 11, color: "#78350f", fontWeight: 600 }}>Min Line Length</span>
+                                  <span style={{ fontSize: 10, color: "#92400e" }}>{Math.round(edgeMinLine * 100)}% width</span>
+                                </div>
+                                <input
+                                  type="range" min={0.01} max={0.12} step={0.005}
+                                  value={edgeMinLine}
+                                  onChange={(e) => { setEdgeMinLine(parseFloat(e.target.value)); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                  style={{ width: "100%", accentColor: "#ca8a04" }}
+                                />
+                              </div>
+
+                              {/* Facade-specific controls */}
+                              {edgeMode === "facade" && (
+                                <>
+                                  {/* Roof region height */}
+                                  <div>
+                                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                                      <span style={{ fontSize: 11, color: "#0369a1", fontWeight: 600 }}>Roof Region Height</span>
+                                      <span style={{ fontSize: 10, color: "#0369a1" }}>{Math.round(edgeRoofRegionFraction * 100)}% of image</span>
+                                    </div>
+                                    <input
+                                      type="range" min={0.25} max={0.80} step={0.05}
+                                      value={edgeRoofRegionFraction}
+                                      onChange={(e) => { setEdgeRoofRegionFraction(parseFloat(e.target.value)); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                      style={{ width: "100%", accentColor: "#0369a1" }}
+                                    />
+                                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                      <span style={{ fontSize: 9, color: "#0369a1" }}>Less roof</span>
+                                      <span style={{ fontSize: 9, color: "#0369a1" }}>More roof</span>
+                                    </div>
+                                  </div>
+                                  {/* Ignore vertical toggle */}
+                                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={edgeIgnoreVertical}
+                                      onChange={(e) => { setEdgeIgnoreVertical(e.target.checked); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                      style={{ accentColor: "#0369a1", width: 14, height: 14 }}
+                                    />
+                                    <span style={{ fontSize: 11, color: "#0369a1", fontWeight: 600 }}>Filter vertical lines</span>
+                                  </label>
+                                  {/* Sky boundary bias toggle */}
+                                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={edgeSkyBoundaryBias}
+                                      onChange={(e) => { setEdgeSkyBoundaryBias(e.target.checked); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                      style={{ accentColor: "#0369a1", width: 14, height: 14 }}
+                                    />
+                                    <span style={{ fontSize: 11, color: "#0369a1", fontWeight: 600 }}>Prefer sky boundary (ridge bias)</span>
+                                  </label>
+                                  {/* Edge contrast threshold */}
+                                  <div>
+                                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                                      <span style={{ fontSize: 11, color: "#0369a1", fontWeight: 600 }}>Edge Contrast Threshold</span>
+                                      <span style={{ fontSize: 10, color: "#0369a1" }}>{Math.round(edgeContrastThreshold * 100)}%</span>
+                                    </div>
+                                    <input
+                                      type="range" min={0} max={0.20} step={0.01}
+                                      value={edgeContrastThreshold}
+                                      onChange={(e) => { setEdgeContrastThreshold(parseFloat(e.target.value)); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                      style={{ width: "100%", accentColor: "#0369a1" }}
+                                    />
+                                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                      <span style={{ fontSize: 9, color: "#0369a1" }}>Keep all</span>
+                                      <span style={{ fontSize: 9, color: "#0369a1" }}>High contrast only</span>
+                                    </div>
+                                  </div>
+                                  {/* Lines per direction */}
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span style={{ fontSize: 11, color: "#0369a1", fontWeight: 600 }}>Lines per direction</span>
+                                    <select
+                                      value={edgePerDirectionCap}
+                                      onChange={(e) => { setEdgePerDirectionCap(parseInt(e.target.value)); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                      style={{ fontSize: 10, padding: "2px 4px", borderRadius: 4, border: "1px solid #7dd3fc", background: "#e0f2fe", color: "#0369a1", width: 44 }}
+                                    >
+                                      {[1,2,3].map((n) => <option key={n} value={n}>{n}</option>)}
+                                    </select>
+                                  </div>
+                                </>
+                              )}
+
+                              {/* Top-down only: dominant directions toggle */}
+                              {edgeMode === "topDown" && (
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", flex: 1 }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={edgeDominantOnly}
+                                      onChange={(e) => { setEdgeDominantOnly(e.target.checked); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                      style={{ accentColor: "#ca8a04", width: 14, height: 14 }}
+                                    />
+                                    <span style={{ fontSize: 11, color: "#78350f", fontWeight: 600 }}>Dominant Dirs Only</span>
+                                  </label>
+                                  {edgeDominantOnly && (
+                                    <select
+                                      value={edgeNumDirections}
+                                      onChange={(e) => { setEdgeNumDirections(parseInt(e.target.value)); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                      style={{ fontSize: 10, padding: "2px 4px", borderRadius: 4, border: "1px solid #fde047", background: "#fffbeb", color: "#78350f", width: 46 }}
+                                    >
+                                      {[2,3,4,5,6].map((n) => <option key={n} value={n}>K={n}</option>)}
+                                    </select>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Detect button */}
+                              <button
+                                style={{ padding: "8px 12px", borderRadius: 8, border: "none", background: edgeDetecting ? "rgba(180,130,0,0.3)" : "linear-gradient(135deg,#ca8a04,#a16207)", fontSize: 12, fontWeight: 700, color: edgeDetecting ? "#78350f" : "#fff", cursor: edgeDetecting ? "default" : "pointer" }}
+                                disabled={edgeDetecting}
+                                onClick={async () => {
+                                  if (!photoImg || !active) return;
+                                  setEdgeDetecting(true);
+                                  setErasedSegIds(new Set());
+                                  setUserAddedSegs([]);
+                                  setPlaneSuggs([]);
+                                  try {
+                                    let segs = await detectEdges(photoImg, w, h, {
+                                      sensitivity: edgeSensitivity,
+                                      detailSuppression: edgeDetailSuppression,
+                                      minLineFraction: edgeMinLine,
+                                      mode: edgeMode,
+                                      roofRegionFraction: edgeRoofRegionFraction,
+                                      ignoreVertical: edgeIgnoreVertical,
+                                      skyBoundaryBias: edgeSkyBoundaryBias,
+                                      edgeContrastThreshold: edgeContrastThreshold,
+                                      perDirectionCap: edgePerDirectionCap,
+                                      dominantOnly: edgeDominantOnly,
+                                      numDirections: edgeNumDirections,
+                                      directionTolDeg: 10,
+                                    });
+                                    // Apply spatial erase mask: remove segs near previously-erased positions
+                                    if (edgeErasedMask.length > 0) {
+                                      const MASK_RADIUS = 30;
+                                      segs = segs.filter((s) => {
+                                        const mx = (s.x1 + s.x2) / 2, my = (s.y1 + s.y2) / 2;
+                                        return !edgeErasedMask.some((m) => (mx-m.x)**2 + (my-m.y)**2 < MASK_RADIUS**2);
+                                      });
+                                    }
+                                    setDetectedSegs(segs);
+                                  } finally {
+                                    setEdgeDetecting(false);
+                                  }
+                                }}
+                              >
+                                {edgeDetecting ? "Detecting…" : detectedSegs.length > 0 ? "Re-detect" : "Detect Edges"}
+                              </button>
+
+                              {/* Edge count + show/hide + max lines */}
+                              {visibleSegs.length > 0 && (
+                                <>
+                                  {/* Count row + show/hide */}
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <div style={{ fontSize: 11, color: "#78350f" }}>
+                                      {displaySegs.length}{visibleSegs.length > edgeMaxLines ? `/${visibleSegs.length}` : ""} segments
+                                      {edgeErasedMask.length > 0 ? ` (${edgeErasedMask.length} masked)` : ""}
+                                    </div>
+                                    <button
+                                      style={{ ...smallBtn, fontSize: 10, padding: "3px 8px",
+                                        background: showDetectedLayer ? "#e0f2fe" : undefined,
+                                        borderColor: showDetectedLayer ? "#7dd3fc" : undefined,
+                                        color: showDetectedLayer ? "#0284c7" : "#64748b",
+                                      }}
+                                      onClick={() => setShowDetectedLayer((v) => !v)}
+                                    >
+                                      {showDetectedLayer ? "◉ Hide" : "◎ Show"}
+                                    </button>
+                                  </div>
+
+                                  {/* Max lines slider */}
+                                  <div>
+                                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                                      <span style={{ fontSize: 11, color: "#78350f", fontWeight: 600 }}>Max Lines</span>
+                                      <span style={{ fontSize: 10, color: "#92400e" }}>{edgeMaxLines}</span>
+                                    </div>
+                                    <input
+                                      type="range" min={10} max={200} step={5}
+                                      value={edgeMaxLines}
+                                      onChange={(e) => setEdgeMaxLines(parseInt(e.target.value))}
+                                      style={{ width: "100%", accentColor: "#ca8a04" }}
+                                    />
+                                  </div>
+
+                                  {/* Label color legend */}
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 10px" }}>
+                                    {([
+                                      { label: "ridgeCandidate",       color: "#f97316", name: "Ridge" },
+                                      { label: "eaveCandidate",        color: "#3b82f6", name: "Eave" },
+                                      { label: "rakeCandidateLeft",    color: "#14b8a6", name: "Rake←" },
+                                      { label: "rakeCandidateRight",   color: "#84cc16", name: "Rake→" },
+                                      { label: "rakeCandidate",        color: "#10b981", name: "Rake" },
+                                      { label: "valleyCandidate",      color: "#a855f7", name: "Valley" },
+                                      { label: "unknown",              color: "#facc15", name: "Other" },
+                                    ] as const).map(({ label, color, name }) => {
+                                      const cnt = displaySegs.filter((s) => s.label === label).length;
+                                      if (cnt === 0) return null;
+                                      return (
+                                        <div key={label} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                                          <div style={{ width: 10, height: 3, background: color, borderRadius: 2 }} />
+                                          <span style={{ fontSize: 9, color: "#78350f" }}>{name} {cnt}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Add to Model button */}
+                                  <button
+                                    style={{ padding: "7px 12px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#059669,#047857)", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer" }}
+                                    onClick={() => {
+                                      patchActiveRoof((r) => {
+                                        const newLines = displaySegs.map((s) => {
+                                          const kind: LineKind =
+                                            s.label === "eaveCandidate"        ? "EAVE"   :
+                                            s.label === "ridgeCandidate"       ? "RIDGE"  :
+                                            s.label === "valleyCandidate"      ? "VALLEY" :
+                                            s.label === "rakeCandidate"        ? "RAKE"   :
+                                            s.label === "rakeCandidateLeft"    ? "RAKE"   :
+                                            s.label === "rakeCandidateRight"   ? "RAKE"   : "EAVE";
+                                          return {
+                                            id: Math.random().toString(16).slice(2),
+                                            kind,
+                                            points: [s.x1, s.y1, s.x2, s.y2],
+                                          } as Polyline;
+                                        });
+                                        return { ...r, lines: [...r.lines, ...newLines] };
+                                      });
+                                      setEdgePanel(false);
+                                      setEdgeTool("NONE");
+                                      setEdgeAddDraft(null);
+                                      setDetectedSegs([]);
+                                      setErasedSegIds(new Set());
+                                      setEdgeErasedMask([]);
+                                      setUserAddedSegs([]);
+                                      setPlaneSuggs([]);
+                                    }}
+                                  >
+                                    ↳ Add {displaySegs.length} Lines to Model
+                                  </button>
+
+                                  {/* Tool selector */}
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                                    {(["NONE", "ERASE_EDGE", "ADD_EDGE"] as const).map((t) => (
+                                      <button
+                                        key={t}
+                                        style={{ ...smallBtn, fontSize: 10, padding: "5px 4px",
+                                          background: edgeTool === t ? (t === "ERASE_EDGE" ? "#fee2e2" : t === "ADD_EDGE" ? "#dcfce7" : "#e0f2fe") : undefined,
+                                          borderColor: edgeTool === t ? (t === "ERASE_EDGE" ? "#fca5a5" : t === "ADD_EDGE" ? "#86efac" : "#7dd3fc") : undefined,
+                                          color: edgeTool === t ? (t === "ERASE_EDGE" ? "#dc2626" : t === "ADD_EDGE" ? "#16a34a" : "#0284c7") : undefined,
+                                        }}
+                                        onClick={() => { setEdgeTool(t); setEdgeAddDraft(null); }}
+                                      >
+                                        {t === "NONE" ? "↖ Select" : t === "ERASE_EDGE" ? "✕ Erase" : "+ Add"}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {edgeTool !== "NONE" && (
+                                    <div style={{ fontSize: 10, color: "#92400e", fontStyle: "italic", lineHeight: 1.4, textAlign: "center" }}>
+                                      {edgeTool === "ERASE_EDGE"
+                                        ? "Click colored lines to erase. Erased positions are remembered on re-detect."
+                                        : "Click two points on the canvas to draw an edge."}
+                                    </div>
+                                  )}
+                                  {edgeErasedMask.length > 0 && (
+                                    <button
+                                      style={{ ...smallBtn, fontSize: 10, color: "#b45309", borderColor: "rgba(180,83,9,0.25)" }}
+                                      onClick={() => { setEdgeErasedMask([]); setErasedSegIds(new Set()); }}
+                                    >
+                                      ↺ Reset erase mask ({edgeErasedMask.length})
+                                    </button>
+                                  )}
+                                </>
+                              )}
+
+                              {/* Plane suggestion (top-down only) / facade notice */}
+                              {edgeMode === "facade" ? (
+                                visibleSegs.length > 0 && (
+                                  <div style={{ fontSize: 10, color: "#0369a1", background: "#e0f2fe", borderRadius: 6, padding: "6px 8px", lineHeight: 1.5 }}>
+                                    Plane detection requires top-down imagery. Use "Add Lines to Model" above to capture detected edges, then trace the outline manually.
+                                  </div>
+                                )
+                              ) : (
+                                <>
+                                  {visibleSegs.length >= 3 && (
+                                    <button
+                                      style={{ padding: "8px 12px", borderRadius: 8, border: "none", background: suggestingPlanes ? "rgba(59,130,246,0.3)" : "linear-gradient(135deg,#2563eb,#1d4ed8)", fontSize: 12, fontWeight: 700, color: suggestingPlanes ? "#1e40af" : "#fff", cursor: suggestingPlanes ? "default" : "pointer" }}
+                                      disabled={suggestingPlanes}
+                                      onClick={() => {
+                                        setSuggestingPlanes(true);
+                                        setPlaneSuggs([]);
+                                        setTimeout(() => {
+                                          try {
+                                            const suggs = suggestPlanes(visibleSegs, w, h, { maxPlanes: 8, minArea: 2000 });
+                                            setPlaneSuggs(suggs);
+                                          } finally {
+                                            setSuggestingPlanes(false);
+                                          }
+                                        }, 30);
+                                      }}
+                                    >
+                                      {suggestingPlanes ? "Analyzing…" : planeSuggs.length > 0 ? "Re-suggest Planes" : "Suggest Roof Planes"}
+                                    </button>
+                                  )}
+                                  {planeSuggs.length > 0 && (
+                                    <div style={{ display: "grid", gap: 4 }}>
+                                      <div style={{ fontSize: 11, fontWeight: 600, color: "#1e40af" }}>
+                                        {planeSuggs.length} plane{planeSuggs.length > 1 ? "s" : ""} — hover to preview, click to adopt
+                                      </div>
+                                      {planeSuggs.map((ps, i) => (
+                                        <button
+                                          key={ps.id}
+                                          style={{ ...smallBtn, justifyContent: "space-between", display: "flex", gap: 6,
+                                            background: ps.id === hoveredSuggId ? "linear-gradient(135deg,#eff6ff,#dbeafe)" : undefined,
+                                            borderColor: ps.id === hoveredSuggId ? "#93c5fd" : undefined,
+                                          }}
+                                          onMouseEnter={() => setHoveredSuggId(ps.id)}
+                                          onMouseLeave={() => setHoveredSuggId(null)}
+                                          onClick={() => {
+                                            patchActiveRoof((r) => ({ ...r, outline: ps.polygon, closed: true }));
+                                            setPlaneSuggs([]); setEdgePanel(false); setEdgeTool("NONE");
+                                            setDetectedSegs([]); setErasedSegIds(new Set()); setEdgeErasedMask([]); setUserAddedSegs([]);
+                                          }}
+                                        >
+                                          <span style={{ fontSize: 11, color: "#1e40af", fontWeight: 700 }}>Plane {i + 1}</span>
+                                          <span style={{ fontSize: 10, color: "#64748b" }}>{Math.round(ps.area / 1000)}k px²</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {planeSuggs.length === 0 && visibleSegs.length >= 3 && !suggestingPlanes && detectedSegs.length > 0 && (
+                                    <div style={{ fontSize: 10, color: "#92400e", fontStyle: "italic", lineHeight: 1.4 }}>
+                                      No closed planes found. Try erasing noisy edges or increasing K directions.
+                                    </div>
+                                  )}
+                                </>
+                              )}
                             </div>
                           )}
 
@@ -2869,7 +3692,7 @@ export default function Page() {
         backgroundSize: "28px 28px",
         position: "relative",
         overflow: "hidden",
-        ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minHeight: 0 } : {}),
+        ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0 } : {}),
       }}>
         <Stage
           ref={stageRef}
@@ -2933,10 +3756,11 @@ export default function Page() {
               <Line points={draftHole} stroke="rgba(255,255,255,0.9)" strokeWidth={3} dash={[6, 6]} lineCap="round" lineJoin="round" />
             )}
 
-            {/* Guide lines */}
+            {/* Guide lines — dimmed when cleanup preview is active */}
             {active && showGuides && active.roofs.flatMap((r) => {
               const all = [...r.lines];
               if (r.id === activeRoof?.id && draftLine && draftLine.points.length >= 4) all.push({ ...draftLine, id: "draft" });
+              const baseOpacity = cleanupPreview ? 0.18 : (active.step === "TRACE" ? 0.95 : 0.45);
               return all.map((l) => (
                 <Line
                   key={`guide-${r.id}-${l.id}`}
@@ -2946,12 +3770,12 @@ export default function Page() {
                   dash={[10, 7]}
                   lineCap="round"
                   lineJoin="round"
-                  opacity={active.step === "TRACE" ? 0.95 : 0.45}
+                  opacity={baseOpacity}
                 />
               ));
             })}
 
-            {/* Roof outlines */}
+            {/* Roof outlines — dimmed when cleanup preview is active */}
             {active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.map((r) =>
               r.outline.length >= 2 ? (
                 <Line
@@ -2960,8 +3784,105 @@ export default function Page() {
                   closed={r.closed}
                   stroke={r.id === active.activeRoofId ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.55)"}
                   strokeWidth={r.id === active.activeRoofId ? 2.5 : 2}
+                  opacity={cleanupPreview && r.id === active.activeRoofId ? 0.18 : 1}
                 />
               ) : null
+            )}
+
+            {/* ── Facade roof region mask ── */}
+            {active?.step === "TRACE" && edgePanel && edgeMode === "facade" && (
+              <>
+                {/* Dimmed band below the roof region */}
+                <Rect
+                  x={0} y={Math.round(h * edgeRoofRegionFraction)}
+                  width={w} height={h - Math.round(h * edgeRoofRegionFraction)}
+                  fill="rgba(0,0,0,0.35)"
+                  listening={false}
+                />
+                {/* Dashed boundary line */}
+                <Line
+                  points={[0, Math.round(h * edgeRoofRegionFraction), w, Math.round(h * edgeRoofRegionFraction)]}
+                  stroke="rgba(56,189,248,0.9)"
+                  strokeWidth={2}
+                  dash={[10, 6]}
+                  lineCap="round"
+                  listening={false}
+                />
+              </>
+            )}
+
+            {/* ── Edge Detection overlays ── */}
+            {active?.step === "TRACE" && edgePanel && showDetectedLayer && displaySegs.length > 0 && (
+              <>
+                {displaySegs.map((s) => (
+                  <Line
+                    key={`edge-${s.id}`}
+                    points={[s.x1, s.y1, s.x2, s.y2]}
+                    stroke={
+                      s.label === "eaveCandidate"        ? "rgba(59,130,246,0.90)"  :
+                      s.label === "ridgeCandidate"       ? "rgba(249,115,22,0.90)"  :
+                      s.label === "valleyCandidate"      ? "rgba(168,85,247,0.90)"  :
+                      s.label === "rakeCandidateLeft"    ? "rgba(20,184,166,0.90)"  :
+                      s.label === "rakeCandidateRight"   ? "rgba(132,204,22,0.90)"  :
+                      s.label === "rakeCandidate"        ? "rgba(16,185,129,0.85)"  :
+                      "rgba(250,204,21,0.75)"
+                    }
+                    strokeWidth={2}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                ))}
+              </>
+            )}
+            {/* Edge-add draft line */}
+            {active?.step === "TRACE" && edgeTool === "ADD_EDGE" && edgeAddDraft && (
+              <Circle x={edgeAddDraft[0]} y={edgeAddDraft[1]} radius={5} fill="rgba(250,204,21,0.9)" />
+            )}
+            {/* Plane suggestion polygons */}
+            {active?.step === "TRACE" && planeSuggs.map((ps) => {
+              const isHovered = ps.id === hoveredSuggId;
+              return (
+                <Line
+                  key={`plane-${ps.id}`}
+                  points={ps.polygon}
+                  closed
+                  stroke={isHovered ? "rgba(59,130,246,1)" : "rgba(59,130,246,0.55)"}
+                  strokeWidth={isHovered ? 3 : 2}
+                  fill={isHovered ? "rgba(59,130,246,0.18)" : "rgba(59,130,246,0.07)"}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              );
+            })}
+
+            {/* ── Cleanup preview overlay ── */}
+            {/* "Before" ghost: current geometry shown faded                          */}
+            {/* "After"  clean: cleaned geometry shown in green at full opacity       */}
+            {cleanupPreview && activeRoof && active?.step === "TRACE" && (
+              <>
+                {/* After: cleaned outline */}
+                {cleanupPreview.outline.length >= 4 && (
+                  <Line
+                    points={cleanupPreview.outline}
+                    closed={cleanupPreview.closed}
+                    stroke="rgba(74,222,128,0.95)"
+                    strokeWidth={2.5}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                )}
+                {/* After: cleaned lines */}
+                {cleanupPreview.lines.map((l) => (
+                  <Line
+                    key={`cp-after-${l.id}`}
+                    points={l.points}
+                    stroke="rgba(74,222,128,0.95)"
+                    strokeWidth={4}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                ))}
+              </>
             )}
 
             {/* Hole outlines */}
