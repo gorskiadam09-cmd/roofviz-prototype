@@ -188,11 +188,11 @@ function atLeast(cur: Step, target: Step) {
 }
 
 function kindColor(k: LineKind) {
-  if (k === "EAVE") return "rgba(37,99,235,0.95)";
-  if (k === "RAKE") return "rgba(16,185,129,0.95)";
-  if (k === "VALLEY") return "rgba(100,116,139,0.95)";
-  if (k === "RIDGE") return "rgba(245,158,11,0.95)";
-  return "rgba(168,85,247,0.95)"; // HIP
+  if (k === "EAVE") return "#2563eb";
+  if (k === "RAKE") return "#10b981";
+  if (k === "VALLEY") return "#64748b";
+  if (k === "RIDGE") return "#f59e0b";
+  return "#a855f7"; // HIP
 }
 
 function metalRGBA(color: MetalColor, alpha: number) {
@@ -4051,16 +4051,26 @@ export default function Page() {
               if (r.id === activeRoof?.id && draftLine && draftLine.points.length >= 4) all.push({ ...draftLine, id: "draft" });
               const baseOpacity = cleanupPreview ? 0.18 : (active.step === "TRACE" ? 0.95 : 0.45);
               return all.map((l) => (
-                <Line
-                  key={`guide-${r.id}-${l.id}`}
-                  points={l.points}
-                  stroke={kindColor(l.kind)}
-                  strokeWidth={3}
-                  dash={[10, 7]}
-                  lineCap="round"
-                  lineJoin="round"
-                  opacity={baseOpacity}
-                />
+                <React.Fragment key={`guide-${r.id}-${l.id}`}>
+                  <Line
+                    points={l.points}
+                    stroke="#000"
+                    strokeWidth={7}
+                    dash={[10, 7]}
+                    lineCap="round"
+                    lineJoin="round"
+                    opacity={baseOpacity * 0.35}
+                  />
+                  <Line
+                    points={l.points}
+                    stroke={kindColor(l.kind)}
+                    strokeWidth={4}
+                    dash={[10, 7]}
+                    lineCap="round"
+                    lineJoin="round"
+                    opacity={baseOpacity}
+                  />
+                </React.Fragment>
               ));
             })}
 
