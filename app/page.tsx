@@ -3121,7 +3121,16 @@ export default function Page() {
                                       color: edgeMode === m ? (m === "facade" ? "#0369a1" : "#854d0e") : "#64748b",
                                       fontWeight: edgeMode === m ? 700 : 400,
                                     }}
-                                    onClick={() => { setEdgeMode(m); setDetectedSegs([]); setPlaneSuggs([]); }}
+                                    onClick={() => {
+                                      setEdgeMode(m);
+                                      setDetectedSegs([]); setPlaneSuggs([]);
+                                      if (m === "facade") {
+                                        setEdgeSensitivity(0.40);
+                                        setEdgeDetailSuppression(0.70);
+                                        setEdgeContrastThreshold(0.10);
+                                        setEdgePerDirectionCap(1);
+                                      }
+                                    }}
                                   >
                                     {m === "facade" ? "🏠 Facade View" : "🛰 Top-Down View"}
                                   </button>
@@ -3217,7 +3226,7 @@ export default function Page() {
                                       <span style={{ fontSize: 10, color: "#0369a1" }}>{Math.round(edgeContrastThreshold * 100)}%</span>
                                     </div>
                                     <input
-                                      type="range" min={0} max={0.20} step={0.01}
+                                      type="range" min={0} max={0.35} step={0.01}
                                       value={edgeContrastThreshold}
                                       onChange={(e) => { setEdgeContrastThreshold(parseFloat(e.target.value)); setDetectedSegs([]); setPlaneSuggs([]); }}
                                       style={{ width: "100%", accentColor: "#0369a1" }}

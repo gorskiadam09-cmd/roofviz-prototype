@@ -1,5 +1,5 @@
 /**
- * edgeDetection.ts  (v5 — facade-quality heuristics)
+ * edgeDetection.ts  (v6 — deterministic facade line selection)
  *
  * Facade mode pipeline (street-level photos):
  *   1. Double bilateral + CLAHE + median (strong texture kill)
@@ -8,21 +8,23 @@
  *   4. CC + PCA → raw segments
  *   5. mergeSegments (collinear cluster)
  *   6. facadeOrientationFilter — drop near-verticals (windows/doors)
- *   7. contrastConsistencyFilter — drop low-contrast lines (window glass)
- *   8. extendRakeToBounds — extend diagonal slopes to roof region bounds
- *   9. facadeSelectBestLines — directional cap + relabel (ridge/eave/left-rake/right-rake)
- *  10. applyHorizonBias — confidence boost near sky boundary and eave line
+ *   7. contrastConsistencyFilter — drop low-contrast lines (window glass, trim)
+ *   8. selectFacadeCanonicalLines — enforces 1 ridge + 1 eave + N rakes (v6):
+ *        • enforceRidge: pick longest near-sky horizontal, gradient-extend, 0.88 conf
+ *        • extendLineByGradient: walk endpoints while perpendicular contrast holds
+ *        • snapRakeToRidge: move rake top endpoint to ridge intersection
  *
- * Top-down mode pipeline (aerial photos) is unchanged from v4.
+ * Top-down mode pipeline (aerial photos) is unchanged.
  *
- * New exports (v5):
- *   findSkyBoundaryY()          — row-wise gradient scan → ridge y anchor
- *   contrastConsistencyFilter() — discard low-contrast segments (window/door noise)
- *   facadeSelectBestLines()     — directional cluster cap + left/right rake relabeling
+ * New in v6:
+ *   extendLineByGradient() — gradient-guided extension of any segment
+ *   enforceRidge()         — canonical ridge selection and extension
+ *   snapRakeToRidge()      — snap rake top endpoint to ridge line
+ *   selectFacadeCanonicalLines() — replaces facadeSelectBestLines in pipeline
  *
- * Label types added:
- *   "rakeCandidateLeft"  — diagonal slope on the left side of the roof
- *   "rakeCandidateRight" — diagonal slope on the right side of the roof
+ * Default changes (v6):
+ *   edgeContrastThreshold: 0.06 → 0.10 (~25/255, removes window/door trim)
+ *   perDirectionCap:       2    → 1    (exactly 1 canonical rake per side)
  *
  * Coordinate contract: photo at (0,0) size imgW×imgH in Konva world space.
  */
@@ -373,51 +375,6 @@ export function contrastConsistencyFilter(
   });
 }
 
-// ── Rake extension to roof region bounds ──────────────────────────────────────
-
-/**
- * Extend a diagonal segment to the edges of the roof region.
- * Uses the line's midpoint and angle to compute where it crosses
- * x=0, x=imgW, y=0, y=roofBottom.
- */
-function extendRakeToBounds(seg: EdgeSegment, imgW: number, roofBottom: number): EdgeSegment {
-  const angDeg = (seg.angle * 180) / Math.PI;
-  const normAng = angDeg > 90 ? 180 - angDeg : angDeg;
-  if (normAng < 15 || normAng > 75) return seg;
-
-  const mx = (seg.x1 + seg.x2) / 2;
-  const my = (seg.y1 + seg.y2) / 2;
-  const dx = Math.cos(seg.angle), dy = Math.sin(seg.angle);
-
-  // Collect all t-values where the parametric line hits image bounds
-  const candidates: number[] = [];
-  if (Math.abs(dx) > 1e-6) {
-    candidates.push(-mx / dx);
-    candidates.push((imgW - mx) / dx);
-  }
-  if (Math.abs(dy) > 1e-6) {
-    candidates.push(-my / dy);
-    candidates.push((roofBottom - my) / dy);
-    candidates.push((0 - my) / dy);
-  }
-
-  const negT = candidates.filter(t => t < -0.5);
-  const posT = candidates.filter(t => t > 0.5);
-  if (negT.length === 0 || posT.length === 0) return seg;
-
-  const t1 = Math.max(...negT);
-  const t2 = Math.min(...posT);
-
-  const clampX = (v: number) => Math.max(0, Math.min(imgW, v));
-  const clampY = (v: number) => Math.max(0, Math.min(roofBottom, v));
-
-  const x1 = clampX(mx + t1 * dx), y1 = clampY(my + t1 * dy);
-  const x2 = clampX(mx + t2 * dx), y2 = clampY(my + t2 * dy);
-  const newLen = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
-
-  return { ...seg, x1, y1, x2, y2, length: newLen };
-}
-
 // ── Facade directional cap + canonical relabeling ─────────────────────────────
 
 /**
@@ -490,6 +447,216 @@ export function facadeSelectBestLines(
   const labeledRight = bestRight.map(s => ({ ...s, label: "rakeCandidateRight" as DetectedLineLabel, confidence: Math.min(1, s.confidence + 0.08) }));
 
   return [...labeledHoriz, ...labeledLeft, ...labeledRight];
+}
+
+// ── v6: gradient-guided extension + canonical selection ───────────────────────
+
+/** Infinite-line intersection of the two lines defined by (x1,y1)→(x2,y2) and (x3,y3)→(x4,y4). */
+function lineIntersectPt(
+  x1: number, y1: number, x2: number, y2: number,
+  x3: number, y3: number, x4: number, y4: number,
+): { x: number; y: number } | null {
+  const dx1 = x2 - x1, dy1 = y2 - y1;
+  const dx2 = x4 - x3, dy2 = y4 - y3;
+  const denom = dx1 * dy2 - dy1 * dx2;
+  if (Math.abs(denom) < 1e-9) return null;
+  const t = ((x3 - x1) * dy2 - (y3 - y1) * dx2) / denom;
+  return { x: x1 + t * dx1, y: y1 + t * dy1 };
+}
+
+/**
+ * Walk from each endpoint along the segment direction.
+ * At each step sample perpendicular contrast in the preprocessed image.
+ * Stop when contrast drops below `contrastThreshRaw × 0.6` or ROI boundary reached.
+ * All coordinates are in world space; preprocessed is at processing scale.
+ */
+function extendLineByGradient(
+  seg: EdgeSegment,
+  preprocessed: Float32Array,
+  pw: number, ph: number,
+  scale: number,
+  maxWorldX: number, maxWorldY: number,
+  contrastThreshRaw: number,
+  stepWorldPx = 4,
+  maxSteps = 80,
+  normalOffsetProc = 4,
+): EdgeSegment {
+  const px1 = seg.x1 * scale, py1 = seg.y1 * scale;
+  const px2 = seg.x2 * scale, py2 = seg.y2 * scale;
+  const ddx = px2 - px1, ddy = py2 - py1;
+  const plen = Math.sqrt(ddx * ddx + ddy * ddy);
+  if (plen < 2) return seg;
+  const ux = ddx / plen, uy = ddy / plen;
+  const nx = -uy, ny = ux; // perpendicular unit vector
+  const stepProc = Math.max(1, stepWorldPx * scale);
+  const minContrast = contrastThreshRaw * 0.6;
+  const maxPX = maxWorldX * scale, maxPY = maxWorldY * scale;
+
+  function sampleContrast(pcx: number, pcy: number): number {
+    let best = 0;
+    for (const off of [normalOffsetProc, Math.round(normalOffsetProc * 1.5)]) {
+      const ax = Math.round(pcx + nx * off), ay = Math.round(pcy + ny * off);
+      const bx = Math.round(pcx - nx * off), by = Math.round(pcy - ny * off);
+      if (ax < 0 || ax >= pw || ay < 0 || ay >= ph) continue;
+      if (bx < 0 || bx >= pw || by < 0 || by >= ph) continue;
+      const c = Math.abs(preprocessed[ay * pw + ax] - preprocessed[by * pw + bx]);
+      if (c > best) best = c;
+    }
+    return best;
+  }
+
+  // Walk backward from x1/y1
+  let ex1p = px1, ey1p = py1;
+  for (let step = 0; step < maxSteps; step++) {
+    const tx = ex1p - ux * stepProc, ty = ey1p - uy * stepProc;
+    if (tx < 0 || tx > maxPX || ty < 0 || ty > maxPY) break;
+    if (sampleContrast(tx, ty) < minContrast) break;
+    ex1p = tx; ey1p = ty;
+  }
+  // Walk forward from x2/y2
+  let ex2p = px2, ey2p = py2;
+  for (let step = 0; step < maxSteps; step++) {
+    const tx = ex2p + ux * stepProc, ty = ey2p + uy * stepProc;
+    if (tx < 0 || tx > maxPX || ty < 0 || ty > maxPY) break;
+    if (sampleContrast(tx, ty) < minContrast) break;
+    ex2p = tx; ey2p = ty;
+  }
+
+  const newX1 = ex1p / scale, newY1 = ey1p / scale;
+  const newX2 = ex2p / scale, newY2 = ey2p / scale;
+  const newLen = Math.sqrt((newX2 - newX1) ** 2 + (newY2 - newY1) ** 2);
+  return { ...seg, x1: newX1, y1: newY1, x2: newX2, y2: newY2, length: newLen };
+}
+
+/**
+ * Select the single best horizontal segment as the canonical ridge.
+ * Prefers the longest segment within ±40px of skyBoundaryY_world,
+ * falls back to the top half by position.  Gradient-extends the result.
+ */
+function enforceRidge(
+  horizontals: EdgeSegment[],
+  preprocessed: Float32Array,
+  pw: number, ph: number,
+  scale: number,
+  imgW: number,
+  roofBottom: number,
+  skyBoundaryY_world: number,
+  contrastThreshRaw: number,
+): EdgeSegment | null {
+  if (horizontals.length === 0) return null;
+  const NEAR_SKY_TOL = 40; // world px
+  let candidates = horizontals.filter(
+    s => Math.abs((s.y1 + s.y2) / 2 - skyBoundaryY_world) < NEAR_SKY_TOL,
+  );
+  if (candidates.length === 0) {
+    candidates = horizontals.slice()
+      .sort((a, b) => (a.y1 + a.y2) - (b.y1 + b.y2))
+      .slice(0, Math.max(1, Math.ceil(horizontals.length / 2)));
+  }
+  const best = candidates.reduce((a, b) => b.length >= a.length ? b : a);
+  return extendLineByGradient(best, preprocessed, pw, ph, scale, imgW, roofBottom, contrastThreshRaw);
+}
+
+/**
+ * Snap the top endpoint of a rake (smaller-y end) to the ridge line intersection
+ * if within snapTol world pixels.
+ */
+function snapRakeToRidge(
+  rake: EdgeSegment,
+  ridge: EdgeSegment,
+  snapTol: number,
+): EdgeSegment {
+  const pt = lineIntersectPt(
+    rake.x1, rake.y1, rake.x2, rake.y2,
+    ridge.x1, ridge.y1, ridge.x2, ridge.y2,
+  );
+  if (!pt) return rake;
+  const useFirst = rake.y1 <= rake.y2;
+  const topX = useFirst ? rake.x1 : rake.x2;
+  const topY = useFirst ? rake.y1 : rake.y2;
+  const dist = Math.sqrt((pt.x - topX) ** 2 + (pt.y - topY) ** 2);
+  if (dist > snapTol) return rake;
+  const newX1 = useFirst ? pt.x : rake.x1;
+  const newY1 = useFirst ? pt.y : rake.y1;
+  const newX2 = useFirst ? rake.x2 : pt.x;
+  const newY2 = useFirst ? rake.y2 : pt.y;
+  const newLen = Math.sqrt((newX2 - newX1) ** 2 + (newY2 - newY1) ** 2);
+  return { ...rake, x1: newX1, y1: newY1, x2: newX2, y2: newY2, length: newLen };
+}
+
+/**
+ * Canonical facade line selection (v6).
+ * Returns exactly: 1 ridgeCandidate + 0–1 eaveCandidate +
+ *                  ≤perDirectionCap rakeCandidateLeft/Right each.
+ * Each line is gradient-extended; rakes are snapped to ridge intersection.
+ */
+function selectFacadeCanonicalLines(
+  segs: EdgeSegment[],
+  preprocessed: Float32Array,
+  pw: number, ph: number,
+  scale: number,
+  imgW: number,
+  imgH: number,
+  skyBoundaryY_world: number,
+  roofRegionFraction: number,
+  contrastThreshRaw: number,
+  perDirectionCap = 1,
+): LabeledSegment[] {
+  const roofBottom = roofRegionFraction * imgH;
+
+  function normAng(s: EdgeSegment): number {
+    const a = (s.angle * 180) / Math.PI;
+    return a > 90 ? 180 - a : a;
+  }
+  function isRakeRight(s: EdgeSegment): boolean {
+    let x1 = s.x1, x2 = s.x2;
+    if (s.y1 > s.y2) { x1 = s.x2; x2 = s.x1; }
+    return x2 >= x1;
+  }
+
+  const horizontal: EdgeSegment[] = [];
+  const rakeLeft: EdgeSegment[]   = [];
+  const rakeRight: EdgeSegment[]  = [];
+  for (const s of segs) {
+    const na = normAng(s);
+    if (na < 25)       horizontal.push(s);
+    else if (na <= 75) (isRakeRight(s) ? rakeRight : rakeLeft).push(s);
+  }
+
+  const results: LabeledSegment[] = [];
+
+  // ── Ridge ────────────────────────────────────────────────────────────────────
+  const ridgeSeg = enforceRidge(
+    horizontal, preprocessed, pw, ph, scale,
+    imgW, roofBottom, skyBoundaryY_world, contrastThreshRaw,
+  );
+  if (ridgeSeg) {
+    results.push({ ...ridgeSeg, label: "ridgeCandidate", confidence: 0.88, source: "auto-detect" });
+  }
+
+  // ── Eave (optional, longest horizontal well below ridge) ────────────────────
+  const ridgeMidY = ridgeSeg ? (ridgeSeg.y1 + ridgeSeg.y2) / 2 : skyBoundaryY_world;
+  const eaveCandidates = horizontal
+    .filter(s => (s.y1 + s.y2) / 2 > ridgeMidY + imgH * 0.08)
+    .sort((a, b) => b.length - a.length);
+  if (eaveCandidates.length > 0) {
+    results.push({ ...eaveCandidates[0], label: "eaveCandidate", confidence: 0.72, source: "auto-detect" });
+  }
+
+  // ── Rakes (gradient-extended + snapped to ridge) ─────────────────────────────
+  const SNAP_TOL = imgW * 0.12;
+  for (const [rakeArr, label] of [
+    [rakeLeft,  "rakeCandidateLeft"  as DetectedLineLabel],
+    [rakeRight, "rakeCandidateRight" as DetectedLineLabel],
+  ] as const) {
+    const top = (rakeArr as EdgeSegment[]).slice().sort((a, b) => b.length - a.length).slice(0, perDirectionCap);
+    for (const raw of top) {
+      let ext = extendLineByGradient(raw, preprocessed, pw, ph, scale, imgW, roofBottom, contrastThreshRaw);
+      if (ridgeSeg) ext = snapRakeToRidge(ext, ridgeSeg, SNAP_TOL);
+      results.push({ ...ext, label, confidence: 0.78, source: "auto-detect" });
+    }
+  }
+  return results;
 }
 
 // ── Sobel + NMS + Hysteresis (internal) ───────────────────────────────────────
@@ -840,8 +1007,8 @@ export async function detectEdges(
     ignoreVertical       = true,
     maxVerticalAngleDeg  = 75,
     skyBoundaryBias      = true,
-    edgeContrastThreshold = 0.06,   // 0–1 fraction of 255; ~15 raw
-    perDirectionCap      = 2,
+    edgeContrastThreshold = 0.10,   // 0–1 fraction of 255; ~25 raw (v6 default)
+    perDirectionCap      = 1,
   } = opts;
 
   const scale  = Math.min(1, maxProcessWidth / imgW);
@@ -925,26 +1092,21 @@ export async function detectEdges(
     console.info(`[EdgeDetect] contrast-filter ${before} → ${segs.length} (thresh=${rawThresh.toFixed(1)})`);
   }
 
-  // ── Stage 6c: extend rake lines to roof region bounds (facade only) ──
-  if (isFacade) {
-    const roofBottom = roofRegionFraction * imgH;
-    segs = segs.map(s => extendRakeToBounds(s, imgW, roofBottom));
-  }
-
-  // ── Stage 6d: dominant direction filter (top-down only) ──────────────
+  // ── Stage 6c: dominant direction filter (top-down only) ─────────────
   if (!isFacade && dominantOnly && numDirections > 0) {
     segs = dominantDirectionFilter(segs, numDirections, directionTolDeg);
   }
   console.info(`[EdgeDetect] after dir-filter ${segs.length} segs`);
 
-  // ── Stage 7: initial label ────────────────────────────────────────────
+  // ── Stage 7: label + canonical selection ─────────────────────────────
   let labeled: LabeledSegment[];
   if (isFacade) {
-    labeled = labelFacadeLines(segs, imgW, imgH, roofRegionFraction, skyBoundaryY_world);
-    // Horizon bias before directional cap so cap scores are confidence-weighted
-    labeled = applyHorizonBias(labeled, imgH, roofRegionFraction, skyBoundaryY_world);
-    // Stage 8: directional cap + canonical relabeling
-    labeled = facadeSelectBestLines(labeled, imgW, imgH, skyBoundaryY_world, roofRegionFraction, perDirectionCap);
+    // v6: gradient extension + ridge snapping replaces extendRakeToBounds + facadeSelectBestLines
+    labeled = selectFacadeCanonicalLines(
+      segs, preprocessed, pw, ph, scale,
+      imgW, imgH, skyBoundaryY_world, roofRegionFraction,
+      edgeContrastThreshold * 255, perDirectionCap,
+    );
   } else {
     labeled = labelDetectedLines(segs, imgW, imgH, "topDown");
   }
@@ -1017,6 +1179,14 @@ export function runEdgeDetectionTests(): void {
     const seg:EdgeSegment={id:"s",x1:0,y1:10,x2:20,y2:10,angle:0,length:20};
     const kept=contrastConsistencyFilter([seg],g,W,H,1.0,30,7,3);
     test("contrastConsistencyFilter: zero-contrast removed", kept.length===0, `got ${kept.length}`); }
+
+  // extendLineByGradient: extends along a step edge
+  { const W=60, H=20, g=new Float32Array(W*H);
+    // Rows above y=10 dark, rows below bright → strong horizontal edge at y=10
+    for (let y=0;y<H;y++) for (let x=0;x<W;x++) g[y*W+x] = y < 10 ? 30 : 180;
+    const seg: EdgeSegment = {id:"s", x1:15, y1:10, x2:35, y2:10, angle:0, length:20};
+    const ext = extendLineByGradient(seg, g, W, H, 1.0, W, H, 10, 2, 20, 2);
+    test("extendLineByGradient: extends along step edge", ext.length > seg.length, `orig=${seg.length} ext=${ext.length.toFixed(1)}`); }
 
   // findSkyBoundaryY: returns row in range
   { const W=40,H=40,g=new Float32Array(W*H);
