@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { cleanupGeometry, strengthToOptions } from "@/app/lib/cleanupGeometry";
+import { cleanAiOutline } from "@/app/lib/aiOutlineCleanup";
 import { detectEdges, autoDetectMode, type LabeledSegment } from "@/app/lib/edgeDetection";
 import { suggestPlanes, type PlaneSuggestion } from "@/app/lib/planeSuggestion";
 import {
@@ -1005,9 +1006,11 @@ export default function Page() {
   const [exportView, setExportView] = useState<ExportView>("LIVE");
   const [autoSuggest, setAutoSuggest] = useState<AutoSuggest | null>(null);
   const [autoDetecting, setAutoDetecting] = useState(false);
-  const [aiState, setAiState]   = useState<"idle" | "loading" | "preview" | "error">("idle");
-  const [aiPolygon, setAiPolygon] = useState<number[] | null>(null);
-  const [aiError, setAiError]   = useState<string | null>(null);
+  const [aiState, setAiState]       = useState<"idle" | "loading" | "preview" | "error">("idle");
+  const [aiPolygon, setAiPolygon]   = useState<number[] | null>(null);
+  const [aiPolygonRaw, setAiPolygonRaw] = useState<number[] | null>(null);
+  const [aiShowRaw, setAiShowRaw]   = useState(false);
+  const [aiError, setAiError]       = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renamingName, setRenamingName] = useState("");
 
@@ -1135,11 +1138,11 @@ export default function Page() {
   function adoptAiOutline() {
     if (!aiPolygon) return;
     patchActiveRoof((r) => ({ ...r, outline: aiPolygon, closed: true }));
-    setAiState("idle"); setAiPolygon(null); setAiError(null);
+    setAiState("idle"); setAiPolygon(null); setAiPolygonRaw(null); setAiShowRaw(false); setAiError(null);
   }
 
   function discardAiOutline() {
-    setAiState("idle"); setAiPolygon(null); setAiError(null);
+    setAiState("idle"); setAiPolygon(null); setAiPolygonRaw(null); setAiShowRaw(false); setAiError(null);
   }
 
   async function generateAiOutline() {
@@ -1183,15 +1186,19 @@ export default function Page() {
         return;
       }
 
-      // Normalize → world coords, simplify, flatten
-      let worldPts: [number, number][] = data.polygon.map((pt) => [pt.x * imgNatW, pt.y * imgNatH]);
-      worldPts = rdpSimplify(worldPts, Math.min(imgNatW, imgNatH) * 0.012);
+      // Normalize → world coords
+      const worldPts: [number, number][] = data.polygon.map((pt) => [pt.x * imgNatW, pt.y * imgNatH]);
       if (worldPts.length < 3) {
         setAiState("error");
         setAiError("AI couldn't confidently detect this roof. Try manual tracing.");
         return;
       }
-      setAiPolygon(worldPts.flatMap(([x, y]) => [x, y]));
+      const rawFlat = worldPts.flatMap(([x, y]) => [x, y]);
+      setAiPolygonRaw(rawFlat);
+      setAiShowRaw(false);
+      // Run cleanup pipeline (RDP + edge snap + straightening)
+      const cleaned = await cleanAiOutline(rawFlat, active.src, imgNatW, imgNatH);
+      setAiPolygon(cleaned.length >= 6 ? cleaned : rawFlat);
       setAiState("preview");
     } catch (err) {
       console.error("[generateAiOutline]", err);
@@ -3004,8 +3011,18 @@ export default function Page() {
                                   Discard
                                 </button>
                               </div>
-                              <div style={{ fontSize: 10, color: "#6b7280", lineHeight: 1.55 }}>
-                                AI suggestion — editable. After adopting, use manual tools to adjust points.
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                <div style={{ fontSize: 10, color: "#6b7280", lineHeight: 1.55 }}>
+                                  AI suggestion — cleaned for editing
+                                </div>
+                                {aiPolygonRaw && (
+                                  <button
+                                    style={{ fontSize: 10, color: aiShowRaw ? "#ef4444" : "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "0 2px", textDecoration: "underline" }}
+                                    onClick={() => setAiShowRaw(v => !v)}
+                                  >
+                                    {aiShowRaw ? "Show cleaned" : "Show raw AI"}
+                                  </button>
+                                )}
                               </div>
                             </div>
                           )}
@@ -3972,37 +3989,40 @@ export default function Page() {
             )}
 
             {/* ── AI Outline Overlay ── */}
-            {active?.step === "TRACE" && aiState === "preview" && aiPolygon && aiPolygon.length >= 4 && (
-              <>
-                {/* Semi-transparent fill */}
-                <Line
-                  points={aiPolygon}
-                  closed={true}
-                  fill="rgba(16,185,129,0.08)"
-                  stroke="rgba(16,185,129,0.92)"
-                  strokeWidth={2.5}
-                  dash={[9, 5]}
-                  lineCap="round"
-                  lineJoin="round"
-                  listening={false}
-                  shadowColor="rgba(16,185,129,0.5)"
-                  shadowBlur={10}
-                />
-                {/* Corner dots */}
-                {Array.from({ length: aiPolygon.length / 2 }).map((_, i) => (
-                  <Circle
-                    key={i}
-                    x={aiPolygon[i * 2]}
-                    y={aiPolygon[i * 2 + 1]}
-                    radius={5}
-                    fill="#10b981"
-                    stroke="#fff"
-                    strokeWidth={1.5}
+            {active?.step === "TRACE" && aiState === "preview" && (() => {
+              const dispPoly = aiShowRaw ? aiPolygonRaw : aiPolygon;
+              if (!dispPoly || dispPoly.length < 4) return null;
+              const isRaw = aiShowRaw;
+              return (
+                <>
+                  <Line
+                    points={dispPoly}
+                    closed={true}
+                    fill={isRaw ? "rgba(239,68,68,0.06)" : "rgba(16,185,129,0.08)"}
+                    stroke={isRaw ? "rgba(239,68,68,0.80)" : "rgba(16,185,129,0.92)"}
+                    strokeWidth={2.5}
+                    dash={isRaw ? [5, 7] : [9, 5]}
+                    lineCap="round"
+                    lineJoin="round"
                     listening={false}
+                    shadowColor={isRaw ? "rgba(239,68,68,0.4)" : "rgba(16,185,129,0.5)"}
+                    shadowBlur={8}
                   />
-                ))}
-              </>
-            )}
+                  {Array.from({ length: dispPoly.length / 2 }).map((_, i) => (
+                    <Circle
+                      key={i}
+                      x={dispPoly[i * 2]}
+                      y={dispPoly[i * 2 + 1]}
+                      radius={5}
+                      fill={isRaw ? "#ef4444" : "#10b981"}
+                      stroke="#fff"
+                      strokeWidth={1.5}
+                      listening={false}
+                    />
+                  ))}
+                </>
+              );
+            })()}
 
             {/* ── Facade roof region mask ── */}
             {active?.step === "TRACE" && edgePanel && edgeMode === "facade" && (
