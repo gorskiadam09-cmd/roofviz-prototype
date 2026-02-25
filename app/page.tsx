@@ -1024,6 +1024,12 @@ export default function Page() {
     { kind: "RIDGE" | "VALLEY"; points: number[]; confidence: number }[]
   >([]);
   const [autoLabelError, setAutoLabelError] = useState<string | null>(null);
+  const [aiJudgeResult, setAiJudgeResult] = useState<{
+    eave: { count: number };
+    rake: { count: number };
+    ridge: { confidence: "high" | "medium" | "low" | "none"; reasons: string[]; hasCandidates: boolean };
+    valley: { confidence: "labeled" | "possible" | "none"; reasons: string[]; hasCandidates: boolean };
+  } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renamingName, setRenamingName] = useState("");
 
@@ -1380,6 +1386,96 @@ export default function Page() {
     return suggestions;
   }
 
+  function runAiJudgeLocally(roof: Roof, lines: Polyline[]) {
+    const pts = roof.outline;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < pts.length / 2; i++) {
+      const x = pts[i * 2], y = pts[i * 2 + 1];
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    const roofWidth = maxX - minX;
+    const roofHeight = maxY - minY;
+
+    // ── EAVE / RAKE ──────────────────────────────────────────────────────────
+    const eaveLns = lines.filter(l => l.kind === "EAVE");
+    const rakeLns = lines.filter(l => l.kind === "RAKE");
+
+    // ── RIDGE ─────────────────────────────────────────────────────────────────
+    const ridgeLns = lines.filter(l => l.kind === "RIDGE");
+    const ridgeClusters = buildRidgeClusters(pts, roofWidth, roofHeight, minY);
+    const snapTol = roofWidth * 0.04;
+    const rakeEPs = rakeLns.flatMap(l => [
+      { x: l.points[0], y: l.points[1] }, { x: l.points[2], y: l.points[3] },
+    ]);
+    const rakeSupport = (ex: number, ey: number) =>
+      rakeEPs.some(p => Math.hypot(p.x - ex, p.y - ey) <= snapTol);
+
+    const ridgeReasons: string[] = [];
+    let ridgeConf: "high" | "medium" | "low" | "none" = "none";
+    let ridgeHasCandidates = ridgeClusters.length > 0;
+
+    if (ridgeLns.length > 0) {
+      const r = ridgeLns[0];
+      const lOK = rakeSupport(r.points[0], r.points[1]);
+      const rOK = rakeSupport(r.points[2], r.points[3]);
+      if (lOK && rOK) {
+        ridgeConf = "high";
+        ridgeReasons.push("Supported by rakes on both ends");
+      } else {
+        ridgeConf = "medium";
+        if (!lOK) ridgeReasons.push("No rake support near left end");
+        if (!rOK) ridgeReasons.push("No rake support near right end");
+        ridgeReasons.push("Consider re-labeling or adjusting rakes");
+      }
+    } else if (ridgeClusters.length > 0) {
+      const best = ridgeClusters[0];
+      const lOK = rakeSupport(best.x1, best.y1);
+      const rOK = rakeSupport(best.x2, best.y2);
+      if (lOK && rOK) {
+        ridgeConf = "medium";
+        ridgeReasons.push("Candidate found with rake support — not yet labeled");
+        ridgeReasons.push("Use 'Suggest Ridge' to adopt");
+      } else {
+        ridgeConf = "low";
+        ridgeReasons.push("Candidate found but lacks rake support");
+        if (rakeLns.length < 2) ridgeReasons.push("Fewer than 2 rakes — trace rakes first");
+        else ridgeReasons.push("No rake endpoint near ridge candidate ends");
+      }
+    } else {
+      ridgeConf = "none";
+      ridgeReasons.push("No near-horizontal edges in top 40% of outline");
+      ridgeReasons.push("Ridge may not be visible in this facade view");
+    }
+
+    // ── VALLEY ───────────────────────────────────────────────────────────────
+    const valleyLns = lines.filter(l => l.kind === "VALLEY");
+    const valleyCands = suggestValleys(roof);
+    const valleyReasons: string[] = [];
+    let valleyConf: "labeled" | "possible" | "none" = "none";
+    const valleyHasCandidates = valleyCands.length > 0;
+
+    if (valleyLns.length > 0) {
+      valleyConf = "labeled";
+      valleyReasons.push(`${valleyLns.length} valley(s) labeled`);
+    } else if (valleyCands.length > 0) {
+      valleyConf = "possible";
+      valleyReasons.push("Concave vertex detected — possible valley");
+      valleyReasons.push("Use 'Suggest Valley' to review candidates");
+    } else {
+      valleyConf = "none";
+      valleyReasons.push("No valley vertices detected in this outline");
+      valleyReasons.push("Valley intersections not visible from facade");
+    }
+
+    setAiJudgeResult({
+      eave: { count: eaveLns.length },
+      rake: { count: rakeLns.length },
+      ridge: { confidence: ridgeConf, reasons: ridgeReasons, hasCandidates: ridgeHasCandidates },
+      valley: { confidence: valleyConf, reasons: valleyReasons, hasCandidates: valleyHasCandidates },
+    });
+  }
+
   function lineLength(pts: number[]): number {
     let total = 0;
     for (let i = 0; i + 3 < pts.length; i += 2) {
@@ -1393,6 +1489,7 @@ export default function Page() {
     setAutoLabelState("loading");
     setAutoLabelSuggestions([]);
     setAutoLabelError(null);
+    setAiJudgeResult(null);
 
     // Classify outline edges into eave/rake/ridge, preserving locked lines
     patchActiveRoof((r) => {
@@ -3235,15 +3332,98 @@ export default function Page() {
                             </button>
                           </div>
 
-                          {/* No-ridge hint after auto-label ran */}
-                          {/* Ridge is never auto-labeled; always show the hint */}
-                          {!activeRoof.lines.some(l => l.kind === "RIDGE") && (
-                            <div style={{ fontSize: 11, color: "#94a3b8", background: "rgba(15,23,42,0.02)",
-                              border: "1px solid rgba(15,23,42,0.07)", borderRadius: 6,
-                              padding: "6px 8px", lineHeight: 1.5 }}>
-                              Ridges may not be visible from facade photos — use "Suggest Ridge" or draw manually.
-                            </div>
-                          )}
+                          {/* Run AI Judge button */}
+                          <button
+                            style={{ ...smallBtn, width: "100%", fontSize: 12, display: "flex",
+                              alignItems: "center", justifyContent: "center", gap: 6,
+                              color: "#6366f1", borderColor: "rgba(99,102,241,0.3)",
+                              background: "rgba(99,102,241,0.05)" }}
+                            onClick={() => runAiJudgeLocally(activeRoof, activeRoof.lines)}
+                          >
+                            🔍 Run AI Judge
+                            <span style={{ fontSize: 9, background: "rgba(99,102,241,0.12)", color: "#6366f1",
+                              border: "1px solid rgba(99,102,241,0.25)", borderRadius: 3,
+                              padding: "1px 4px", fontWeight: 700 }}>QC</span>
+                          </button>
+
+                          {/* AI Judge result card */}
+                          {aiJudgeResult && (() => {
+                            const { eave, rake, ridge, valley } = aiJudgeResult;
+                            const ridgeBadge = ridge.confidence === "high"
+                              ? { label: "High", color: "#059669", bg: "rgba(16,185,129,0.08)", border: "rgba(16,185,129,0.25)" }
+                              : ridge.confidence === "medium"
+                                ? { label: "Medium", color: "#d97706", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.25)" }
+                                : ridge.confidence === "low"
+                                  ? { label: "Low", color: "#dc2626", bg: "rgba(220,38,38,0.07)", border: "rgba(220,38,38,0.25)" }
+                                  : { label: "Not detected", color: "#94a3b8", bg: "rgba(15,23,42,0.03)", border: "rgba(15,23,42,0.10)" };
+                            const valleyBadge = valley.confidence === "labeled"
+                              ? { label: "Labeled", color: "#059669", bg: "rgba(16,185,129,0.08)", border: "rgba(16,185,129,0.25)" }
+                              : valley.confidence === "possible"
+                                ? { label: "Possible", color: "#d97706", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.25)" }
+                                : { label: "Not visible", color: "#94a3b8", bg: "rgba(15,23,42,0.03)", border: "rgba(15,23,42,0.10)" };
+                            return (
+                              <div style={{ background: "#f8fafc", border: "1px solid rgba(15,23,42,0.09)",
+                                borderRadius: 8, padding: "10px 12px", display: "grid", gap: 7 }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                  <div style={{ fontSize: 11, fontWeight: 700, color: "#0f172a" }}>AI Judge</div>
+                                  <button style={{ ...smallBtn, padding: "1px 6px", fontSize: 10 }}
+                                    onClick={() => setAiJudgeResult(null)}>✕</button>
+                                </div>
+                                {/* Eave row */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                                  <span>{eave.count > 0 ? "✅" : "⚠️"}</span>
+                                  <span style={{ flex: 1, color: "#475569" }}>Eaves ({eave.count})</span>
+                                  <span style={{ color: eave.count > 0 ? "#059669" : "#dc2626", fontWeight: 600 }}>
+                                    {eave.count > 0 ? "OK" : "None found"}
+                                  </span>
+                                </div>
+                                {/* Rake row */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                                  <span>{rake.count > 0 ? "✅" : "⚠️"}</span>
+                                  <span style={{ flex: 1, color: "#475569" }}>Rakes ({rake.count})</span>
+                                  <span style={{ color: rake.count > 0 ? "#059669" : "#dc2626", fontWeight: 600 }}>
+                                    {rake.count > 0 ? "OK" : "None found"}
+                                  </span>
+                                </div>
+                                {/* Ridge row */}
+                                <div style={{ display: "grid", gap: 3 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                                    <span>{ridge.confidence === "high" ? "✅" : ridge.confidence === "none" ? "—" : "⚠️"}</span>
+                                    <span style={{ flex: 1, color: "#475569" }}>Ridge</span>
+                                    <span style={{ fontSize: 9, fontWeight: 700, color: ridgeBadge.color,
+                                      background: ridgeBadge.bg, border: `1px solid ${ridgeBadge.border}`,
+                                      borderRadius: 3, padding: "1px 5px" }}>{ridgeBadge.label}</span>
+                                  </div>
+                                  {ridge.reasons.map((r, i) => (
+                                    <div key={i} style={{ fontSize: 10, color: "#94a3b8", paddingLeft: 20 }}>• {r}</div>
+                                  ))}
+                                  {(ridge.confidence === "medium" || ridge.confidence === "low") && ridge.hasCandidates && (
+                                    <button style={{ ...smallBtn, fontSize: 10, marginLeft: 18, alignSelf: "start",
+                                      color: "#d97706", borderColor: "rgba(245,158,11,0.3)", background: "rgba(245,158,11,0.05)" }}
+                                      onClick={triggerSuggestRidges}>⬡ Suggest Ridge</button>
+                                  )}
+                                </div>
+                                {/* Valley row */}
+                                <div style={{ display: "grid", gap: 3 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                                    <span>{valley.confidence === "labeled" ? "✅" : valley.confidence === "none" ? "—" : "⚠️"}</span>
+                                    <span style={{ flex: 1, color: "#475569" }}>Valley</span>
+                                    <span style={{ fontSize: 9, fontWeight: 700, color: valleyBadge.color,
+                                      background: valleyBadge.bg, border: `1px solid ${valleyBadge.border}`,
+                                      borderRadius: 3, padding: "1px 5px" }}>{valleyBadge.label}</span>
+                                  </div>
+                                  {valley.reasons.map((r, i) => (
+                                    <div key={i} style={{ fontSize: 10, color: "#94a3b8", paddingLeft: 20 }}>• {r}</div>
+                                  ))}
+                                  {valley.confidence === "possible" && valley.hasCandidates && (
+                                    <button style={{ ...smallBtn, fontSize: 10, marginLeft: 18, alignSelf: "start",
+                                      color: "#64748b", borderColor: "rgba(100,116,139,0.3)", background: "rgba(100,116,139,0.05)" }}
+                                      onClick={triggerSuggestValleys}>◈ Suggest Valley</button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
 
                           {autoLabelError && (
                             <div style={{ fontSize: 11, color: "#dc2626" }}>{autoLabelError}</div>
