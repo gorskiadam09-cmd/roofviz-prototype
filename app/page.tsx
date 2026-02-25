@@ -99,9 +99,10 @@ type Polyline = {
   id: string;
   kind: LineKind;
   points: number[];
-  aiLabeled?: boolean;  // set by Auto-Label; false/undefined = manual
-  locked?: boolean;     // locked lines survive Re-run Auto-Label
-  confidence?: number;  // 0–1, set by auto-label; undefined = manual/unscored
+  aiLabeled?: boolean;   // set by Auto-Label; false/undefined = manual
+  locked?: boolean;      // locked lines survive Re-run Auto-Label
+  confidence?: number;   // 0–1, set by auto-label; undefined = manual/unscored
+  segmentCount?: number; // for merged ridge: how many raw segments were fused
 };
 
 type MetalColor = "Galvanized" | "Aluminum" | "White" | "Black" | "Bronze" | "Brown" | "Gray";
@@ -1261,13 +1262,53 @@ export default function Page() {
       }
     }
 
-    // Ridge: only label if merged length exceeds 25% of roof width (avoid false positives)
-    const totalRidgeLen = ridgeCandidates.reduce((s, c) => s + c.len, 0);
-    if (roofWidth > 0 && totalRidgeLen > roofWidth * 0.25) {
-      const ratio = Math.min(1, totalRidgeLen / roofWidth);
-      const confidence = Math.min(0.95, 0.65 + ratio * 0.35);
+    // Ridge: cluster candidates by approximate Y (within 10% of roof height),
+    // then merge each qualifying cluster into ONE logical ridge segment.
+    if (ridgeCandidates.length > 0 && roofWidth > 0) {
+      // Sort by midY to make clustering stable
+      ridgeCandidates.sort((a, b) => (a.y1 + a.y2) / 2 - (b.y1 + b.y2) / 2);
+      const yTol = roofHeight * 0.10;
+
+      // Build Y-clusters greedily
+      type Cluster = typeof ridgeCandidates;
+      const clusters: Cluster[] = [];
       for (const c of ridgeCandidates) {
-        result.push({ id: uid(), kind: "RIDGE", points: [c.x1, c.y1, c.x2, c.y2], aiLabeled: true, confidence });
+        const cMidY = (c.y1 + c.y2) / 2;
+        const existing = clusters.find(cl => {
+          const clMidY = cl.reduce((s, x) => s + (x.y1 + x.y2) / 2, 0) / cl.length;
+          return Math.abs(cMidY - clMidY) <= yTol;
+        });
+        if (existing) existing.push(c);
+        else clusters.push([c]);
+      }
+
+      // Pick the dominant cluster (most total length) as "Main Ridge"
+      clusters.sort((a, b) =>
+        b.reduce((s, c) => s + c.len, 0) - a.reduce((s, c) => s + c.len, 0)
+      );
+
+      for (const cluster of clusters) {
+        const totalLen = cluster.reduce((s, c) => s + c.len, 0);
+        if (totalLen < roofWidth * 0.25) continue; // too short → skip
+
+        // Merge: span from leftmost to rightmost X at the cluster's average Y
+        let minRX = Infinity, maxRX = -Infinity, sumY = 0;
+        for (const c of cluster) {
+          const lx = Math.min(c.x1, c.x2), rx = Math.max(c.x1, c.x2);
+          if (lx < minRX) minRX = lx;
+          if (rx > maxRX) maxRX = rx;
+          sumY += c.y1 + c.y2;
+        }
+        const avgY = sumY / (cluster.length * 2);
+        const ratio = Math.min(1, totalLen / roofWidth);
+        const confidence = Math.min(0.95, 0.65 + ratio * 0.35);
+
+        result.push({
+          id: uid(), kind: "RIDGE",
+          points: [minRX, avgY, maxRX, avgY],
+          aiLabeled: true, confidence,
+          segmentCount: cluster.length,
+        });
       }
     }
     // else: no confident ridge → leave unlabeled rather than guessing
@@ -3235,7 +3276,9 @@ export default function Page() {
                                           <span style={{ width: 8, height: 8, borderRadius: "50%",
                                             background: kindColor(line.kind), flexShrink: 0, display: "inline-block" }} />
                                           <span style={{ fontSize: 11, color: "#475569", fontWeight: 600 }}>
-                                            {kind === "RIDGE" ? `Seg ${i + 1}` : `${kind} ${i + 1}`}
+                                            {kind === "RIDGE"
+                                              ? `Main Ridge${line.segmentCount && line.segmentCount > 1 ? ` (${line.segmentCount} segs)` : ""}`
+                                              : `${kind} ${i + 1}`}
                                           </span>
                                           {line.aiLabeled && (
                                             <span style={{ fontSize: 9, background: "rgba(16,185,129,0.1)", color: "#059669",
