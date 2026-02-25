@@ -1309,25 +1309,7 @@ export default function Page() {
       } else if (rawAngle >= 20 && rawAngle <= 70) {
         result.push({ id: uid(), kind: "RAKE", points: [x1, y1, x2, y2], aiLabeled: true, confidence: 0.90 });
       }
-      // near-horizontal middle-zone and ridge candidates: handled below
-    }
-
-    // Ridge gate: candidate must be supported by a RAKE endpoint on BOTH sides.
-    // Prevents labeling any long horizontal upper edge as a ridge.
-    const snapTol = roofWidth * 0.04; // 4% of roof width
-    const rakeEndpoints = result
-      .filter(l => l.kind === "RAKE")
-      .flatMap(l => [{ x: l.points[0], y: l.points[1] }, { x: l.points[2], y: l.points[3] }]);
-    const hasSupport = (ex: number, ey: number) =>
-      rakeEndpoints.some(p => Math.hypot(p.x - ex, p.y - ey) <= snapTol);
-
-    for (const c of buildRidgeClusters(pts, roofWidth, roofHeight, minY)) {
-      if (hasSupport(c.x1, c.y1) && hasSupport(c.x2, c.y2)) {
-        result.push({ id: uid(), kind: "RIDGE",
-          points: [c.x1, c.y1, c.x2, c.y2],
-          aiLabeled: true, confidence: c.confidence, segmentCount: c.segCount });
-      }
-      // else: unsupported → leave unlabeled; user can use "Suggest Ridge" to review
+      // Ridge is never auto-labeled — use "Suggest Ridge" button instead.
     }
 
     return result;
@@ -1434,10 +1416,11 @@ export default function Page() {
   function triggerSuggestRidges() {
     if (!activeRoof?.closed) return;
     setAutoLabelError(null);
-    const suggestions = suggestRidges(activeRoof);
+    // Only surface ridge suggestions with confidence >= 0.8
+    const suggestions = suggestRidges(activeRoof).filter(s => s.confidence >= 0.8);
     setAutoLabelSuggestions(suggestions);
     if (suggestions.length === 0) {
-      setAutoLabelError("No ridge candidates detected — draw manually.");
+      setAutoLabelError("No confident ridge detected from this view — draw manually.");
     }
   }
 
@@ -3253,12 +3236,12 @@ export default function Page() {
                           </div>
 
                           {/* No-ridge hint after auto-label ran */}
-                          {autoLabelState === "done" && activeRoof.lines.length > 0
-                            && !activeRoof.lines.some(l => l.kind === "RIDGE") && (
-                            <div style={{ fontSize: 11, color: "#94a3b8", background: "rgba(245,158,11,0.04)",
-                              border: "1px solid rgba(245,158,11,0.2)", borderRadius: 6,
+                          {/* Ridge is never auto-labeled; always show the hint */}
+                          {!activeRoof.lines.some(l => l.kind === "RIDGE") && (
+                            <div style={{ fontSize: 11, color: "#94a3b8", background: "rgba(15,23,42,0.02)",
+                              border: "1px solid rgba(15,23,42,0.07)", borderRadius: 6,
                               padding: "6px 8px", lineHeight: 1.5 }}>
-                              No ridge detected — try "Suggest Ridge" or click an edge to label it manually.
+                              Ridges may not be visible from facade photos — use "Suggest Ridge" or draw manually.
                             </div>
                           )}
 
