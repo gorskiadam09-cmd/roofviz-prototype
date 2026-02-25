@@ -965,8 +965,9 @@ export default function Page() {
   const [tool, setTool] = useState<Tool>("NONE");
   const [draftLine, setDraftLine] = useState<Polyline | null>(null);
   const [draftHole, setDraftHole] = useState<number[] | null>(null);
-  const [brushStroke, setBrushStroke] = useState<number[] | null>(null);
-  const [brushPainting, setBrushPainting] = useState(false);
+  const brushPaintingRef = useRef(false);
+  const brushStrokeRef = useRef<number[]>([]);
+  const [brushDraft, setBrushDraft] = useState<{ points: number[]; size: number } | null>(null);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
@@ -2018,37 +2019,42 @@ export default function Page() {
 
     // Brush ice & water painting — start a new stroke
     if (active.step === "TRACE" && tool === "BRUSH_ICE_WATER" && activeRoof.closed) {
-      setBrushPainting(true);
-      setBrushStroke([pos.x, pos.y]);
+      brushPaintingRef.current = true;
+      brushStrokeRef.current = [pos.x, pos.y];
+      setBrushDraft({ points: [pos.x, pos.y], size: activeRoof.iceWaterBrushSize ?? 30 });
       return;
     }
   }
 
-  function onStageMove(e: any) {
-    if (!brushPainting || tool !== "BRUSH_ICE_WATER") return;
-    const stage = e.target.getStage ? e.target.getStage() : e.target;
+  function onStageMove() {
+    if (!brushPaintingRef.current || tool !== "BRUSH_ICE_WATER") return;
+    const stage = stageRef.current;
+    if (!stage) return;
     const rawPos = stage.getPointerPosition();
     if (!rawPos) return;
     const scale = stage.scaleX();
     const x = (rawPos.x - stage.x()) / scale;
     const y = (rawPos.y - stage.y()) / scale;
-    setBrushStroke((prev) => {
-      if (!prev || prev.length < 2) return [x, y];
+    const prev = brushStrokeRef.current;
+    if (prev.length >= 2) {
       const lx = prev[prev.length - 2], ly = prev[prev.length - 1];
-      if ((x - lx) ** 2 + (y - ly) ** 2 < 25) return prev; // skip if <5px movement
-      return [...prev, x, y];
-    });
+      if ((x - lx) ** 2 + (y - ly) ** 2 < 25) return; // skip if <5px movement
+    }
+    brushStrokeRef.current = [...prev, x, y];
+    setBrushDraft({ points: brushStrokeRef.current, size: activeRoof?.iceWaterBrushSize ?? 30 });
   }
 
   function onStageUp() {
-    if (!brushPainting) return;
-    if (activeRoof && brushStroke && brushStroke.length >= 4) {
+    if (!brushPaintingRef.current) return;
+    const pts = brushStrokeRef.current;
+    if (activeRoof && pts.length >= 4) {
       const size = activeRoof.iceWaterBrushSize ?? 30;
-      const newStroke = { id: uid(), points: brushStroke, size };
+      const newStroke = { id: uid(), points: pts, size };
       patchActiveRoof((r) => ({ ...r, iceWaterBrush: [...(r.iceWaterBrush ?? []), newStroke] }));
     }
-    setBrushPainting(false);
-    setBrushStroke(null);
+    brushPaintingRef.current = false;
+    brushStrokeRef.current = [];
+    setBrushDraft(null);
   }
 
   function updateOutlinePoint(i: number, x: number, y: number) {
@@ -4217,11 +4223,11 @@ export default function Page() {
           width={w}
           height={h}
           onMouseDown={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
-          onMouseMove={screen !== "CUSTOMER_VIEW" && tool === "BRUSH_ICE_WATER" ? onStageMove : undefined}
-          onMouseUp={screen !== "CUSTOMER_VIEW" && tool === "BRUSH_ICE_WATER" ? onStageUp : undefined}
+          onMouseMove={screen !== "CUSTOMER_VIEW" ? onStageMove : undefined}
+          onMouseUp={screen !== "CUSTOMER_VIEW" ? onStageUp : undefined}
           onTouchStart={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
-          onTouchMove={screen !== "CUSTOMER_VIEW" && tool === "BRUSH_ICE_WATER" ? onStageMove : undefined}
-          onTouchEnd={screen !== "CUSTOMER_VIEW" && tool === "BRUSH_ICE_WATER" ? onStageUp : undefined}
+          onTouchMove={screen !== "CUSTOMER_VIEW" ? onStageMove : undefined}
+          onTouchEnd={screen !== "CUSTOMER_VIEW" ? onStageUp : undefined}
           onWheel={screen !== "CUSTOMER_VIEW" ? onWheel : undefined}
           draggable={!!active && screen !== "CUSTOMER_VIEW" && tool !== "BRUSH_ICE_WATER"}
           scaleX={active?.stageScale ?? 1}
@@ -4572,11 +4578,11 @@ export default function Page() {
   </>
 )}
 {/* Live brush stroke preview while painting */}
-{tool === "BRUSH_ICE_WATER" && brushPainting && brushStroke && brushStroke.length >= 4 && r.id === active?.activeRoofId && (
+{tool === "BRUSH_ICE_WATER" && brushDraft && brushDraft.points.length >= 4 && r.id === active?.activeRoofId && (
   <Line
-    points={brushStroke}
+    points={brushDraft.points}
     stroke="rgba(18,23,38,0.85)"
-    strokeWidth={activeRoof?.iceWaterBrushSize ?? 30}
+    strokeWidth={brushDraft.size}
     lineCap="round"
     lineJoin="round"
     opacity={0.75}
