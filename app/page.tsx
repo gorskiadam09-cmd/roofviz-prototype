@@ -820,6 +820,30 @@ function autoDetectRoof(img: HTMLImageElement, displayW: number, displayH: numbe
   return { outline, lines };
 }
 
+/* ------------------- Ramer-Douglas-Peucker polygon simplification --------- */
+function rdpSimplify(pts: [number, number][], epsilon: number): [number, number][] {
+  if (pts.length < 3) return pts;
+  const [x1, y1] = pts[0];
+  const [x2, y2] = pts[pts.length - 1];
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  let maxDist = 0, maxIdx = 1;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i];
+    const dist = len > 0
+      ? Math.abs(dy * px - dx * py + x2 * y1 - y2 * x1) / len
+      : Math.hypot(px - x1, py - y1);
+    if (dist > maxDist) { maxDist = dist; maxIdx = i; }
+  }
+  if (maxDist > epsilon) {
+    return [
+      ...rdpSimplify(pts.slice(0, maxIdx + 1), epsilon).slice(0, -1),
+      ...rdpSimplify(pts.slice(maxIdx), epsilon),
+    ];
+  }
+  return [pts[0], pts[pts.length - 1]];
+}
+
 /* ------------------- Main ------------------- */
 export default function Page() {
   const stageRef = useRef<any>(null);
@@ -981,6 +1005,9 @@ export default function Page() {
   const [exportView, setExportView] = useState<ExportView>("LIVE");
   const [autoSuggest, setAutoSuggest] = useState<AutoSuggest | null>(null);
   const [autoDetecting, setAutoDetecting] = useState(false);
+  const [aiState, setAiState]   = useState<"idle" | "loading" | "preview" | "error">("idle");
+  const [aiPolygon, setAiPolygon] = useState<number[] | null>(null);
+  const [aiError, setAiError]   = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renamingName, setRenamingName] = useState("");
 
@@ -1101,6 +1128,76 @@ export default function Page() {
       ...p,
       roofs: p.roofs.map((r) => (r.id === activeRoof.id ? updater(r) : r)),
     }));
+  }
+
+  // ── AI Roof Outline ────────────────────────────────────────────────────────
+
+  function adoptAiOutline() {
+    if (!aiPolygon) return;
+    patchActiveRoof((r) => ({ ...r, outline: aiPolygon, closed: true }));
+    setAiState("idle"); setAiPolygon(null); setAiError(null);
+  }
+
+  function discardAiOutline() {
+    setAiState("idle"); setAiPolygon(null); setAiError(null);
+  }
+
+  async function generateAiOutline() {
+    if (!active?.src) return;
+    setAiState("loading"); setAiError(null);
+    try {
+      // Get natural image dimensions (= world coordinate space)
+      const [imgNatW, imgNatH] = await new Promise<[number, number]>((resolve, reject) => {
+        const img = document.createElement("img");
+        img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
+        img.onerror = reject;
+        img.src = active.src;
+      });
+      // Resize to max 1024px for API efficiency
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const img = document.createElement("img");
+        img.onload = () => {
+          const maxPx = 1024;
+          const sc = Math.min(1, maxPx / Math.max(img.width, img.height));
+          const cw = Math.round(img.width * sc), ch = Math.round(img.height * sc);
+          const cv = document.createElement("canvas");
+          cv.width = cw; cv.height = ch;
+          cv.getContext("2d")!.drawImage(img, 0, 0, cw, ch);
+          resolve(cv.toDataURL("image/jpeg", 0.85).split(",")[1]);
+        };
+        img.onerror = reject;
+        img.src = active.src;
+      });
+
+      const res = await fetch("/api/ai/roof-outline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64, mimeType: "image/jpeg" }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { polygon?: { x: number; y: number }[]; confidence?: number; error?: string };
+
+      if (data.error || !data.polygon || data.polygon.length < 3) {
+        setAiState("error");
+        setAiError("AI couldn't confidently detect this roof. Try manual tracing.");
+        return;
+      }
+
+      // Normalize → world coords, simplify, flatten
+      let worldPts: [number, number][] = data.polygon.map((pt) => [pt.x * imgNatW, pt.y * imgNatH]);
+      worldPts = rdpSimplify(worldPts, Math.min(imgNatW, imgNatH) * 0.012);
+      if (worldPts.length < 3) {
+        setAiState("error");
+        setAiError("AI couldn't confidently detect this roof. Try manual tracing.");
+        return;
+      }
+      setAiPolygon(worldPts.flatMap(([x, y]) => [x, y]));
+      setAiState("preview");
+    } catch (err) {
+      console.error("[generateAiOutline]", err);
+      setAiState("error");
+      setAiError("AI couldn't confidently detect this roof. Try manual tracing.");
+    }
   }
 
   function startProject() {
@@ -2837,6 +2934,82 @@ export default function Page() {
                         <div style={{ display: "grid", gap: 8 }}>
                           <div style={sectionLabel}>Step A — Outline the Roof</div>
 
+                          {/* ── AI CTA ── */}
+                          {active.src && aiState !== "preview" && (
+                            <>
+                              <button
+                                style={{
+                                  width: "100%", padding: "11px 14px", borderRadius: 10,
+                                  background: aiState === "loading"
+                                    ? "rgba(37,99,235,0.08)"
+                                    : "linear-gradient(135deg,#2563eb,#1d4ed8)",
+                                  color: aiState === "loading" ? "#1d4ed8" : "#fff",
+                                  fontWeight: 700, fontSize: 13,
+                                  border: aiState === "loading" ? "1.5px solid #93c5fd" : "none",
+                                  cursor: aiState === "loading" ? "default" : "pointer",
+                                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                                  boxShadow: aiState === "loading" ? "none" : "0 2px 10px rgba(37,99,235,0.28)",
+                                  transition: "all 0.15s",
+                                }}
+                                disabled={aiState === "loading"}
+                                onClick={generateAiOutline}
+                              >
+                                {aiState === "loading" ? (
+                                  <>
+                                    <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>◌</span>
+                                    Analyzing image…
+                                  </>
+                                ) : (
+                                  <>
+                                    ✦ Generate Roof Outline (AI)
+                                    <span style={{ fontSize: 9, background: "rgba(255,255,255,0.22)", borderRadius: 4, padding: "2px 6px", fontWeight: 600, letterSpacing: "0.04em" }}>Beta AI</span>
+                                  </>
+                                )}
+                              </button>
+                              {aiState === "error" && aiError && (
+                                <div style={{ fontSize: 11, color: "#dc2626", background: "#fef2f2", border: "1px solid rgba(220,38,38,0.15)", borderRadius: 7, padding: "8px 10px", lineHeight: 1.55 }}>
+                                  {aiError}
+                                </div>
+                              )}
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#94a3b8", margin: "2px 0" }}>
+                                <div style={{ flex: 1, height: 1, background: "rgba(148,163,184,0.25)" }} />
+                                <span style={{ fontSize: 10 }}>or trace manually</span>
+                                <div style={{ flex: 1, height: 1, background: "rgba(148,163,184,0.25)" }} />
+                              </div>
+                            </>
+                          )}
+
+                          {/* ── AI Preview: Adopt / Discard ── */}
+                          {aiState === "preview" && aiPolygon && (
+                            <div style={{ background: "rgba(16,185,129,0.05)", border: "1.5px solid rgba(16,185,129,0.35)", borderRadius: 10, padding: "12px 14px", display: "grid", gap: 10 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span style={{ fontSize: 20 }}>✦</span>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: "#065f46" }}>AI outline ready</div>
+                                  <div style={{ fontSize: 11, color: "#059669" }}>Visible on canvas — review and adopt</div>
+                                </div>
+                                <span style={{ fontSize: 9, background: "#d1fae5", color: "#065f46", borderRadius: 4, padding: "2px 6px", fontWeight: 700 }}>Beta AI</span>
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                <button
+                                  style={{ padding: "9px 12px", borderRadius: 8, background: "#059669", color: "#fff", fontWeight: 700, fontSize: 12, border: "none", cursor: "pointer", boxShadow: "0 1px 6px rgba(5,150,105,0.3)" }}
+                                  onClick={adoptAiOutline}
+                                >
+                                  Adopt AI Outline
+                                </button>
+                                <button
+                                  style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(15,23,42,0.05)", color: "#475569", fontWeight: 600, fontSize: 12, border: "1px solid rgba(15,23,42,0.12)", cursor: "pointer" }}
+                                  onClick={discardAiOutline}
+                                >
+                                  Discard
+                                </button>
+                              </div>
+                              <div style={{ fontSize: 10, color: "#6b7280", lineHeight: 1.55 }}>
+                                AI suggestion — editable. After adopting, use manual tools to adjust points.
+                              </div>
+                            </div>
+                          )}
+
                           <button
                             className={tool === "TRACE_ROOF" ? "rv-btn-tracing" : "rv-btn-ghost"}
                             style={{
@@ -3796,6 +3969,39 @@ export default function Page() {
                   opacity={cleanupPreview && r.id === active.activeRoofId ? 0.18 : 1}
                 />
               ) : null
+            )}
+
+            {/* ── AI Outline Overlay ── */}
+            {active?.step === "TRACE" && aiState === "preview" && aiPolygon && aiPolygon.length >= 4 && (
+              <>
+                {/* Semi-transparent fill */}
+                <Line
+                  points={aiPolygon}
+                  closed={true}
+                  fill="rgba(16,185,129,0.08)"
+                  stroke="rgba(16,185,129,0.92)"
+                  strokeWidth={2.5}
+                  dash={[9, 5]}
+                  lineCap="round"
+                  lineJoin="round"
+                  listening={false}
+                  shadowColor="rgba(16,185,129,0.5)"
+                  shadowBlur={10}
+                />
+                {/* Corner dots */}
+                {Array.from({ length: aiPolygon.length / 2 }).map((_, i) => (
+                  <Circle
+                    key={i}
+                    x={aiPolygon[i * 2]}
+                    y={aiPolygon[i * 2 + 1]}
+                    radius={5}
+                    fill="#10b981"
+                    stroke="#fff"
+                    strokeWidth={1.5}
+                    listening={false}
+                  />
+                ))}
+              </>
             )}
 
             {/* ── Facade roof region mask ── */}

@@ -10,6 +10,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@types/nodemailer": "^7.0.11",
     "@vercel/blob": "^2.3.0",
     "jspdf": "^4.2.0",
