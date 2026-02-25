@@ -1,16 +1,18 @@
 /**
- * aiOutlineCleanup.ts
+ * aiOutlineCleanup.ts  (v2)
  *
  * Post-processing cleanup for AI-generated roof outline polygons.
  * Runs entirely client-side (no network calls).
  *
  * Pipeline:
- *   1. RDP simplification    — remove zig-zags, reduce point count ~40–60%
- *   2. Downward edge snap    — pull floating vertices onto the visible roof edge
- *                              (scans vertically for strongest Sobel-Y gradient)
- *   3. Horizontal flattening — make near-horizontal segments exactly flat
- *   4. Collinear smoothing   — project wobbling intermediate vertices onto best-fit line
- *   5. Auto-close            — snap start/end if within tolerance
+ *   1. Coarse RDP              — remove zig-zags (epsilon = diag × 0.013)
+ *   2. Extended downward snap  — pull vertices onto the visible roof edge
+ *                                (scan 15–18 % of image height, adaptive threshold)
+ *   3. Peak consolidation      — merge micro-peaks that are too close horizontally
+ *   4. Breakpoint straightening— fit best-fit line between sharp corners, project wobble
+ *   5. Horizontal flattening   — make near-horizontal segments (±12°) exactly flat
+ *   6. Final light RDP         — remove any leftover micro-wobble (epsilon = diag × 0.008)
+ *   7. Auto-close              — snap start/end if within 5 % of image width
  *
  * All coordinates are in world space (natural image pixel coords).
  */
@@ -111,16 +113,15 @@ export async function cleanAiOutline(
 
   const diag = Math.hypot(imgNatW, imgNatH);
 
-  // ── Step 1: RDP — remove zig-zags ─────────────────────────────────────────
+  // ── Step 1: Coarse RDP — remove zig-zags ──────────────────────────────────
   const raw: [number, number][] = [];
   for (let i = 0; i + 1 < polygon.length; i += 2) raw.push([polygon[i], polygon[i + 1]]);
 
-  // Close polygon for RDP (treat as open polyline from first→last vertex)
   const rdpResult = rdp([...raw, raw[0]], diag * 0.013);
-  let cur: [number, number][] = rdpResult.slice(0, -1); // remove closing duplicate
+  let cur: [number, number][] = rdpResult.slice(0, -1);
   if (cur.length < 3) cur = raw;
 
-  // ── Step 2: build Sobel Gy map for edge snapping ──────────────────────────
+  // ── Step 2: Build Sobel Gy map ────────────────────────────────────────────
   const MAX_PROC = 512;
   const sc = Math.min(1, MAX_PROC / imgNatW);
   const pw = Math.round(imgNatW * sc);
@@ -144,83 +145,158 @@ export async function cleanAiOutline(
     });
   } catch { /* edge snap skipped — no gradient available */ }
 
-  // ── Step 3: downward edge snap ─────────────────────────────────────────────
-  // For each vertex: scan straight down up to SNAP_MAX_PX.
-  // Snap to the row with the strongest horizontal edge (|Gy|), if above threshold.
-  // Only snap downward (increases Y) to avoid pulling into sky.
-  const SNAP_MAX_PROC = Math.round(imgNatH * 0.06 * sc); // 6% of image height
-  const SNAP_THRESH   = 11;                               // minimum |Gy|
+  // ── Step 3: Extended downward edge snap ───────────────────────────────────
+  // Scan 16% of image height downward from each vertex.
+  // Use adaptive threshold: best gradient in the window (no fixed minimum).
+  // Only snap if the best row is strictly below the starting row.
+  const SNAP_WINDOW = Math.round(imgNatH * 0.16 * sc); // 16% of image height
+  const H_SAMPLE_OFFSETS = [-4, -2, 0, 2, 4];           // ±4px horizontal window
 
-  let snapped: [number, number][] = cur.map(([wx, wy]) => {
+  const snapped: [number, number][] = cur.map(([wx, wy]) => {
     if (!gy) return [wx, wy];
     const px  = Math.max(0, Math.min(pw - 1, Math.round(wx * sc)));
     const py0 = Math.max(0, Math.min(ph - 1, Math.round(wy * sc)));
-    const py1 = Math.min(ph - 1, py0 + SNAP_MAX_PROC);
+    const py1 = Math.min(ph - 1, py0 + SNAP_WINDOW);
 
-    // Sample across a ±3px horizontal window for robustness to slight X offset
-    const xs = [-3, -1, 0, 1, 3].map(d => Math.max(0, Math.min(pw - 1, px + d)));
+    const xs = H_SAMPLE_OFFSETS.map(d => Math.max(0, Math.min(pw - 1, px + d)));
 
-    let bestGy = SNAP_THRESH - 1, bestRow = -1;
+    let bestGy = -1, bestRow = -1;
     for (let py = py0; py <= py1; py++) {
       const g = xs.reduce((s, x) => s + gy![py * pw + x], 0) / xs.length;
       if (g > bestGy) { bestGy = g; bestRow = py; }
     }
-    // Only snap downward
-    if (bestRow > py0) {
+    // Only snap downward, and require at least 1px movement
+    if (bestRow > py0 + 1) {
       return [wx, Math.min(imgNatH, bestRow / sc)];
     }
     return [wx, wy];
   });
 
-  // ── Step 4: horizontal segment flattening ─────────────────────────────────
-  // For each segment that is nearly horizontal, average the Y of both endpoints.
-  // This makes ridge and eave lines crisp and level.
-  const HORIZ_TOL_RAD = (14 * Math.PI) / 180; // ±14°
-  const BLEND = 0.88;                          // how strongly to flatten
-  const n = snapped.length;
-  const flat: [number, number][] = snapped.map(p => [p[0], p[1]]);
+  // ── Step 4: Gable peak consolidation ─────────────────────────────────────
+  // A peak is a vertex that is a local Y minimum (smallest Y = highest on screen).
+  // Merge pairs of peaks that are too close horizontally (< 9% of imgW).
+  // Keep the more prominent (lower Y value) peak of each merged pair.
+  // Run up to 3 merge passes.
+  const PEAK_MERGE_DIST = imgNatW * 0.09;
 
-  for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
+  function isPeak(pts: [number, number][], i: number): boolean {
+    const n = pts.length;
+    const prev = pts[(i - 1 + n) % n];
+    const next = pts[(i + 1) % n];
+    return pts[i][1] < prev[1] && pts[i][1] < next[1];
+  }
+
+  let consolidated = snapped.slice();
+  for (let pass = 0; pass < 3; pass++) {
+    let merged = false;
+    const n = consolidated.length;
+    const toRemove = new Set<number>();
+
+    for (let i = 0; i < n; i++) {
+      if (toRemove.has(i)) continue;
+      if (!isPeak(consolidated, i)) continue;
+      const j = (i + 1) % n;
+      if (toRemove.has(j)) continue;
+      if (!isPeak(consolidated, j)) continue;
+      const dx = Math.abs(consolidated[i][0] - consolidated[j][0]);
+      if (dx < PEAK_MERGE_DIST) {
+        // Keep the vertex with lower Y (more prominent peak = higher on image)
+        if (consolidated[i][1] <= consolidated[j][1]) {
+          toRemove.add(j);
+        } else {
+          toRemove.add(i);
+        }
+        merged = true;
+      }
+    }
+    consolidated = consolidated.filter((_, i) => !toRemove.has(i));
+    if (!merged) break;
+  }
+  if (consolidated.length < 3) consolidated = snapped;
+
+  // ── Step 5: Breakpoint-based slope straightening ──────────────────────────
+  // Find vertices where consecutive segment directions change by > 35°.
+  // These are "corners" (peaks, valley corners, eave corners).
+  // Between consecutive corners, the intermediate vertices should lie on a straight line.
+  // Project them 85% toward the best-fit line to remove slope wobble.
+  const BREAKPOINT_ANGLE = (35 * Math.PI) / 180;
+  const STRAIGHT_BLEND   = 0.85;
+
+  const nn = consolidated.length;
+  const breakpoints: number[] = [];
+
+  for (let i = 0; i < nn; i++) {
+    const prev = consolidated[(i - 1 + nn) % nn];
+    const curr = consolidated[i];
+    const next = consolidated[(i + 1) % nn];
+    const ang0 = Math.atan2(curr[1] - prev[1], curr[0] - prev[0]);
+    const ang1 = Math.atan2(next[1] - curr[1], next[0] - curr[0]);
+    let diff = Math.abs(ang1 - ang0);
+    if (diff > Math.PI) diff = 2 * Math.PI - diff;
+    if (diff > BREAKPOINT_ANGLE) breakpoints.push(i);
+  }
+
+  const straightened: [number, number][] = consolidated.map(p => [p[0], p[1]]);
+
+  if (breakpoints.length >= 2) {
+    const nb = breakpoints.length;
+    for (let bi = 0; bi < nb; bi++) {
+      const startIdx = breakpoints[bi];
+      const endIdx   = breakpoints[(bi + 1) % nb];
+
+      // Collect vertices in this run (exclusive of endpoints which are breakpoints)
+      const runFull: { idx: number; pt: [number, number] }[] = [];
+      let cur2 = startIdx;
+      while (true) {
+        runFull.push({ idx: cur2, pt: consolidated[cur2] });
+        if (cur2 === endIdx) break;
+        cur2 = (cur2 + 1) % nn;
+        if (runFull.length > nn) break; // safety
+      }
+
+      if (runFull.length < 3) continue; // nothing to straighten between endpoints
+
+      const fit = fitLine(runFull.map(r => r.pt));
+      if (!fit) continue;
+
+      // Project intermediate vertices (skip first and last = breakpoints)
+      for (let k = 1; k < runFull.length - 1; k++) {
+        const { idx, pt } = runFull[k];
+        straightened[idx] = blend(pt, project(pt, fit), STRAIGHT_BLEND);
+      }
+    }
+  }
+
+  // ── Step 6: Horizontal segment flattening ─────────────────────────────────
+  // Make near-horizontal segments (±12°) exactly flat (average Y of endpoints).
+  const HORIZ_TOL_RAD = (12 * Math.PI) / 180;
+  const HORIZ_BLEND   = 0.90;
+  const ns = straightened.length;
+  const flat: [number, number][] = straightened.map(p => [p[0], p[1]]);
+
+  for (let i = 0; i < ns; i++) {
+    const j = (i + 1) % ns;
     const [ax, ay] = flat[i], [bx, by] = flat[j];
     const ang = Math.atan2(by - ay, bx - ax);
     const normAng = Math.abs(ang % Math.PI);
     const isHoriz = normAng < HORIZ_TOL_RAD || normAng > Math.PI - HORIZ_TOL_RAD;
     if (isHoriz) {
       const avgY = (ay + by) / 2;
-      flat[i] = [ax, ay * (1 - BLEND) + avgY * BLEND];
-      flat[j] = [bx, by * (1 - BLEND) + avgY * BLEND];
+      flat[i] = [ax, ay * (1 - HORIZ_BLEND) + avgY * HORIZ_BLEND];
+      flat[j] = [bx, by * (1 - HORIZ_BLEND) + avgY * HORIZ_BLEND];
     }
   }
 
-  // ── Step 5: collinear triple smoothing ────────────────────────────────────
-  // If vertex B sits between A and C on approximately the same line,
-  // project B onto the A→C line to remove remaining wobble.
-  const ANG_TOL_RAD = (20 * Math.PI) / 180;
+  // ── Step 7: Final light RDP — remove micro-wobble ─────────────────────────
+  const rdpFinal = rdp([...flat, flat[0]], diag * 0.008);
+  let result: [number, number][] = rdpFinal.slice(0, -1);
+  if (result.length < 3) result = flat;
 
-  function angDiff(a: number, b: number): number {
-    let d = ((a - b + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-    return Math.abs(d > Math.PI / 2 ? Math.PI - d : d);
-  }
-
-  const smoothed: [number, number][] = flat.map(p => [p[0], p[1]]);
-  for (let i = 0; i < n; i++) {
-    const i0 = (i - 1 + n) % n, i1 = i, i2 = (i + 1) % n;
-    const ang01 = Math.atan2(flat[i1][1] - flat[i0][1], flat[i1][0] - flat[i0][0]);
-    const ang12 = Math.atan2(flat[i2][1] - flat[i1][1], flat[i2][0] - flat[i1][0]);
-    if (angDiff(ang01, ang12) < ANG_TOL_RAD) {
-      const fit = fitLine([flat[i0], flat[i1], flat[i2]]);
-      if (fit) smoothed[i1] = blend(flat[i1], project(flat[i1], fit), 0.82);
-    }
-  }
-
-  // ── Step 6: auto-close ────────────────────────────────────────────────────
-  const f0 = smoothed[0], fl = smoothed[smoothed.length - 1];
+  // ── Step 8: Auto-close ────────────────────────────────────────────────────
+  const f0 = result[0], fl = result[result.length - 1];
   const closeDist = Math.hypot(fl[0] - f0[0], fl[1] - f0[1]);
-  let result = smoothed;
   if (closeDist > 0.5 && closeDist < imgNatW * 0.05) {
-    // Snap last vertex to first and drop duplicate
-    result = smoothed.slice(0, -1);
+    result = result.slice(0, -1);
   }
 
   return result.flatMap(([x, y]) => [x, y]);
