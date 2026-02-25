@@ -1904,6 +1904,74 @@ export default function Page() {
     return Math.sqrt(dx * dx + dy * dy);
   }
 
+  // ── Ramer–Douglas–Peucker simplification ──────────────────────────────────
+  function rdpSimplify(pts: number[], epsilon: number): number[] {
+    if (pts.length < 6) return pts; // fewer than 3 points — nothing to simplify
+    // Convert flat [x,y,x,y,...] to [{x,y}] pairs
+    const points: { x: number; y: number }[] = [];
+    for (let i = 0; i < pts.length; i += 2) points.push({ x: pts[i], y: pts[i + 1] });
+
+    function perpendicularDist(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      if (dx === 0 && dy === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+      const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy);
+      return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+    }
+
+    function rdp(pts: { x: number; y: number }[], start: number, end: number, eps: number, keep: boolean[]) {
+      if (end <= start + 1) return;
+      let maxDist = 0, maxIdx = start;
+      for (let i = start + 1; i < end; i++) {
+        const d = perpendicularDist(pts[i], pts[start], pts[end]);
+        if (d > maxDist) { maxDist = d; maxIdx = i; }
+      }
+      if (maxDist > eps) {
+        keep[maxIdx] = true;
+        rdp(pts, start, maxIdx, eps, keep);
+        rdp(pts, maxIdx, end, eps, keep);
+      }
+    }
+
+    const keep = new Array(points.length).fill(false);
+    keep[0] = true;
+    keep[points.length - 1] = true;
+    rdp(points, 0, points.length - 1, epsilon, keep);
+
+    const result: number[] = [];
+    for (let i = 0; i < points.length; i++) {
+      if (keep[i]) result.push(points[i].x, points[i].y);
+    }
+    return result;
+  }
+
+  // Snap each segment angle to the nearest of {0,45,90,135}° if within 12°
+  function snapAngles(pts: number[]): number[] {
+    if (pts.length < 4) return pts;
+    const snapped: number[] = [pts[0], pts[1]];
+    const SNAP_ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
+    const THRESHOLD = 12; // degrees
+
+    for (let i = 2; i < pts.length; i += 2) {
+      const px = snapped[snapped.length - 2], py = snapped[snapped.length - 1];
+      const cx = pts[i], cy = pts[i + 1];
+      const angleDeg = (Math.atan2(cy - py, cx - px) * 180) / Math.PI;
+      const normAngle = ((angleDeg % 360) + 360) % 360;
+      let bestDiff = Infinity, bestSnap = normAngle;
+      for (const sa of SNAP_ANGLES) {
+        const diff = Math.abs(((normAngle - sa + 180) % 360) - 180);
+        if (diff < bestDiff) { bestDiff = diff; bestSnap = sa; }
+      }
+      if (bestDiff <= THRESHOLD) {
+        const len = Math.hypot(cx - px, cy - py);
+        const rad = (bestSnap * Math.PI) / 180;
+        snapped.push(px + len * Math.cos(rad), py + len * Math.sin(rad));
+      } else {
+        snapped.push(cx, cy);
+      }
+    }
+    return snapped;
+  }
+
   function onStageDown(e: any) {
     if (!active || !activeRoof || !photoImg) return;
     const stage = e.target.getStage();
@@ -2018,7 +2086,7 @@ export default function Page() {
     }
 
     // Brush ice & water painting — start a new stroke
-    if (active.step === "TRACE" && tool === "BRUSH_ICE_WATER" && activeRoof.closed) {
+    if (active.step === "ICE_WATER" && tool === "BRUSH_ICE_WATER" && activeRoof.closed) {
       brushPaintingRef.current = true;
       brushStrokeRef.current = [pos.x, pos.y];
       setBrushDraft({ points: [pos.x, pos.y], size: activeRoof.iceWaterBrushSize ?? 30 });
@@ -2046,10 +2114,13 @@ export default function Page() {
 
   function onStageUp() {
     if (!brushPaintingRef.current) return;
-    const pts = brushStrokeRef.current;
-    if (activeRoof && pts.length >= 4) {
+    const rawPts = brushStrokeRef.current;
+    if (activeRoof && rawPts.length >= 4) {
       const size = activeRoof.iceWaterBrushSize ?? 30;
-      const newStroke = { id: uid(), points: pts, size };
+      const epsilon = Math.max(3, Math.min(12, size * 0.35));
+      const simplified = rdpSimplify(rawPts, epsilon);
+      const finalPts = simplified.length >= 4 ? snapAngles(simplified) : rawPts;
+      const newStroke = { id: uid(), points: finalPts, size };
       patchActiveRoof((r) => ({ ...r, iceWaterBrush: [...(r.iceWaterBrush ?? []), newStroke] }));
     }
     brushPaintingRef.current = false;
@@ -3424,6 +3495,57 @@ export default function Page() {
                     </button>
                   </div>
 
+                  {/* Ice & Water brush tools */}
+                  {activeRoof && liveStep === "ICE_WATER" && (
+                    <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
+                      <button
+                        style={{
+                          ...ghostBtn,
+                          width: "100%",
+                          background: tool === "BRUSH_ICE_WATER" ? "rgba(18,23,38,0.10)" : "#ffffff",
+                          border: `1.5px solid ${tool === "BRUSH_ICE_WATER" ? "rgba(18,23,38,0.45)" : "rgba(15,23,42,0.12)"}`,
+                          color: tool === "BRUSH_ICE_WATER" ? "#0f172a" : "#475569",
+                          fontWeight: tool === "BRUSH_ICE_WATER" ? 700 : 600,
+                          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                        }}
+                        onClick={() => {
+                          setTool(tool === "BRUSH_ICE_WATER" ? "NONE" : "BRUSH_ICE_WATER");
+                        }}
+                      >
+                        🖌 {tool === "BRUSH_ICE_WATER" ? "Painting — drag on canvas" : "Paint Custom Ice & Water"}
+                      </button>
+                      {tool === "BRUSH_ICE_WATER" && (
+                        <div style={{ marginTop: 6, background: "rgba(18,23,38,0.06)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "#334155" }}>
+                          Drag on the roof to paint. Stroke auto-straightens on release.
+                          <div style={{ marginTop: 6 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                              <span>Brush size</span>
+                              <span style={{ fontWeight: 700 }}>{activeRoof.iceWaterBrushSize ?? 30}px</span>
+                            </div>
+                            <input
+                              type="range" min={5} max={100} step={1}
+                              value={activeRoof.iceWaterBrushSize ?? 30}
+                              onChange={(e) => patchActiveRoof((r) => ({ ...r, iceWaterBrushSize: Number(e.target.value) }))}
+                              style={{ width: "100%", accentColor: "#0f172a" }}
+                            />
+                          </div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                            <button
+                              style={{ ...smallBtn, flex: 1, fontSize: 11 }}
+                              onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: (r.iceWaterBrush ?? []).slice(0, -1) }))}
+                              disabled={!(activeRoof.iceWaterBrush ?? []).length}
+                            >↩ Undo</button>
+                            <button
+                              style={{ ...smallBtn, flex: 1, fontSize: 11, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
+                              onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: [] }))}
+                              disabled={!(activeRoof.iceWaterBrush ?? []).length}
+                            >Clear all</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Trace tools */}
                   {activeRoof && liveStep === "TRACE" && (
                     <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
@@ -3915,60 +4037,6 @@ export default function Page() {
                             </div>
                           )}
 
-
-                          {/* ── Brush Ice & Water ── */}
-                          <div style={{ paddingTop: 8, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>
-                              Paint Tools
-                            </div>
-                            <button
-                              style={{
-                                ...ghostBtn,
-                                width: "100%",
-                                background: tool === "BRUSH_ICE_WATER" ? "rgba(18,23,38,0.10)" : "#ffffff",
-                                border: `1.5px solid ${tool === "BRUSH_ICE_WATER" ? "rgba(18,23,38,0.45)" : "rgba(15,23,42,0.12)"}`,
-                                color: tool === "BRUSH_ICE_WATER" ? "#0f172a" : "#475569",
-                                fontWeight: tool === "BRUSH_ICE_WATER" ? 700 : 600,
-                                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                              }}
-                              onClick={() => {
-                                setTool(tool === "BRUSH_ICE_WATER" ? "NONE" : "BRUSH_ICE_WATER");
-                                setDraftLine(null);
-                                setDraftHole(null);
-                              }}
-                            >
-                              🖌 {tool === "BRUSH_ICE_WATER" ? "Painting — drag on canvas" : "Brush Ice & Water"}
-                            </button>
-                            {tool === "BRUSH_ICE_WATER" && (
-                              <div style={{ marginTop: 6, background: "rgba(18,23,38,0.06)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "#334155" }}>
-                                Drag on the roof to paint ice & water. Appears at Ice & Water step and beyond.
-                                <div style={{ marginTop: 6 }}>
-                                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                                    <span>Brush size</span>
-                                    <span style={{ fontWeight: 700 }}>{activeRoof.iceWaterBrushSize ?? 30}px</span>
-                                  </div>
-                                  <input
-                                    type="range" min={5} max={100} step={1}
-                                    value={activeRoof.iceWaterBrushSize ?? 30}
-                                    onChange={(e) => patchActiveRoof((r) => ({ ...r, iceWaterBrushSize: Number(e.target.value) }))}
-                                    style={{ width: "100%", accentColor: "#0f172a" }}
-                                  />
-                                </div>
-                                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                                  <button
-                                    style={{ ...smallBtn, flex: 1, fontSize: 11 }}
-                                    onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: (r.iceWaterBrush ?? []).slice(0, -1) }))}
-                                    disabled={!(activeRoof.iceWaterBrush ?? []).length}
-                                  >↩ Undo</button>
-                                  <button
-                                    style={{ ...smallBtn, flex: 1, fontSize: 11, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
-                                    onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: [] }))}
-                                    disabled={!(activeRoof.iceWaterBrush ?? []).length}
-                                  >Clear all</button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
 
                           <button
                             style={{ ...smallBtn, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)", fontSize: 11 }}
