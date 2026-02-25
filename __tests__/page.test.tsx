@@ -239,10 +239,10 @@ async function startProject() {
   return user;
 }
 
-// Helper — starts project and opens advanced options
+// Helper — starts project and opens the Settings tab (formerly "advanced options")
 async function openAdvanced() {
   const user = await startProject();
-  await user.click(screen.getByRole("button", { name: /advanced options/i }));
+  await user.click(screen.getByRole("button", { name: /settings/i }));
   return user;
 }
 
@@ -284,8 +284,8 @@ describe("Page — after starting project", () => {
   it("advances to the TRACE step", async () => {
     await startProject();
     expect(
-      screen.getByText(/Step 1 — Outline roofs/i)
-    ).toBeInTheDocument();
+      screen.getAllByText(/Step 1 — Outline roofs/i).length
+    ).toBeGreaterThan(0);
   });
 
   it("renders the Konva stage", async () => {
@@ -376,10 +376,10 @@ describe("Page — advanced options panel", () => {
     expect(screen.getByText("Product Widths")).toBeInTheDocument();
   });
 
-  it("closes when toggled again", async () => {
+  it("closes when Edit tab is selected", async () => {
     const user = await openAdvanced();
-    // The toggle button keeps the same label; clicking it again collapses the panel
-    await user.click(screen.getByRole("button", { name: /advanced options/i }));
+    // Switching to Edit tab hides the Settings panel content
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
     expect(screen.queryByText("Shingle Color")).not.toBeInTheDocument();
   });
 

@@ -956,6 +956,7 @@ export default function Page() {
   const [draftHole, setDraftHole] = useState<number[] | null>(null);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
 
   // ── Cleanup state ─────────────────────────────────────────────────────────
   const [cleanupOpen, setCleanupOpen]           = useState(false);
@@ -2377,9 +2378,9 @@ export default function Page() {
   // ── Design tokens ──────────────────────────────────────────────────────────
   const sectionCard: React.CSSProperties = {
     background: "#ffffff",
-    borderRadius: 14,
-    padding: "16px",
-    boxShadow: "0 1px 3px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.05)",
+    borderRadius: 16,
+    padding: "18px",
+    boxShadow: "0 1px 4px rgba(15,23,42,0.07), 0 0 0 1px rgba(15,23,42,0.05)",
     marginBottom: 12,
   };
 
@@ -2427,22 +2428,23 @@ export default function Page() {
   const primaryBtn: React.CSSProperties = {
     display: "block",
     width: "100%",
-    padding: "12px 20px",
-    borderRadius: 10,
+    padding: "13px 20px",
+    minHeight: 46,
+    borderRadius: 12,
     fontSize: 14,
     fontWeight: 700,
     cursor: "pointer",
     border: "none",
     background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
     color: "#ffffff",
-    boxShadow: "0 1px 4px rgba(37,99,235,0.35)",
+    boxShadow: "0 2px 8px rgba(37,99,235,0.30)",
     marginTop: 8,
   };
 
   const greenBtn: React.CSSProperties = {
     ...primaryBtn,
     background: "linear-gradient(135deg, #16a34a, #15803d)",
-    boxShadow: "0 1px 4px rgba(22,163,74,0.35)",
+    boxShadow: "0 2px 8px rgba(22,163,74,0.28)",
   };
 
   const ghostBtn: React.CSSProperties = {
@@ -2465,6 +2467,18 @@ export default function Page() {
     border: "1.5px solid rgba(15,23,42,0.10)",
     background: "#ffffff",
     color: "#334155",
+  };
+
+  const topBarBtn: React.CSSProperties = {
+    padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+    cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.12)",
+    background: "#ffffff", color: "#334155", whiteSpace: "nowrap" as const,
+  };
+
+  const tabBtnBase: React.CSSProperties = {
+    flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
+    cursor: "pointer", border: "none", borderRadius: 8,
+    transition: "background 0.15s, color 0.15s",
   };
 
   const lineKindBtn = (kind: LineKind): React.CSSProperties => {
@@ -2725,8 +2739,72 @@ export default function Page() {
     <div style={
       screen === "CUSTOMER_VIEW"
         ? { display: "flex", flexDirection: "row", height: "100dvh", overflow: "hidden" }
-        : { display: "grid", gridTemplateColumns: "420px 1fr", height: "100vh" }
+        : { display: "flex", flexDirection: "column", height: "100vh", background: "#f8fafc" }
     }>
+
+      {/* ── TOP BAR (PROJECT editor only) ── */}
+      {screen !== "CUSTOMER_VIEW" && (
+        <header style={{
+          display: "flex", alignItems: "center", gap: 12,
+          height: 56, flexShrink: 0,
+          background: "#ffffff",
+          borderBottom: "1px solid rgba(15,23,42,0.08)",
+          boxShadow: "0 1px 3px rgba(15,23,42,0.05)",
+          padding: "0 20px", zIndex: 10,
+        }}>
+          <button onClick={() => setScreen("MENU")}
+            style={{ ...topBarBtn, padding: "6px 10px", color: "#64748b", flexShrink: 0 }}>
+            ← Menu
+          </button>
+          <Image src="/roofviz-logo.png" alt="RoofViz" width={110} height={32} priority style={{ flexShrink: 0 }} />
+          {active && (
+            <input
+              value={active.name}
+              onChange={(e) => patchActive((p) => ({ ...p, name: e.target.value }))}
+              placeholder="Project name"
+              style={{
+                flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700, color: "#0f172a",
+                background: "transparent", border: "none",
+                borderBottom: "1.5px solid rgba(15,23,42,0.10)",
+                padding: "4px 6px", outline: "none",
+              }}
+            />
+          )}
+          {active && (
+            <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+              <button
+                style={{ ...topBarBtn,
+                  background: active.showGuidesDuringInstall ? "rgba(37,99,235,0.07)" : "#ffffff",
+                  color: active.showGuidesDuringInstall ? "#2563eb" : "#64748b",
+                  borderColor: active.showGuidesDuringInstall ? "rgba(37,99,235,0.25)" : "rgba(15,23,42,0.12)" }}
+                onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}
+              >
+                {active.showGuidesDuringInstall ? "⊙ Guides On" : "⊙ Guides"}
+              </button>
+              <button
+                style={{ ...topBarBtn,
+                  background: liveStep === "EXPORT" ? "linear-gradient(135deg,#16a34a,#15803d)" : "#f8fafc",
+                  color: liveStep === "EXPORT" ? "#ffffff" : "#94a3b8",
+                  border: liveStep === "EXPORT" ? "none" : "1.5px solid rgba(15,23,42,0.10)",
+                  fontWeight: 700,
+                  cursor: liveStep === "EXPORT" ? "pointer" : "default",
+                }}
+                disabled={liveStep !== "EXPORT"}
+                onClick={liveStep === "EXPORT" ? exportPdfTwoPages : undefined}
+              >
+                ↓ Export PDF
+              </button>
+            </div>
+          )}
+        </header>
+      )}
+
+      {/* ── CONTENT AREA: left panel + canvas side by side ── */}
+      <div style={
+        screen === "CUSTOMER_VIEW"
+          ? { display: "contents" }
+          : { display: "grid", gridTemplateColumns: "360px 1fr", flex: 1, overflow: "hidden", minHeight: 0 }
+      }>
 
       {/* ── CUSTOMER RIGHT SIDEBAR ── */}
       {screen === "CUSTOMER_VIEW" && customerViewData && (
@@ -2874,55 +2952,53 @@ export default function Page() {
         {/* ── PROJECT EDITOR PANEL ── */}
         {screen !== "CUSTOMER_VIEW" && (<>
 
-        {/* Sticky header */}
+        {/* Sticky header — step progress only */}
         <div style={{
           background: "#ffffff",
           borderBottom: "1px solid rgba(15,23,42,0.08)",
-          padding: "16px 20px 14px",
+          padding: "12px 18px 10px",
           flexShrink: 0,
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button
-              onClick={() => setScreen("MENU")}
-              style={{ padding: "6px 10px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.10)", background: "#f8fafc", color: "#475569", flexShrink: 0 }}
-            >
-              ← Menu
-            </button>
-            <Image src="/roofviz-logo.png" alt="RoofViz" width={148} height={43} priority />
-            {active && (
-              <div style={{ textAlign: "right", marginLeft: "auto" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#2563eb", letterSpacing: "0.05em" }}>
-                  STEP {stepIndex(liveStep) + 1} / {STEPS.length}
-                </div>
-                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2, letterSpacing: "0.02em" }}>
-                  Scroll · Zoom &nbsp;|&nbsp; Drag · Pan
-                </div>
+          {active && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#334155" }}>
+                  Step {stepIndex(liveStep) + 1} of {STEPS.length}
+                </span>
+                <span style={{ fontSize: 10, color: "#94a3b8" }}>
+                  {STEP_TITLE[liveStep] ?? liveStep}
+                </span>
               </div>
-            )}
-          </div>
-          {active && (
-            <input
-              value={active.name}
-              onChange={(e) => patchActive((p) => ({ ...p, name: e.target.value }))}
-              placeholder="Project name"
-              style={{ marginTop: 10, width: "100%", fontSize: 13, fontWeight: 700, color: "#0f172a", background: "transparent", border: "none", borderBottom: "1.5px solid rgba(15,23,42,0.10)", padding: "4px 2px", outline: "none", boxSizing: "border-box" as const }}
-            />
-          )}
-          {active && (
-            <div style={{ marginTop: 8, height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
-              <div style={{
-                height: "100%",
-                width: `${((stepIndex(liveStep) + 1) / STEPS.length) * 100}%`,
-                background: "linear-gradient(90deg, #2563eb, #60a5fa)",
-                borderRadius: 99,
-                transition: "width 0.35s ease",
-              }} />
-            </div>
+              <div style={{ height: 4, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%",
+                  width: `${((stepIndex(liveStep) + 1) / STEPS.length) * 100}%`,
+                  background: "linear-gradient(90deg, #2563eb, #60a5fa)",
+                  borderRadius: 99, transition: "width 0.35s ease",
+                }} />
+              </div>
+            </>
           )}
         </div>
 
         {/* Scrollable body */}
         <div style={{ flex: 1, overflow: "auto", padding: "16px" }}>
+
+          {/* ── Edit / Settings tab switcher ── */}
+          {active && liveStep !== "START" && (
+            <div style={{ display: "flex", gap: 3, padding: "0 0 10px", flexShrink: 0 }}>
+              {(["edit", "settings"] as const).map((tab) => (
+                <button key={tab} onClick={() => setUiTab(tab)}
+                  style={{ ...tabBtnBase,
+                    background: uiTab === tab ? "#ffffff" : "transparent",
+                    color: uiTab === tab ? "#1e293b" : "#94a3b8",
+                    boxShadow: uiTab === tab ? "0 1px 3px rgba(15,23,42,0.10)" : "none",
+                  }}>
+                  {tab === "edit" ? "Edit" : "⚙ Settings"}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* ── START screen ── */}
           {liveStep === "START" && (
@@ -2947,8 +3023,8 @@ export default function Page() {
             </div>
           )}
 
-          {/* ── ACTIVE PROJECT ── */}
-          {liveStep !== "START" && (
+          {/* ── ACTIVE PROJECT (Edit tab) ── */}
+          {liveStep !== "START" && uiTab === "edit" && (
             <>
               {/* Photo — current project only */}
               <div style={sectionCard} className="rv-section-card">
@@ -3795,178 +3871,164 @@ export default function Page() {
                     </div>
                   )}
 
-                  {/* Advanced options */}
-                  {activeRoof && (
-                    <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
-                      <button
-                        style={{ ...smallBtn, width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center" }}
-                        onClick={() => setAdvancedOpen((v) => !v)}
-                      >
-                        <span>Advanced Options</span>
-                        <span style={{
-                          transform: advancedOpen ? "rotate(180deg)" : "none",
-                          transition: "transform 0.2s",
-                          display: "inline-block",
-                          opacity: 0.45,
-                          fontSize: 11,
-                        }}>▾</span>
-                      </button>
-
-                      {advancedOpen && (
-                        <div style={{ marginTop: 14, display: "grid", gap: 16 }}>
-
-                          <div>
-                            <label style={fieldLabel}>Shingle Color</label>
-                            <select
-                              value={active.shingleColor}
-                              onChange={(e) => patchActive((p) => ({ ...p, shingleColor: e.target.value as ShingleColor }))}
-                              style={selectStyle}
-                            >
-                              {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => (
-                                <option key={c} value={c}>{c}</option>
-                              ))}
-                            </select>
-                          </div>
-
-                          {/* Pro-Start placement */}
-                          <div>
-                            <div style={fieldLabel}>Pro-Start Placement</div>
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                              {([
-                                [false, "Eaves Only"],
-                                [true,  "Eaves + Rakes"],
-                              ] as [boolean, string][]).map(([val, label]) => (
-                                <button
-                                  key={label}
-                                  onClick={() => patchActiveRoof((r) => ({ ...r, proStartOnRakes: val }))}
-                                  style={{
-                                    ...smallBtn,
-                                    background: activeRoof.proStartOnRakes === val ? "rgba(37,99,235,0.10)" : "#fff",
-                                    borderColor: activeRoof.proStartOnRakes === val ? "rgba(37,99,235,0.40)" : "rgba(15,23,42,0.10)",
-                                    color: activeRoof.proStartOnRakes === val ? "#1d4ed8" : "#475569",
-                                    fontWeight: activeRoof.proStartOnRakes === val ? 700 : 600,
-                                  }}
-                                >{label}</button>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div>
-                            <div style={fieldLabel}>Metal Colors</div>
-                            <div style={{ display: "grid", gap: 8 }}>
-                              {([
-                                ["Gutter Apron", "gutterApronColor"],
-                                ["Drip Edge", "dripEdgeColor"],
-                                ["Valley Metal", "valleyMetalColor"],
-                              ] as const).map(([label, key]) => (
-                                <label key={key} style={{ display: "block" }}>
-                                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>{label}</div>
-                                  <select
-                                    value={(activeRoof as any)[key]}
-                                    onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: e.target.value as MetalColor }))}
-                                    style={selectStyle}
-                                  >
-                                    {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-                                  </select>
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div>
-                            <div style={fieldLabel}>Product Widths</div>
-                            <div style={{ display: "grid", gap: 10 }}>
-                              {([
-                                ["Gutter apron", "gutterApronW", 4, 24],
-                                ["Drip edge", "dripEdgeW", 4, 24],
-                                ["Ice & water (eaves)", "iceWaterEaveW", 10, 90],
-                                ["Ice & water (valleys)", "iceWaterValleyW", 6, 70],
-                                ["Valley metal", "valleyMetalW", 4, 35],
-                                ["Pro-start", "proStartW", 6, 45],
-                                ["Ridge vent", "ridgeVentW", 6, 45],
-                                ["Cap shingles", "capW", 4, 30],
-                              ] as const).map(([label, key, min, max]) => (
-                                <label key={key} style={{ display: "block" }}>
-                                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-                                    <span>{label}</span>
-                                    <span style={{ fontWeight: 700, color: "#334155" }}>{(activeRoof as any)[key]}px</span>
-                                  </div>
-                                  <input
-                                    type="range"
-                                    min={min}
-                                    max={max}
-                                    step={1}
-                                    value={(activeRoof as any)[key]}
-                                    onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: Number(e.target.value) } as any))}
-                                    style={{ width: "100%", accentColor: "#2563eb" }}
-                                  />
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div>
-                            <div style={fieldLabel}>Shingle Scale</div>
-                            <label style={{ display: "block" }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-                                <span>Size</span>
-                                <span style={{ fontWeight: 700, color: "#334155" }}>{activeRoof.shingleScale.toFixed(2)}</span>
-                              </div>
-                              <input
-                                type="range"
-                                min={0.12}
-                                max={0.32}
-                                step={0.01}
-                                value={activeRoof.shingleScale}
-                                onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleScale: Number(e.target.value) }))}
-                                style={{ width: "100%", accentColor: "#2563eb" }}
-                              />
-                            </label>
-                          </div>
-
-                          <div>
-                            <div style={fieldLabel}>Shingle Rotation</div>
-                            <label style={{ display: "block" }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-                                <span>Angle (degrees)</span>
-                                <span style={{ fontWeight: 700, color: "#334155" }}>{(activeRoof.shingleRotation ?? 0).toFixed(0)}°</span>
-                              </div>
-                              <input
-                                type="range"
-                                min={-45}
-                                max={45}
-                                step={1}
-                                value={activeRoof.shingleRotation ?? 0}
-                                onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleRotation: Number(e.target.value) }))}
-                                style={{ width: "100%", accentColor: "#2563eb" }}
-                              />
-                            </label>
-                            <button
-                              style={{ ...smallBtn, marginTop: 6, width: "100%", fontSize: 11 }}
-                              onClick={() => {
-                                const firstEave = activeRoof.lines.find((l) => l.kind === "EAVE");
-                                if (!firstEave || firstEave.points.length < 4) {
-                                  patchActiveRoof((r) => ({ ...r, shingleRotation: 0 }));
-                                  return;
-                                }
-                                const angle = Math.atan2(
-                                  firstEave.points[3] - firstEave.points[1],
-                                  firstEave.points[2] - firstEave.points[0]
-                                ) * 180 / Math.PI;
-                                patchActiveRoof((r) => ({ ...r, shingleRotation: Math.round(angle) }));
-                              }}
-                            >
-                              Auto-align to Eave Line
-                            </button>
-                          </div>
-
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
             </>
+          )}
+
+          {/* ── SETTINGS TAB ── */}
+          {uiTab === "settings" && active && (
+            <div style={{ padding: "4px 0 16px" }}>
+              {activeRoof && (
+                <div style={{ display: "grid", gap: 16 }}>
+
+                  <div>
+                    <label style={fieldLabel}>Shingle Color</label>
+                    <select
+                      value={active.shingleColor}
+                      onChange={(e) => patchActive((p) => ({ ...p, shingleColor: e.target.value as ShingleColor }))}
+                      style={selectStyle}
+                    >
+                      {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Pro-Start placement */}
+                  <div>
+                    <div style={fieldLabel}>Pro-Start Placement</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                      {([
+                        [false, "Eaves Only"],
+                        [true,  "Eaves + Rakes"],
+                      ] as [boolean, string][]).map(([val, label]) => (
+                        <button
+                          key={label}
+                          onClick={() => patchActiveRoof((r) => ({ ...r, proStartOnRakes: val }))}
+                          style={{
+                            ...smallBtn,
+                            background: activeRoof.proStartOnRakes === val ? "rgba(37,99,235,0.10)" : "#fff",
+                            borderColor: activeRoof.proStartOnRakes === val ? "rgba(37,99,235,0.40)" : "rgba(15,23,42,0.10)",
+                            color: activeRoof.proStartOnRakes === val ? "#1d4ed8" : "#475569",
+                            fontWeight: activeRoof.proStartOnRakes === val ? 700 : 600,
+                          }}
+                        >{label}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={fieldLabel}>Metal Colors</div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {([
+                        ["Gutter Apron", "gutterApronColor"],
+                        ["Drip Edge", "dripEdgeColor"],
+                        ["Valley Metal", "valleyMetalColor"],
+                      ] as const).map(([label, key]) => (
+                        <label key={key} style={{ display: "block" }}>
+                          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>{label}</div>
+                          <select
+                            value={(activeRoof as any)[key]}
+                            onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: e.target.value as MetalColor }))}
+                            style={selectStyle}
+                          >
+                            {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={fieldLabel}>Product Widths</div>
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {([
+                        ["Gutter apron", "gutterApronW", 4, 24],
+                        ["Drip edge", "dripEdgeW", 4, 24],
+                        ["Ice & water (eaves)", "iceWaterEaveW", 10, 90],
+                        ["Ice & water (valleys)", "iceWaterValleyW", 6, 70],
+                        ["Valley metal", "valleyMetalW", 4, 35],
+                        ["Pro-start", "proStartW", 6, 45],
+                        ["Ridge vent", "ridgeVentW", 6, 45],
+                        ["Cap shingles", "capW", 4, 30],
+                      ] as const).map(([label, key, min, max]) => (
+                        <label key={key} style={{ display: "block" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                            <span>{label}</span>
+                            <span style={{ fontWeight: 700, color: "#334155" }}>{(activeRoof as any)[key]}px</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={min}
+                            max={max}
+                            step={1}
+                            value={(activeRoof as any)[key]}
+                            onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: Number(e.target.value) } as any))}
+                            style={{ width: "100%", accentColor: "#2563eb" }}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={fieldLabel}>Shingle Scale</div>
+                    <label style={{ display: "block" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                        <span>Size</span>
+                        <span style={{ fontWeight: 700, color: "#334155" }}>{activeRoof.shingleScale.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.12}
+                        max={0.32}
+                        step={0.01}
+                        value={activeRoof.shingleScale}
+                        onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleScale: Number(e.target.value) }))}
+                        style={{ width: "100%", accentColor: "#2563eb" }}
+                      />
+                    </label>
+                  </div>
+
+                  <div>
+                    <div style={fieldLabel}>Shingle Rotation</div>
+                    <label style={{ display: "block" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                        <span>Angle (degrees)</span>
+                        <span style={{ fontWeight: 700, color: "#334155" }}>{(activeRoof.shingleRotation ?? 0).toFixed(0)}°</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-45}
+                        max={45}
+                        step={1}
+                        value={activeRoof.shingleRotation ?? 0}
+                        onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleRotation: Number(e.target.value) }))}
+                        style={{ width: "100%", accentColor: "#2563eb" }}
+                      />
+                    </label>
+                    <button
+                      style={{ ...smallBtn, marginTop: 6, width: "100%", fontSize: 11 }}
+                      onClick={() => {
+                        const firstEave = activeRoof.lines.find((l) => l.kind === "EAVE");
+                        if (!firstEave || firstEave.points.length < 4) {
+                          patchActiveRoof((r) => ({ ...r, shingleRotation: 0 }));
+                          return;
+                        }
+                        const angle = Math.atan2(
+                          firstEave.points[3] - firstEave.points[1],
+                          firstEave.points[2] - firstEave.points[0]
+                        ) * 180 / Math.PI;
+                        patchActiveRoof((r) => ({ ...r, shingleRotation: Math.round(angle) }));
+                      }}
+                    >
+                      Auto-align to Eave Line
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
         </>)}
@@ -4499,6 +4561,7 @@ export default function Page() {
           </Layer>
         </Stage>
       </main>
+      </div>
     </div>
   );
 }
