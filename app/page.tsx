@@ -1269,7 +1269,7 @@ export default function Page() {
     const result: { x1: number; y1: number; x2: number; y2: number; segCount: number; confidence: number }[] = [];
     for (const cluster of clusters) {
       const totalLen = cluster.reduce((s, c) => s + c.len, 0);
-      if (totalLen < roofWidth * 0.25) continue; // too short to be a real ridge
+      if (totalLen < roofWidth * 0.30) continue; // too short to be a real ridge (≥30% of width required)
       let minRX = Infinity, maxRX = -Infinity, sumY = 0;
       for (const c of cluster) {
         const lx = Math.min(c.x1, c.x2), rx = Math.max(c.x1, c.x2);
@@ -1331,8 +1331,35 @@ export default function Page() {
       if (x < minX) minX = x; if (x > maxX) maxX = x;
       if (y < minY) minY = y; if (y > maxY) maxY = y;
     }
-    return buildRidgeClusters(pts, maxX - minX, maxY - minY, minY)
-      .map(c => ({ kind: "RIDGE" as const, points: [c.x1, c.y1, c.x2, c.y2], confidence: c.confidence }));
+    const roofWidth = maxX - minX;
+
+    // Use labeled rakes to boost/gate confidence
+    const rakeLns = roof.lines.filter(l => l.kind === "RAKE");
+    const snapTol = roofWidth * 0.04;
+    const rakeEPs = rakeLns.flatMap(l => [
+      { x: l.points[0], y: l.points[1] }, { x: l.points[2], y: l.points[3] },
+    ]);
+    const hasSupport = (ex: number, ey: number) =>
+      rakeEPs.some(p => Math.hypot(p.x - ex, p.y - ey) <= snapTol);
+    // If no rakes are labeled yet, skip the support gate (graceful fallback)
+    const noRakesLabeled = rakeLns.length === 0;
+
+    return buildRidgeClusters(pts, roofWidth, maxY - minY, minY)
+      .flatMap(c => {
+        const leftOK = hasSupport(c.x1, c.y1);
+        const rightOK = hasSupport(c.x2, c.y2);
+        // Require at least one end supported unless no rakes exist yet
+        if (!noRakesLabeled && !leftOK && !rightOK) return [];
+        // Adjust confidence based on support quality
+        let conf = c.confidence;
+        if (!noRakesLabeled) {
+          if (leftOK && rightOK) conf = Math.min(0.95, conf + 0.05);
+          else conf = Math.max(0.60, conf - 0.10); // partial support
+        }
+        // Only surface Medium+ confidence (≥0.70) suggestions
+        if (conf < 0.70) return [];
+        return [{ kind: "RIDGE" as const, points: [c.x1, c.y1, c.x2, c.y2], confidence: conf }];
+      });
   }
 
   // Detect valley candidates from concave (inward-dipping) vertices in the outline polygon.
@@ -1417,34 +1444,41 @@ export default function Page() {
 
     if (ridgeLns.length > 0) {
       const r = ridgeLns[0];
+      const spanPct = Math.round(Math.abs(r.points[2] - r.points[0]) / roofWidth * 100);
       const lOK = rakeSupport(r.points[0], r.points[1]);
       const rOK = rakeSupport(r.points[2], r.points[3]);
       if (lOK && rOK) {
         ridgeConf = "high";
         ridgeReasons.push("Supported by rakes on both ends");
+        ridgeReasons.push(`Span covers ~${spanPct}% of roof width`);
       } else {
         ridgeConf = "medium";
+        ridgeReasons.push(`Span covers ~${spanPct}% of roof width`);
         if (!lOK) ridgeReasons.push("No rake support near left end");
         if (!rOK) ridgeReasons.push("No rake support near right end");
         ridgeReasons.push("Consider re-labeling or adjusting rakes");
       }
     } else if (ridgeClusters.length > 0) {
       const best = ridgeClusters[0];
+      const spanPct = Math.round((best.x2 - best.x1) / roofWidth * 100);
       const lOK = rakeSupport(best.x1, best.y1);
       const rOK = rakeSupport(best.x2, best.y2);
       if (lOK && rOK) {
         ridgeConf = "medium";
         ridgeReasons.push("Candidate found with rake support — not yet labeled");
+        ridgeReasons.push(`Span covers ~${spanPct}% of roof width`);
         ridgeReasons.push("Use 'Suggest Ridge' to adopt");
       } else {
         ridgeConf = "low";
-        ridgeReasons.push("Candidate found but lacks rake support");
+        ridgeReasons.push("No confident ridge detected from this view");
+        ridgeReasons.push(`Candidate span covers ~${spanPct}% of roof width`);
         if (rakeLns.length < 2) ridgeReasons.push("Fewer than 2 rakes — trace rakes first");
         else ridgeReasons.push("No rake endpoint near ridge candidate ends");
       }
     } else {
       ridgeConf = "none";
-      ridgeReasons.push("No near-horizontal edges in top 40% of outline");
+      ridgeReasons.push("No confident ridge detected from this view");
+      ridgeReasons.push("No near-horizontal edges found in top 40% of outline");
       ridgeReasons.push("Ridge may not be visible in this facade view");
     }
 
@@ -1460,7 +1494,7 @@ export default function Page() {
       valleyReasons.push(`${valleyLns.length} valley(s) labeled`);
     } else if (valleyCands.length > 0) {
       valleyConf = "possible";
-      valleyReasons.push("Concave vertex detected — possible valley");
+      valleyReasons.push("Interior convergence suggests possible valley");
       valleyReasons.push("Use 'Suggest Valley' to review candidates");
     } else {
       valleyConf = "none";
@@ -1513,8 +1547,8 @@ export default function Page() {
   function triggerSuggestRidges() {
     if (!activeRoof?.closed) return;
     setAutoLabelError(null);
-    // Only surface ridge suggestions with confidence >= 0.8
-    const suggestions = suggestRidges(activeRoof).filter(s => s.confidence >= 0.8);
+    // suggestRidges already applies 0.70 threshold internally
+    const suggestions = suggestRidges(activeRoof);
     setAutoLabelSuggestions(suggestions);
     if (suggestions.length === 0) {
       setAutoLabelError("No confident ridge detected from this view — draw manually.");
@@ -1526,7 +1560,7 @@ export default function Page() {
     if (!s) return;
     patchActiveRoof((r) => ({
       ...r,
-      lines: [...r.lines, { id: uid(), kind: s.kind as LineKind, points: s.points, aiLabeled: true, confidence: s.confidence }],
+      lines: [...r.lines, { id: uid(), kind: s.kind as LineKind, points: s.points, aiLabeled: true, confidence: s.confidence, locked: true }],
     }));
     setAutoLabelSuggestions((prev) => prev.filter((_, j) => j !== idx));
   }
@@ -3310,7 +3344,24 @@ export default function Page() {
                               border: "1px solid rgba(16,185,129,0.3)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>AI</span>
                           </button>
 
+                          {/* Run AI Judge button — above suggest buttons */}
+                          <button
+                            style={{ ...smallBtn, width: "100%", fontSize: 12, display: "flex",
+                              alignItems: "center", justifyContent: "center", gap: 6,
+                              color: "#6366f1", borderColor: "rgba(99,102,241,0.3)",
+                              background: "rgba(99,102,241,0.05)" }}
+                            onClick={() => runAiJudgeLocally(activeRoof, activeRoof.lines)}
+                          >
+                            🔍 Run AI Judge
+                            <span style={{ fontSize: 9, background: "rgba(99,102,241,0.12)", color: "#6366f1",
+                              border: "1px solid rgba(99,102,241,0.25)", borderRadius: 3,
+                              padding: "1px 4px", fontWeight: 700 }}>QC</span>
+                          </button>
+
                           {/* Suggest Ridge / Suggest Valleys secondary buttons */}
+                          <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.4 }}>
+                            Facade photos may not show true ridges/valleys clearly.
+                          </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
                             <button
                               style={{ ...smallBtn, fontSize: 11, display: "flex",
@@ -3331,20 +3382,6 @@ export default function Page() {
                               ◈ Suggest Valley
                             </button>
                           </div>
-
-                          {/* Run AI Judge button */}
-                          <button
-                            style={{ ...smallBtn, width: "100%", fontSize: 12, display: "flex",
-                              alignItems: "center", justifyContent: "center", gap: 6,
-                              color: "#6366f1", borderColor: "rgba(99,102,241,0.3)",
-                              background: "rgba(99,102,241,0.05)" }}
-                            onClick={() => runAiJudgeLocally(activeRoof, activeRoof.lines)}
-                          >
-                            🔍 Run AI Judge
-                            <span style={{ fontSize: 9, background: "rgba(99,102,241,0.12)", color: "#6366f1",
-                              border: "1px solid rgba(99,102,241,0.25)", borderRadius: 3,
-                              padding: "1px 4px", fontWeight: 700 }}>QC</span>
-                          </button>
 
                           {/* AI Judge result card */}
                           {aiJudgeResult && (() => {
