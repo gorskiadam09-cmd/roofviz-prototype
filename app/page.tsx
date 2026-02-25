@@ -1223,6 +1223,62 @@ export default function Page() {
 
   // ── Auto-Label Roof Edges ───────────────────────────────────────────────────
 
+  // ── Ridge cluster helper ──────────────────────────────────────────────────
+  // Collects near-horizontal outline edges in the top 40% of Y-range, clusters
+  // them by Y-proximity, and merges each qualifying cluster into one span.
+  // Does NOT apply the rake-support gate — callers decide.
+  function buildRidgeClusters(
+    pts: number[], roofWidth: number, roofHeight: number, minY: number
+  ): { x1: number; y1: number; x2: number; y2: number; segCount: number; confidence: number }[] {
+    const n = pts.length / 2;
+    if (n < 3 || roofWidth <= 0) return [];
+    const ridgeYZone = minY + 0.40 * roofHeight;
+
+    type RawSeg = { x1: number; y1: number; x2: number; y2: number; len: number };
+    const raws: RawSeg[] = [];
+    for (let i = 0; i < n; i++) {
+      const x1 = pts[i * 2], y1 = pts[i * 2 + 1];
+      const j = (i + 1) % n;
+      const x2 = pts[j * 2], y2 = pts[j * 2 + 1];
+      const dx = x2 - x1, dy = y2 - y1;
+      if (Math.atan2(Math.abs(dy), Math.abs(dx)) * 180 / Math.PI < 20
+          && (y1 + y2) / 2 <= ridgeYZone) {
+        raws.push({ x1, y1, x2, y2, len: Math.hypot(dx, dy) });
+      }
+    }
+    if (raws.length === 0) return [];
+
+    raws.sort((a, b) => (a.y1 + a.y2) / 2 - (b.y1 + b.y2) / 2);
+    const yTol = roofHeight * 0.10;
+    const clusters: RawSeg[][] = [];
+    for (const c of raws) {
+      const cMidY = (c.y1 + c.y2) / 2;
+      const existing = clusters.find(cl => {
+        const clMidY = cl.reduce((s, x) => s + (x.y1 + x.y2) / 2, 0) / cl.length;
+        return Math.abs(cMidY - clMidY) <= yTol;
+      });
+      if (existing) existing.push(c); else clusters.push([c]);
+    }
+
+    const result: { x1: number; y1: number; x2: number; y2: number; segCount: number; confidence: number }[] = [];
+    for (const cluster of clusters) {
+      const totalLen = cluster.reduce((s, c) => s + c.len, 0);
+      if (totalLen < roofWidth * 0.25) continue; // too short to be a real ridge
+      let minRX = Infinity, maxRX = -Infinity, sumY = 0;
+      for (const c of cluster) {
+        const lx = Math.min(c.x1, c.x2), rx = Math.max(c.x1, c.x2);
+        if (lx < minRX) minRX = lx;
+        if (rx > maxRX) maxRX = rx;
+        sumY += c.y1 + c.y2;
+      }
+      const avgY = sumY / (cluster.length * 2);
+      const ratio = Math.min(1, totalLen / roofWidth);
+      result.push({ x1: minRX, y1: avgY, x2: maxRX, y2: avgY,
+        segCount: cluster.length, confidence: Math.min(0.95, 0.65 + ratio * 0.35) });
+    }
+    return result;
+  }
+
   function autoLabelEdges(roof: Roof): Polyline[] {
     const pts = roof.outline;
     const n = pts.length / 2;
@@ -1237,10 +1293,8 @@ export default function Page() {
     const roofWidth = maxX - minX;
     const roofHeight = maxY - minY;
     const eaveYThreshold = minY + 0.75 * roofHeight;
-    const ridgeYZone = minY + 0.40 * roofHeight; // top 40% = ridge candidates
 
     const result: Polyline[] = [];
-    const ridgeCandidates: { x1: number; y1: number; x2: number; y2: number; len: number }[] = [];
 
     for (let i = 0; i < n; i++) {
       const x1 = pts[i * 2], y1 = pts[i * 2 + 1];
@@ -1250,70 +1304,47 @@ export default function Page() {
       const rawAngle = Math.atan2(Math.abs(dy), Math.abs(dx)) * 180 / Math.PI;
       const midY = (y1 + y2) / 2;
 
-      if (rawAngle < 20) {
-        if (midY >= eaveYThreshold) {
-          result.push({ id: uid(), kind: "EAVE", points: [x1, y1, x2, y2], aiLabeled: true, confidence: 0.95 });
-        } else if (midY <= ridgeYZone) {
-          ridgeCandidates.push({ x1, y1, x2, y2, len: Math.hypot(dx, dy) });
-        }
-        // middle-zone near-horizontals: leave unlabeled
+      if (rawAngle < 20 && midY >= eaveYThreshold) {
+        result.push({ id: uid(), kind: "EAVE", points: [x1, y1, x2, y2], aiLabeled: true, confidence: 0.95 });
       } else if (rawAngle >= 20 && rawAngle <= 70) {
         result.push({ id: uid(), kind: "RAKE", points: [x1, y1, x2, y2], aiLabeled: true, confidence: 0.90 });
       }
+      // near-horizontal middle-zone and ridge candidates: handled below
     }
 
-    // Ridge: cluster candidates by approximate Y (within 10% of roof height),
-    // then merge each qualifying cluster into ONE logical ridge segment.
-    if (ridgeCandidates.length > 0 && roofWidth > 0) {
-      // Sort by midY to make clustering stable
-      ridgeCandidates.sort((a, b) => (a.y1 + a.y2) / 2 - (b.y1 + b.y2) / 2);
-      const yTol = roofHeight * 0.10;
+    // Ridge gate: candidate must be supported by a RAKE endpoint on BOTH sides.
+    // Prevents labeling any long horizontal upper edge as a ridge.
+    const snapTol = roofWidth * 0.04; // 4% of roof width
+    const rakeEndpoints = result
+      .filter(l => l.kind === "RAKE")
+      .flatMap(l => [{ x: l.points[0], y: l.points[1] }, { x: l.points[2], y: l.points[3] }]);
+    const hasSupport = (ex: number, ey: number) =>
+      rakeEndpoints.some(p => Math.hypot(p.x - ex, p.y - ey) <= snapTol);
 
-      // Build Y-clusters greedily
-      type Cluster = typeof ridgeCandidates;
-      const clusters: Cluster[] = [];
-      for (const c of ridgeCandidates) {
-        const cMidY = (c.y1 + c.y2) / 2;
-        const existing = clusters.find(cl => {
-          const clMidY = cl.reduce((s, x) => s + (x.y1 + x.y2) / 2, 0) / cl.length;
-          return Math.abs(cMidY - clMidY) <= yTol;
-        });
-        if (existing) existing.push(c);
-        else clusters.push([c]);
+    for (const c of buildRidgeClusters(pts, roofWidth, roofHeight, minY)) {
+      if (hasSupport(c.x1, c.y1) && hasSupport(c.x2, c.y2)) {
+        result.push({ id: uid(), kind: "RIDGE",
+          points: [c.x1, c.y1, c.x2, c.y2],
+          aiLabeled: true, confidence: c.confidence, segmentCount: c.segCount });
       }
-
-      // Pick the dominant cluster (most total length) as "Main Ridge"
-      clusters.sort((a, b) =>
-        b.reduce((s, c) => s + c.len, 0) - a.reduce((s, c) => s + c.len, 0)
-      );
-
-      for (const cluster of clusters) {
-        const totalLen = cluster.reduce((s, c) => s + c.len, 0);
-        if (totalLen < roofWidth * 0.25) continue; // too short → skip
-
-        // Merge: span from leftmost to rightmost X at the cluster's average Y
-        let minRX = Infinity, maxRX = -Infinity, sumY = 0;
-        for (const c of cluster) {
-          const lx = Math.min(c.x1, c.x2), rx = Math.max(c.x1, c.x2);
-          if (lx < minRX) minRX = lx;
-          if (rx > maxRX) maxRX = rx;
-          sumY += c.y1 + c.y2;
-        }
-        const avgY = sumY / (cluster.length * 2);
-        const ratio = Math.min(1, totalLen / roofWidth);
-        const confidence = Math.min(0.95, 0.65 + ratio * 0.35);
-
-        result.push({
-          id: uid(), kind: "RIDGE",
-          points: [minRX, avgY, maxRX, avgY],
-          aiLabeled: true, confidence,
-          segmentCount: cluster.length,
-        });
-      }
+      // else: unsupported → leave unlabeled; user can use "Suggest Ridge" to review
     }
-    // else: no confident ridge → leave unlabeled rather than guessing
 
     return result;
+  }
+
+  // Returns ridge cluster candidates WITHOUT the rake-support gate.
+  // Used by the "Suggest Ridge" button.
+  function suggestRidges(roof: Roof): { kind: "RIDGE"; points: number[]; confidence: number }[] {
+    const pts = roof.outline;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < pts.length / 2; i++) {
+      const x = pts[i * 2], y = pts[i * 2 + 1];
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    return buildRidgeClusters(pts, maxX - minX, maxY - minY, minY)
+      .map(c => ({ kind: "RIDGE" as const, points: [c.x1, c.y1, c.x2, c.y2], confidence: c.confidence }));
   }
 
   // Detect valley candidates from concave (inward-dipping) vertices in the outline polygon.
@@ -1397,6 +1428,16 @@ export default function Page() {
     setAutoLabelSuggestions(suggestions);
     if (suggestions.length === 0) {
       setAutoLabelError("No valley candidates detected — try tracing manually.");
+    }
+  }
+
+  function triggerSuggestRidges() {
+    if (!activeRoof?.closed) return;
+    setAutoLabelError(null);
+    const suggestions = suggestRidges(activeRoof);
+    setAutoLabelSuggestions(suggestions);
+    if (suggestions.length === 0) {
+      setAutoLabelError("No ridge candidates detected — draw manually.");
     }
   }
 
@@ -3189,19 +3230,37 @@ export default function Page() {
                               border: "1px solid rgba(16,185,129,0.3)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>AI</span>
                           </button>
 
-                          {/* Suggest Valleys secondary button */}
-                          <button
-                            style={{ ...smallBtn, fontSize: 12, width: "100%", display: "flex",
-                              alignItems: "center", justifyContent: "center", gap: 6,
-                              color: "#64748b", borderColor: "rgba(100,116,139,0.25)",
-                              background: "rgba(100,116,139,0.04)" }}
-                            onClick={triggerSuggestValleys}
-                          >
-                            ◈ Suggest Valleys
-                            <span style={{ fontSize: 9, background: "rgba(100,116,139,0.12)", color: "#64748b",
-                              border: "1px solid rgba(100,116,139,0.3)", borderRadius: 3,
-                              padding: "1px 4px", fontWeight: 700 }}>AI</span>
-                          </button>
+                          {/* Suggest Ridge / Suggest Valleys secondary buttons */}
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
+                            <button
+                              style={{ ...smallBtn, fontSize: 11, display: "flex",
+                                alignItems: "center", justifyContent: "center", gap: 5,
+                                color: "#d97706", borderColor: "rgba(245,158,11,0.25)",
+                                background: "rgba(245,158,11,0.04)" }}
+                              onClick={triggerSuggestRidges}
+                            >
+                              ⬡ Suggest Ridge
+                            </button>
+                            <button
+                              style={{ ...smallBtn, fontSize: 11, display: "flex",
+                                alignItems: "center", justifyContent: "center", gap: 5,
+                                color: "#64748b", borderColor: "rgba(100,116,139,0.25)",
+                                background: "rgba(100,116,139,0.04)" }}
+                              onClick={triggerSuggestValleys}
+                            >
+                              ◈ Suggest Valley
+                            </button>
+                          </div>
+
+                          {/* No-ridge hint after auto-label ran */}
+                          {autoLabelState === "done" && activeRoof.lines.length > 0
+                            && !activeRoof.lines.some(l => l.kind === "RIDGE") && (
+                            <div style={{ fontSize: 11, color: "#94a3b8", background: "rgba(245,158,11,0.04)",
+                              border: "1px solid rgba(245,158,11,0.2)", borderRadius: 6,
+                              padding: "6px 8px", lineHeight: 1.5 }}>
+                              No ridge detected — try "Suggest Ridge" or click an edge to label it manually.
+                            </div>
+                          )}
 
                           {autoLabelError && (
                             <div style={{ fontSize: 11, color: "#dc2626" }}>{autoLabelError}</div>
@@ -3332,10 +3391,12 @@ export default function Page() {
                             </div>
                           )}
 
-                          {/* Valley Suggestions */}
+                          {/* Ridge / Valley Suggestions */}
                           {autoLabelSuggestions.length > 0 && (
                             <div style={{ display: "grid", gap: 4 }}>
-                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Valley Suggestions</div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>
+                                {autoLabelSuggestions[0]?.kind === "RIDGE" ? "Ridge Suggestions" : "Valley Suggestions"}
+                              </div>
                               {autoLabelSuggestions.map((s, i) => {
                                 const c = s.confidence;
                                 const confLabel = c >= 0.8 ? "High" : c >= 0.6 ? "Med" : "Low";
@@ -3346,9 +3407,9 @@ export default function Page() {
                                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 6,
                                     background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
                                     <span style={{ width: 8, height: 8, borderRadius: "50%",
-                                      background: kindColor("VALLEY"), flexShrink: 0, display: "inline-block" }} />
+                                      background: kindColor(s.kind as LineKind), flexShrink: 0, display: "inline-block" }} />
                                     <span style={{ fontSize: 11, fontWeight: 600, color: "#475569" }}>
-                                      Valley {i + 1}
+                                      {s.kind === "RIDGE" ? "Ridge" : "Valley"} {i + 1}
                                     </span>
                                     <span style={{ fontSize: 9, background: confBg, color: confColor,
                                       border: `1px solid ${confBorder}`, borderRadius: 3,
