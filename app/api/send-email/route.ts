@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
 export async function POST(req: NextRequest) {
-  const resend = new Resend(process.env.RESEND_API_KEY);
   try {
     const { to, shareUrl, projectName } = (await req.json()) as {
       to: string;
@@ -14,8 +13,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    const result = await resend.emails.send({
-      from: "RoofViz <noreply@tryroofviz.com>",
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: (process.env.GMAIL_USER ?? "").trim(),
+        pass: (process.env.GMAIL_APP_PASSWORD ?? "").trim(),
+      },
+    });
+
+    await transporter.sendMail({
+      from: `RoofViz <${(process.env.GMAIL_USER ?? "").trim()}>`,
       to,
       subject: `${projectName} — Your Roof Installation Preview`,
       html: `
@@ -39,12 +46,7 @@ export async function POST(req: NextRequest) {
       `,
     });
 
-    if (result.error) {
-      console.error("Resend error:", result.error);
-      return NextResponse.json({ error: result.error.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ ok: true, id: result.data?.id });
+    return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("send-email error:", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });

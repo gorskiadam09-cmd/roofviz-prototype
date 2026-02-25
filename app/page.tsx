@@ -1011,6 +1011,11 @@ export default function Page() {
   const [aiPolygonRaw, setAiPolygonRaw] = useState<number[] | null>(null);
   const [aiShowRaw, setAiShowRaw]   = useState(false);
   const [aiError, setAiError]       = useState<string | null>(null);
+  const [autoLabelState, setAutoLabelState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [autoLabelSuggestions, setAutoLabelSuggestions] = useState<
+    { kind: "RIDGE" | "VALLEY"; points: number[]; confidence: number }[]
+  >([]);
+  const [autoLabelError, setAutoLabelError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renamingName, setRenamingName] = useState("");
 
@@ -1143,6 +1148,7 @@ export default function Page() {
 
   function discardAiOutline() {
     setAiState("idle"); setAiPolygon(null); setAiPolygonRaw(null); setAiShowRaw(false); setAiError(null);
+    setAutoLabelState("idle"); setAutoLabelSuggestions([]); setAutoLabelError(null);
   }
 
   async function generateAiOutline() {
@@ -1205,6 +1211,126 @@ export default function Page() {
       setAiState("error");
       setAiError("AI couldn't confidently detect this roof. Try manual tracing.");
     }
+  }
+
+  // ── Auto-Label Roof Edges ───────────────────────────────────────────────────
+
+  function autoLabelEdges(roof: Roof): Polyline[] {
+    const pts = roof.outline;
+    const n = pts.length / 2;
+    if (n < 3) return [];
+
+    let minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const y = pts[i * 2 + 1];
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    const eaveYThreshold = minY + 0.75 * (maxY - minY);
+
+    const result: Polyline[] = [];
+    for (let i = 0; i < n; i++) {
+      const x1 = pts[i * 2], y1 = pts[i * 2 + 1];
+      const j = (i + 1) % n;
+      const x2 = pts[j * 2], y2 = pts[j * 2 + 1];
+      const dx = x2 - x1, dy = y2 - y1;
+      const rawAngle = Math.atan2(Math.abs(dy), Math.abs(dx)) * 180 / Math.PI;
+      const midY = (y1 + y2) / 2;
+
+      let kind: LineKind | null = null;
+      if (rawAngle < 20 && midY >= eaveYThreshold) {
+        kind = "EAVE";
+      } else if (rawAngle >= 20 && rawAngle <= 70) {
+        kind = "RAKE";
+      }
+
+      if (kind) {
+        result.push({ id: uid(), kind, points: [x1, y1, x2, y2] });
+      }
+    }
+    return result;
+  }
+
+  function lineLength(pts: number[]): number {
+    let total = 0;
+    for (let i = 0; i + 3 < pts.length; i += 2) {
+      total += Math.hypot(pts[i + 2] - pts[i], pts[i + 3] - pts[i + 1]);
+    }
+    return total;
+  }
+
+  async function triggerAutoLabel() {
+    if (!activeRoof?.closed || !active?.src) return;
+    setAutoLabelState("loading");
+    setAutoLabelSuggestions([]);
+    setAutoLabelError(null);
+
+    // Synchronous: apply eave/rake classification immediately
+    patchActiveRoof((r) => ({ ...r, lines: autoLabelEdges(r) }));
+
+    // Async: AI call for ridge/valley suggestions
+    try {
+      const [imgNatW, imgNatH] = await new Promise<[number, number]>((resolve, reject) => {
+        const img = document.createElement("img");
+        img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
+        img.onerror = reject;
+        img.src = active.src;
+      });
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const img = document.createElement("img");
+        img.onload = () => {
+          const maxPx = 1024;
+          const sc = Math.min(1, maxPx / Math.max(img.width, img.height));
+          const cw = Math.round(img.width * sc), ch = Math.round(img.height * sc);
+          const cv = document.createElement("canvas");
+          cv.width = cw; cv.height = ch;
+          cv.getContext("2d")!.drawImage(img, 0, 0, cw, ch);
+          resolve(cv.toDataURL("image/jpeg", 0.85).split(",")[1]);
+        };
+        img.onerror = reject;
+        img.src = active.src;
+      });
+
+      // Snapshot outline for the async call (activeRoof may change)
+      const outlineNorm = [];
+      const outline = activeRoof.outline;
+      for (let i = 0; i + 1 < outline.length; i += 2) {
+        outlineNorm.push({ x: outline[i] / imgNatW, y: outline[i + 1] / imgNatH });
+      }
+
+      const res = await fetch("/api/ai/label-edges", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64, mimeType: "image/jpeg", outline: outlineNorm }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as {
+        suggestions?: { kind: "RIDGE" | "VALLEY"; points: { x: number; y: number }[]; confidence: number }[];
+      };
+
+      if (data.suggestions && data.suggestions.length > 0) {
+        setAutoLabelSuggestions(data.suggestions.map((s) => ({
+          kind: s.kind,
+          points: s.points.flatMap((p) => [p.x * imgNatW, p.y * imgNatH]),
+          confidence: s.confidence,
+        })));
+      }
+      setAutoLabelState("done");
+    } catch (err) {
+      console.error("[triggerAutoLabel]", err);
+      setAutoLabelError("AI ridge/valley suggestions unavailable.");
+      setAutoLabelState("error");
+    }
+  }
+
+  function adoptAutoLabelSuggestion(idx: number) {
+    const s = autoLabelSuggestions[idx];
+    if (!s) return;
+    patchActiveRoof((r) => ({
+      ...r,
+      lines: [...r.lines, { id: uid(), kind: s.kind as LineKind, points: s.points }],
+    }));
+    setAutoLabelSuggestions((prev) => prev.filter((_, j) => j !== idx));
   }
 
   function startProject() {
@@ -1351,6 +1477,7 @@ export default function Page() {
                activeRoofId: freshRoof.id, stageScale: 1, stagePos: { x: 0, y: 0 } };
     });
     setTool("NONE"); setDraftLine(null); setDraftHole(null);
+    setAutoLabelState("idle"); setAutoLabelSuggestions([]); setAutoLabelError(null);
   }
 
   function removeCurrentPhoto() {
@@ -3052,6 +3179,24 @@ export default function Page() {
                         <div style={{ display: "grid", gap: 8 }}>
                           <div style={sectionLabel}>Step B — Label Each Edge Type</div>
 
+                          {/* Auto-Label primary CTA */}
+                          <button
+                            style={{ ...primaryBtn, fontSize: 13, display: "flex", alignItems: "center",
+                              justifyContent: "center", gap: 8 }}
+                            onClick={triggerAutoLabel}
+                            disabled={autoLabelState === "loading"}
+                          >
+                            {autoLabelState === "loading"
+                              ? <><span className="spinner" />Analyzing edges…</>
+                              : <>⚡ Auto-Label Roof Edges</>}
+                            <span style={{ fontSize: 10, background: "rgba(16,185,129,0.12)", color: "#059669",
+                              border: "1px solid rgba(16,185,129,0.3)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>AI</span>
+                          </button>
+                          {autoLabelError && (
+                            <div style={{ fontSize: 11, color: "#dc2626" }}>{autoLabelError}</div>
+                          )}
+                          <div style={{ fontSize: 11, color: "#94a3b8", textAlign: "center" }}>or draw manually:</div>
+
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5 }}>
                             {([
                               ["EAVE",   "Bottom edge"],
@@ -3113,9 +3258,20 @@ export default function Page() {
                                       .map((line, i) => (
                                         <div key={line.id} style={{ display: "flex", alignItems: "center", gap: 6,
                                           background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
-                                          <span style={{ flex: 1, fontSize: 11, color: "#475569", fontWeight: 600 }}>
+                                          <span style={{ fontSize: 11, color: "#475569", fontWeight: 600 }}>
                                             {kind} {i + 1}
                                           </span>
+                                          <select
+                                            value={line.kind}
+                                            style={{ fontSize: 11, border: "1px solid rgba(15,23,42,0.15)", borderRadius: 4, padding: "1px 4px", flex: 1 }}
+                                            onChange={e => patchActiveRoof(r => ({
+                                              ...r, lines: r.lines.map(li => li.id === line.id ? { ...li, kind: e.target.value as LineKind } : li)
+                                            }))}
+                                          >
+                                            {(["EAVE","RAKE","VALLEY","RIDGE","HIP"] as LineKind[]).map(k =>
+                                              <option key={k} value={k}>{k}</option>
+                                            )}
+                                          </select>
                                           <button
                                             style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
                                               color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
@@ -3128,6 +3284,49 @@ export default function Page() {
                               }
                             </div>
                           )}
+
+                          {/* AI Suggestions */}
+                          {autoLabelSuggestions.length > 0 && (
+                            <div style={{ display: "grid", gap: 4 }}>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>AI Suggestions</div>
+                              {autoLabelSuggestions.map((s, i) => (
+                                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6,
+                                  background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
+                                  <span style={{ flex: 1, fontSize: 11, fontWeight: 600,
+                                    color: s.kind === "RIDGE" ? "#d97706" : "#475569" }}>
+                                    {s.kind} · {Math.round(s.confidence * 100)}%
+                                  </span>
+                                  <button style={{ ...smallBtn, padding: "2px 7px", fontSize: 11 }}
+                                    onClick={() => adoptAutoLabelSuggestion(i)}>Adopt</button>
+                                  <button style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
+                                    color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
+                                    onClick={() => setAutoLabelSuggestions(prev => prev.filter((_, j) => j !== i))}>✕</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Edge Length Totals */}
+                          {activeRoof.lines.length > 0 && (() => {
+                            const byKind = (k: LineKind) =>
+                              activeRoof.lines.filter(l => l.kind === k).reduce((s, l) => s + lineLength(l.points), 0);
+                            const rows = (["EAVE","RAKE","RIDGE","VALLEY","HIP"] as LineKind[])
+                              .map(k => ({ k, len: Math.round(byKind(k)) }))
+                              .filter(r => r.len > 0);
+                            if (!rows.length) return null;
+                            return (
+                              <div style={{ display: "grid", gap: 4 }}>
+                                <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Edge Lengths</div>
+                                {rows.map(({ k, len }) => (
+                                  <div key={k} style={{ display: "flex", justifyContent: "space-between",
+                                    fontSize: 11, padding: "2px 8px" }}>
+                                    <span style={{ color: kindColor(k), fontWeight: 600 }}>{k}</span>
+                                    <span style={{ color: "#475569" }}>{len} px</span>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
 
                           {/* Dormer holes */}
                           {activeRoof.holes.length > 0 && (
@@ -4023,6 +4222,22 @@ export default function Page() {
                 </>
               );
             })()}
+
+            {/* ── Auto-Label Suggestion Overlay ── */}
+            {active?.step === "TRACE" && autoLabelSuggestions.map((s, i) => (
+              <Line
+                key={`ailabel-${i}`}
+                points={s.points}
+                stroke={s.kind === "RIDGE" ? "rgba(245,158,11,0.92)" : "rgba(100,116,139,0.92)"}
+                strokeWidth={3}
+                dash={[12, 6]}
+                lineCap="round"
+                lineJoin="round"
+                listening={false}
+                shadowColor={s.kind === "RIDGE" ? "rgba(245,158,11,0.4)" : "rgba(100,116,139,0.4)"}
+                shadowBlur={8}
+              />
+            ))}
 
             {/* ── Facade roof region mask ── */}
             {active?.step === "TRACE" && edgePanel && edgeMode === "facade" && (
