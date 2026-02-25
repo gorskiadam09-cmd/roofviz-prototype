@@ -95,7 +95,13 @@ type Tool =
   | "DRAW_RIDGE"
   | "DRAW_HIP";
 
-type Polyline = { id: string; kind: LineKind; points: number[] };
+type Polyline = {
+  id: string;
+  kind: LineKind;
+  points: number[];
+  aiLabeled?: boolean;  // set by Auto-Label; false/undefined = manual
+  locked?: boolean;     // locked lines survive Re-run Auto-Label
+};
 
 type MetalColor = "Galvanized" | "Aluminum" | "White" | "Black" | "Bronze" | "Brown" | "Gray";
 type ShingleColor =
@@ -1238,14 +1244,12 @@ export default function Page() {
       const midY = (y1 + y2) / 2;
 
       let kind: LineKind | null = null;
-      if (rawAngle < 20 && midY >= eaveYThreshold) {
-        kind = "EAVE";
-      } else if (rawAngle >= 20 && rawAngle <= 70) {
-        kind = "RAKE";
-      }
+      if (rawAngle < 20 && midY < minY + 0.25 * (maxY - minY)) kind = "RIDGE";
+      else if (rawAngle < 20 && midY >= eaveYThreshold) kind = "EAVE";
+      else if (rawAngle >= 20 && rawAngle <= 70) kind = "RAKE";
 
       if (kind) {
-        result.push({ id: uid(), kind, points: [x1, y1, x2, y2] });
+        result.push({ id: uid(), kind, points: [x1, y1, x2, y2], aiLabeled: true });
       }
     }
     return result;
@@ -1265,8 +1269,11 @@ export default function Page() {
     setAutoLabelSuggestions([]);
     setAutoLabelError(null);
 
-    // Synchronous: apply eave/rake classification immediately
-    patchActiveRoof((r) => ({ ...r, lines: autoLabelEdges(r) }));
+    // Synchronous: apply eave/rake/ridge classification immediately, preserving locked lines
+    patchActiveRoof((r) => {
+      const locked = r.lines.filter(l => l.locked);
+      return { ...r, lines: [...locked, ...autoLabelEdges(r)] };
+    });
 
     // Async: AI call for ridge/valley suggestions
     try {
@@ -1328,7 +1335,7 @@ export default function Page() {
     if (!s) return;
     patchActiveRoof((r) => ({
       ...r,
-      lines: [...r.lines, { id: uid(), kind: s.kind as LineKind, points: s.points }],
+      lines: [...r.lines, { id: uid(), kind: s.kind as LineKind, points: s.points, aiLabeled: true }],
     }));
     setAutoLabelSuggestions((prev) => prev.filter((_, j) => j !== idx));
   }
@@ -3068,48 +3075,26 @@ export default function Page() {
                         <div style={{ display: "grid", gap: 8 }}>
                           <div style={sectionLabel}>Step A — Outline the Roof</div>
 
-                          {/* ── AI CTA ── */}
+                          {/* ── AI CTA (demoted to subtle link-style) ── */}
                           {active.src && aiState !== "preview" && (
                             <>
                               <button
-                                style={{
-                                  width: "100%", padding: "11px 14px", borderRadius: 10,
-                                  background: aiState === "loading"
-                                    ? "rgba(37,99,235,0.08)"
-                                    : "linear-gradient(135deg,#2563eb,#1d4ed8)",
-                                  color: aiState === "loading" ? "#1d4ed8" : "#fff",
-                                  fontWeight: 700, fontSize: 13,
-                                  border: aiState === "loading" ? "1.5px solid #93c5fd" : "none",
-                                  cursor: aiState === "loading" ? "default" : "pointer",
-                                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                                  boxShadow: aiState === "loading" ? "none" : "0 2px 10px rgba(37,99,235,0.28)",
-                                  transition: "all 0.15s",
-                                }}
+                                style={{ ...smallBtn, width: "100%", fontSize: 11, color: "#6366f1",
+                                  borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.04)",
+                                  display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
                                 disabled={aiState === "loading"}
                                 onClick={generateAiOutline}
                               >
-                                {aiState === "loading" ? (
-                                  <>
-                                    <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>◌</span>
-                                    Analyzing image…
-                                  </>
-                                ) : (
-                                  <>
-                                    ✦ Generate Roof Outline (AI)
-                                    <span style={{ fontSize: 9, background: "rgba(255,255,255,0.22)", borderRadius: 4, padding: "2px 6px", fontWeight: 600, letterSpacing: "0.04em" }}>Beta AI</span>
-                                  </>
-                                )}
+                                {aiState === "loading" ? "Analyzing…" : "Try AI Outline"}
+                                <span style={{ fontSize: 9, background: "rgba(99,102,241,0.12)", color: "#6366f1",
+                                  border: "1px solid rgba(99,102,241,0.25)", borderRadius: 3,
+                                  padding: "1px 4px", fontWeight: 700 }}>Beta</span>
                               </button>
                               {aiState === "error" && aiError && (
                                 <div style={{ fontSize: 11, color: "#dc2626", background: "#fef2f2", border: "1px solid rgba(220,38,38,0.15)", borderRadius: 7, padding: "8px 10px", lineHeight: 1.55 }}>
                                   {aiError}
                                 </div>
                               )}
-                              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#94a3b8", margin: "2px 0" }}>
-                                <div style={{ flex: 1, height: 1, background: "rgba(148,163,184,0.25)" }} />
-                                <span style={{ fontSize: 10 }}>or trace manually</span>
-                                <div style={{ flex: 1, height: 1, background: "rgba(148,163,184,0.25)" }} />
-                              </div>
                             </>
                           )}
 
@@ -3177,7 +3162,10 @@ export default function Page() {
                       ) : (
                         /* ── Step B: label the edges ── */
                         <div style={{ display: "grid", gap: 8 }}>
-                          <div style={sectionLabel}>Step B — Label Each Edge Type</div>
+                          <div style={sectionLabel}>Label Roof Edges</div>
+                          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
+                            AI labels your drawn edges automatically. Click any label to edit.
+                          </div>
 
                           {/* Auto-Label primary CTA */}
                           <button
@@ -3188,14 +3176,15 @@ export default function Page() {
                           >
                             {autoLabelState === "loading"
                               ? <><span className="spinner" />Analyzing edges…</>
-                              : <>⚡ Auto-Label Roof Edges</>}
+                              : activeRoof.lines.length > 0
+                                ? <>↺ Re-run Auto-Label</>
+                                : <>⚡ Auto-Label Roof Edges</>}
                             <span style={{ fontSize: 10, background: "rgba(16,185,129,0.12)", color: "#059669",
                               border: "1px solid rgba(16,185,129,0.3)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>AI</span>
                           </button>
                           {autoLabelError && (
                             <div style={{ fontSize: 11, color: "#dc2626" }}>{autoLabelError}</div>
                           )}
-                          <div style={{ fontSize: 11, color: "#94a3b8", textAlign: "center" }}>or draw manually:</div>
 
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5 }}>
                             {([
@@ -3258,9 +3247,16 @@ export default function Page() {
                                       .map((line, i) => (
                                         <div key={line.id} style={{ display: "flex", alignItems: "center", gap: 6,
                                           background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
+                                          <span style={{ width: 8, height: 8, borderRadius: "50%",
+                                            background: kindColor(line.kind), flexShrink: 0, display: "inline-block" }} />
                                           <span style={{ fontSize: 11, color: "#475569", fontWeight: 600 }}>
                                             {kind} {i + 1}
                                           </span>
+                                          {line.aiLabeled && (
+                                            <span style={{ fontSize: 9, background: "rgba(16,185,129,0.1)", color: "#059669",
+                                              border: "1px solid rgba(16,185,129,0.25)", borderRadius: 3,
+                                              padding: "1px 4px", fontWeight: 700, flexShrink: 0 }}>AI</span>
+                                          )}
                                           <select
                                             value={line.kind}
                                             style={{ fontSize: 11, border: "1px solid rgba(15,23,42,0.15)", borderRadius: 4, padding: "1px 4px", flex: 1 }}
@@ -3272,6 +3268,17 @@ export default function Page() {
                                               <option key={k} value={k}>{k}</option>
                                             )}
                                           </select>
+                                          <button
+                                            title={line.locked ? "Unlock — allow re-label" : "Lock label"}
+                                            style={{ ...smallBtn, padding: "2px 6px", fontSize: 12,
+                                              color: line.locked ? "#d97706" : "#cbd5e1",
+                                              borderColor: line.locked ? "rgba(217,119,6,0.3)" : "rgba(15,23,42,0.08)" }}
+                                            onClick={() => patchActiveRoof(r => ({
+                                              ...r, lines: r.lines.map(li => li.id === line.id ? { ...li, locked: !li.locked } : li)
+                                            }))}
+                                          >
+                                            {line.locked ? "🔒" : "🔓"}
+                                          </button>
                                           <button
                                             style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
                                               color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
