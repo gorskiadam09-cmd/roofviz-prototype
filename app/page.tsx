@@ -101,6 +101,7 @@ type Polyline = {
   points: number[];
   aiLabeled?: boolean;  // set by Auto-Label; false/undefined = manual
   locked?: boolean;     // locked lines survive Re-run Auto-Label
+  confidence?: number;  // 0–1, set by auto-label; undefined = manual/unscored
 };
 
 type MetalColor = "Galvanized" | "Aluminum" | "White" | "Black" | "Bronze" | "Brown" | "Gray";
@@ -1226,15 +1227,20 @@ export default function Page() {
     const n = pts.length / 2;
     if (n < 3) return [];
 
-    let minY = Infinity, maxY = -Infinity;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (let i = 0; i < n; i++) {
-      const y = pts[i * 2 + 1];
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
+      const x = pts[i * 2], y = pts[i * 2 + 1];
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
     }
-    const eaveYThreshold = minY + 0.75 * (maxY - minY);
+    const roofWidth = maxX - minX;
+    const roofHeight = maxY - minY;
+    const eaveYThreshold = minY + 0.75 * roofHeight;
+    const ridgeYZone = minY + 0.40 * roofHeight; // top 40% = ridge candidates
 
     const result: Polyline[] = [];
+    const ridgeCandidates: { x1: number; y1: number; x2: number; y2: number; len: number }[] = [];
+
     for (let i = 0; i < n; i++) {
       const x1 = pts[i * 2], y1 = pts[i * 2 + 1];
       const j = (i + 1) % n;
@@ -1243,16 +1249,81 @@ export default function Page() {
       const rawAngle = Math.atan2(Math.abs(dy), Math.abs(dx)) * 180 / Math.PI;
       const midY = (y1 + y2) / 2;
 
-      let kind: LineKind | null = null;
-      if (rawAngle < 20 && midY < minY + 0.25 * (maxY - minY)) kind = "RIDGE";
-      else if (rawAngle < 20 && midY >= eaveYThreshold) kind = "EAVE";
-      else if (rawAngle >= 20 && rawAngle <= 70) kind = "RAKE";
-
-      if (kind) {
-        result.push({ id: uid(), kind, points: [x1, y1, x2, y2], aiLabeled: true });
+      if (rawAngle < 20) {
+        if (midY >= eaveYThreshold) {
+          result.push({ id: uid(), kind: "EAVE", points: [x1, y1, x2, y2], aiLabeled: true, confidence: 0.95 });
+        } else if (midY <= ridgeYZone) {
+          ridgeCandidates.push({ x1, y1, x2, y2, len: Math.hypot(dx, dy) });
+        }
+        // middle-zone near-horizontals: leave unlabeled
+      } else if (rawAngle >= 20 && rawAngle <= 70) {
+        result.push({ id: uid(), kind: "RAKE", points: [x1, y1, x2, y2], aiLabeled: true, confidence: 0.90 });
       }
     }
+
+    // Ridge: only label if merged length exceeds 25% of roof width (avoid false positives)
+    const totalRidgeLen = ridgeCandidates.reduce((s, c) => s + c.len, 0);
+    if (roofWidth > 0 && totalRidgeLen > roofWidth * 0.25) {
+      const ratio = Math.min(1, totalRidgeLen / roofWidth);
+      const confidence = Math.min(0.95, 0.65 + ratio * 0.35);
+      for (const c of ridgeCandidates) {
+        result.push({ id: uid(), kind: "RIDGE", points: [c.x1, c.y1, c.x2, c.y2], aiLabeled: true, confidence });
+      }
+    }
+    // else: no confident ridge → leave unlabeled rather than guessing
+
     return result;
+  }
+
+  // Detect valley candidates from concave (inward-dipping) vertices in the outline polygon.
+  // A valley vertex is a local Y-maximum in the middle zone between eave and ridge levels.
+  function suggestValleys(roof: Roof): { kind: "VALLEY"; points: number[]; confidence: number }[] {
+    const pts = roof.outline;
+    const n = pts.length / 2;
+    if (n < 4) return [];
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const x = pts[i * 2], y = pts[i * 2 + 1];
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    const roofWidth = maxX - minX;
+    const eaveYThreshold = minY + 0.75 * (maxY - minY);
+    const ridgeYZone = minY + 0.35 * (maxY - minY);
+
+    const suggestions: { kind: "VALLEY"; points: number[]; confidence: number }[] = [];
+    const seen = new Set<string>();
+
+    const addEdge = (ax: number, ay: number, bx: number, by: number, ia: number, ib: number) => {
+      const key = `${Math.min(ia, ib)}-${Math.max(ia, ib)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const ddx = bx - ax, ddy = by - ay;
+      const angle = Math.atan2(Math.abs(ddy), Math.abs(ddx)) * 180 / Math.PI;
+      if (angle >= 15 && angle <= 75) {
+        const len = Math.hypot(ddx, ddy);
+        const conf = Math.min(0.85, 0.55 + (len / roofWidth) * 0.55);
+        suggestions.push({ kind: "VALLEY", points: [ax, ay, bx, by], confidence: conf });
+      }
+    };
+
+    for (let i = 0; i < n; i++) {
+      const prev = ((i - 1) + n) % n;
+      const next = (i + 1) % n;
+      const py = pts[prev * 2 + 1];
+      const cx = pts[i * 2], cy = pts[i * 2 + 1];
+      const ny = pts[next * 2 + 1];
+      // Valley vertex: local Y-maximum in middle zone (dips down between two peaks in screen coords)
+      const isLocalYMax = cy > py && cy > ny;
+      const inMiddleZone = cy < eaveYThreshold && cy > ridgeYZone;
+      if (isLocalYMax && inMiddleZone) {
+        addEdge(pts[prev * 2], py, cx, cy, prev, i);
+        addEdge(cx, cy, pts[next * 2], ny, i, next);
+      }
+    }
+
+    return suggestions;
   }
 
   function lineLength(pts: number[]): number {
@@ -1278,12 +1349,22 @@ export default function Page() {
     setAutoLabelState("done");
   }
 
+  function triggerSuggestValleys() {
+    if (!activeRoof?.closed) return;
+    setAutoLabelError(null);
+    const suggestions = suggestValleys(activeRoof);
+    setAutoLabelSuggestions(suggestions);
+    if (suggestions.length === 0) {
+      setAutoLabelError("No valley candidates detected — try tracing manually.");
+    }
+  }
+
   function adoptAutoLabelSuggestion(idx: number) {
     const s = autoLabelSuggestions[idx];
     if (!s) return;
     patchActiveRoof((r) => ({
       ...r,
-      lines: [...r.lines, { id: uid(), kind: s.kind as LineKind, points: s.points, aiLabeled: true }],
+      lines: [...r.lines, { id: uid(), kind: s.kind as LineKind, points: s.points, aiLabeled: true, confidence: s.confidence }],
     }));
     setAutoLabelSuggestions((prev) => prev.filter((_, j) => j !== idx));
   }
@@ -3066,6 +3147,21 @@ export default function Page() {
                             <span style={{ fontSize: 10, background: "rgba(16,185,129,0.12)", color: "#059669",
                               border: "1px solid rgba(16,185,129,0.3)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>AI</span>
                           </button>
+
+                          {/* Suggest Valleys secondary button */}
+                          <button
+                            style={{ ...smallBtn, fontSize: 12, width: "100%", display: "flex",
+                              alignItems: "center", justifyContent: "center", gap: 6,
+                              color: "#64748b", borderColor: "rgba(100,116,139,0.25)",
+                              background: "rgba(100,116,139,0.04)" }}
+                            onClick={triggerSuggestValleys}
+                          >
+                            ◈ Suggest Valleys
+                            <span style={{ fontSize: 9, background: "rgba(100,116,139,0.12)", color: "#64748b",
+                              border: "1px solid rgba(100,116,139,0.3)", borderRadius: 3,
+                              padding: "1px 4px", fontWeight: 700 }}>AI</span>
+                          </button>
+
                           {autoLabelError && (
                             <div style={{ fontSize: 11, color: "#dc2626" }}>{autoLabelError}</div>
                           )}
@@ -3126,6 +3222,11 @@ export default function Page() {
                                 .filter(kind => activeRoof.lines.some(l => l.kind === kind))
                                 .map(kind => (
                                   <div key={kind} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                    {/* Kind section header */}
+                                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
+                                      color: kindColor(kind), padding: "3px 2px 1px", textTransform: "uppercase" }}>
+                                      {kind === "RIDGE" ? "Main Ridge" : kind}
+                                    </div>
                                     {activeRoof.lines
                                       .filter(l => l.kind === kind)
                                       .map((line, i) => (
@@ -3134,13 +3235,25 @@ export default function Page() {
                                           <span style={{ width: 8, height: 8, borderRadius: "50%",
                                             background: kindColor(line.kind), flexShrink: 0, display: "inline-block" }} />
                                           <span style={{ fontSize: 11, color: "#475569", fontWeight: 600 }}>
-                                            {kind} {i + 1}
+                                            {kind === "RIDGE" ? `Seg ${i + 1}` : `${kind} ${i + 1}`}
                                           </span>
                                           {line.aiLabeled && (
                                             <span style={{ fontSize: 9, background: "rgba(16,185,129,0.1)", color: "#059669",
                                               border: "1px solid rgba(16,185,129,0.25)", borderRadius: 3,
                                               padding: "1px 4px", fontWeight: 700, flexShrink: 0 }}>AI</span>
                                           )}
+                                          {line.confidence !== undefined && (() => {
+                                            const c = line.confidence;
+                                            const label = c >= 0.8 ? "High" : c >= 0.6 ? "Med" : "Low";
+                                            const color = c >= 0.8 ? "#059669" : c >= 0.6 ? "#d97706" : "#dc2626";
+                                            const bg = c >= 0.8 ? "rgba(16,185,129,0.08)" : c >= 0.6 ? "rgba(245,158,11,0.08)" : "rgba(220,38,38,0.07)";
+                                            const border = c >= 0.8 ? "rgba(16,185,129,0.25)" : c >= 0.6 ? "rgba(245,158,11,0.25)" : "rgba(220,38,38,0.25)";
+                                            return (
+                                              <span style={{ fontSize: 9, background: bg, color,
+                                                border: `1px solid ${border}`, borderRadius: 3,
+                                                padding: "1px 4px", fontWeight: 700, flexShrink: 0 }}>{label}</span>
+                                            );
+                                          })()}
                                           <select
                                             value={line.kind}
                                             style={{ fontSize: 11, border: "1px solid rgba(15,23,42,0.15)", borderRadius: 4, padding: "1px 4px", flex: 1 }}
@@ -3176,24 +3289,36 @@ export default function Page() {
                             </div>
                           )}
 
-                          {/* AI Suggestions */}
+                          {/* Valley Suggestions */}
                           {autoLabelSuggestions.length > 0 && (
                             <div style={{ display: "grid", gap: 4 }}>
-                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>AI Suggestions</div>
-                              {autoLabelSuggestions.map((s, i) => (
-                                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6,
-                                  background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
-                                  <span style={{ flex: 1, fontSize: 11, fontWeight: 600,
-                                    color: s.kind === "RIDGE" ? "#d97706" : "#475569" }}>
-                                    {s.kind} · {Math.round(s.confidence * 100)}%
-                                  </span>
-                                  <button style={{ ...smallBtn, padding: "2px 7px", fontSize: 11 }}
-                                    onClick={() => adoptAutoLabelSuggestion(i)}>Adopt</button>
-                                  <button style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
-                                    color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
-                                    onClick={() => setAutoLabelSuggestions(prev => prev.filter((_, j) => j !== i))}>✕</button>
-                                </div>
-                              ))}
+                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Valley Suggestions</div>
+                              {autoLabelSuggestions.map((s, i) => {
+                                const c = s.confidence;
+                                const confLabel = c >= 0.8 ? "High" : c >= 0.6 ? "Med" : "Low";
+                                const confColor = c >= 0.8 ? "#059669" : c >= 0.6 ? "#d97706" : "#dc2626";
+                                const confBg = c >= 0.8 ? "rgba(16,185,129,0.08)" : c >= 0.6 ? "rgba(245,158,11,0.08)" : "rgba(220,38,38,0.07)";
+                                const confBorder = c >= 0.8 ? "rgba(16,185,129,0.25)" : c >= 0.6 ? "rgba(245,158,11,0.25)" : "rgba(220,38,38,0.25)";
+                                return (
+                                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 6,
+                                    background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
+                                    <span style={{ width: 8, height: 8, borderRadius: "50%",
+                                      background: kindColor("VALLEY"), flexShrink: 0, display: "inline-block" }} />
+                                    <span style={{ fontSize: 11, fontWeight: 600, color: "#475569" }}>
+                                      Valley {i + 1}
+                                    </span>
+                                    <span style={{ fontSize: 9, background: confBg, color: confColor,
+                                      border: `1px solid ${confBorder}`, borderRadius: 3,
+                                      padding: "1px 4px", fontWeight: 700, flexShrink: 0 }}>{confLabel}</span>
+                                    <span style={{ flex: 1 }} />
+                                    <button style={{ ...smallBtn, padding: "2px 7px", fontSize: 11 }}
+                                      onClick={() => adoptAutoLabelSuggestion(i)}>Adopt</button>
+                                    <button style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
+                                      color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
+                                      onClick={() => setAutoLabelSuggestions(prev => prev.filter((_, j) => j !== i))}>✕</button>
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
 
