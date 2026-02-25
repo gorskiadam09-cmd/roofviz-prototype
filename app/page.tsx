@@ -1263,71 +1263,19 @@ export default function Page() {
     return total;
   }
 
-  async function triggerAutoLabel() {
-    if (!activeRoof?.closed || !active?.src) return;
+  function triggerAutoLabel() {
+    if (!activeRoof?.closed) return;
     setAutoLabelState("loading");
     setAutoLabelSuggestions([]);
     setAutoLabelError(null);
 
-    // Synchronous: apply eave/rake/ridge classification immediately, preserving locked lines
+    // Classify outline edges into eave/rake/ridge, preserving locked lines
     patchActiveRoof((r) => {
       const locked = r.lines.filter(l => l.locked);
       return { ...r, lines: [...locked, ...autoLabelEdges(r)] };
     });
 
-    // Async: AI call for ridge/valley suggestions
-    try {
-      const [imgNatW, imgNatH] = await new Promise<[number, number]>((resolve, reject) => {
-        const img = document.createElement("img");
-        img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
-        img.onerror = reject;
-        img.src = active.src;
-      });
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const img = document.createElement("img");
-        img.onload = () => {
-          const maxPx = 1024;
-          const sc = Math.min(1, maxPx / Math.max(img.width, img.height));
-          const cw = Math.round(img.width * sc), ch = Math.round(img.height * sc);
-          const cv = document.createElement("canvas");
-          cv.width = cw; cv.height = ch;
-          cv.getContext("2d")!.drawImage(img, 0, 0, cw, ch);
-          resolve(cv.toDataURL("image/jpeg", 0.85).split(",")[1]);
-        };
-        img.onerror = reject;
-        img.src = active.src;
-      });
-
-      // Snapshot outline for the async call (activeRoof may change)
-      const outlineNorm = [];
-      const outline = activeRoof.outline;
-      for (let i = 0; i + 1 < outline.length; i += 2) {
-        outlineNorm.push({ x: outline[i] / imgNatW, y: outline[i + 1] / imgNatH });
-      }
-
-      const res = await fetch("/api/ai/label-edges", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: base64, mimeType: "image/jpeg", outline: outlineNorm }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as {
-        suggestions?: { kind: "RIDGE" | "VALLEY"; points: { x: number; y: number }[]; confidence: number }[];
-      };
-
-      if (data.suggestions && data.suggestions.length > 0) {
-        setAutoLabelSuggestions(data.suggestions.map((s) => ({
-          kind: s.kind,
-          points: s.points.flatMap((p) => [p.x * imgNatW, p.y * imgNatH]),
-          confidence: s.confidence,
-        })));
-      }
-      setAutoLabelState("done");
-    } catch (err) {
-      console.error("[triggerAutoLabel]", err);
-      setAutoLabelError("AI ridge/valley suggestions unavailable.");
-      setAutoLabelState("error");
-    }
+    setAutoLabelState("done");
   }
 
   function adoptAutoLabelSuggestion(idx: number) {
@@ -3074,70 +3022,6 @@ export default function Page() {
                         /* ── Step A: outline the roof ── */
                         <div style={{ display: "grid", gap: 8 }}>
                           <div style={sectionLabel}>Step A — Outline the Roof</div>
-
-                          {/* ── AI CTA (demoted to subtle link-style) ── */}
-                          {active.src && aiState !== "preview" && (
-                            <>
-                              <button
-                                style={{ ...smallBtn, width: "100%", fontSize: 11, color: "#6366f1",
-                                  borderColor: "rgba(99,102,241,0.2)", background: "rgba(99,102,241,0.04)",
-                                  display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
-                                disabled={aiState === "loading"}
-                                onClick={generateAiOutline}
-                              >
-                                {aiState === "loading" ? "Analyzing…" : "Try AI Outline"}
-                                <span style={{ fontSize: 9, background: "rgba(99,102,241,0.12)", color: "#6366f1",
-                                  border: "1px solid rgba(99,102,241,0.25)", borderRadius: 3,
-                                  padding: "1px 4px", fontWeight: 700 }}>Beta</span>
-                              </button>
-                              {aiState === "error" && aiError && (
-                                <div style={{ fontSize: 11, color: "#dc2626", background: "#fef2f2", border: "1px solid rgba(220,38,38,0.15)", borderRadius: 7, padding: "8px 10px", lineHeight: 1.55 }}>
-                                  {aiError}
-                                </div>
-                              )}
-                            </>
-                          )}
-
-                          {/* ── AI Preview: Adopt / Discard ── */}
-                          {aiState === "preview" && aiPolygon && (
-                            <div style={{ background: "rgba(16,185,129,0.05)", border: "1.5px solid rgba(16,185,129,0.35)", borderRadius: 10, padding: "12px 14px", display: "grid", gap: 10 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                <span style={{ fontSize: 20 }}>✦</span>
-                                <div style={{ flex: 1 }}>
-                                  <div style={{ fontSize: 12, fontWeight: 700, color: "#065f46" }}>AI outline ready</div>
-                                  <div style={{ fontSize: 11, color: "#059669" }}>Visible on canvas — review and adopt</div>
-                                </div>
-                                <span style={{ fontSize: 9, background: "#d1fae5", color: "#065f46", borderRadius: 4, padding: "2px 6px", fontWeight: 700 }}>Beta AI</span>
-                              </div>
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                                <button
-                                  style={{ padding: "9px 12px", borderRadius: 8, background: "#059669", color: "#fff", fontWeight: 700, fontSize: 12, border: "none", cursor: "pointer", boxShadow: "0 1px 6px rgba(5,150,105,0.3)" }}
-                                  onClick={adoptAiOutline}
-                                >
-                                  Adopt AI Outline
-                                </button>
-                                <button
-                                  style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(15,23,42,0.05)", color: "#475569", fontWeight: 600, fontSize: 12, border: "1px solid rgba(15,23,42,0.12)", cursor: "pointer" }}
-                                  onClick={discardAiOutline}
-                                >
-                                  Discard
-                                </button>
-                              </div>
-                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                <div style={{ fontSize: 10, color: "#6b7280", lineHeight: 1.55 }}>
-                                  AI suggestion — cleaned for editing
-                                </div>
-                                {aiPolygonRaw && (
-                                  <button
-                                    style={{ fontSize: 10, color: aiShowRaw ? "#ef4444" : "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "0 2px", textDecoration: "underline" }}
-                                    onClick={() => setAiShowRaw(v => !v)}
-                                  >
-                                    {aiShowRaw ? "Show cleaned" : "Show raw AI"}
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          )}
 
                           <button
                             className={tool === "TRACE_ROOF" ? "rv-btn-tracing" : "rv-btn-ghost"}
