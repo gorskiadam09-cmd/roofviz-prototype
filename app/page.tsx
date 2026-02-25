@@ -971,6 +971,7 @@ export default function Page() {
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
+  const [presentationMode, setPresentationMode] = useState(false);
 
   // ── Cleanup state ─────────────────────────────────────────────────────────
   const [cleanupOpen, setCleanupOpen]           = useState(false);
@@ -1973,6 +1974,7 @@ export default function Page() {
   }
 
   function onStageDown(e: any) {
+    if (presentationMode) return;
     if (!active || !activeRoof || !photoImg) return;
     const stage = e.target.getStage();
     const rawPos = stage.getPointerPosition();
@@ -2899,14 +2901,27 @@ export default function Page() {
           )}
           {active && (
             <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+              {!presentationMode && (
+                <button
+                  style={{ ...topBarBtn,
+                    background: active.showGuidesDuringInstall ? "rgba(37,99,235,0.07)" : "#ffffff",
+                    color: active.showGuidesDuringInstall ? "#2563eb" : "#64748b",
+                    borderColor: active.showGuidesDuringInstall ? "rgba(37,99,235,0.25)" : "rgba(15,23,42,0.12)" }}
+                  onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}
+                >
+                  {active.showGuidesDuringInstall ? "⊙ Guides On" : "⊙ Guides"}
+                </button>
+              )}
               <button
                 style={{ ...topBarBtn,
-                  background: active.showGuidesDuringInstall ? "rgba(37,99,235,0.07)" : "#ffffff",
-                  color: active.showGuidesDuringInstall ? "#2563eb" : "#64748b",
-                  borderColor: active.showGuidesDuringInstall ? "rgba(37,99,235,0.25)" : "rgba(15,23,42,0.12)" }}
-                onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}
+                  background: presentationMode ? "linear-gradient(135deg,#7c3aed,#6d28d9)" : "#ffffff",
+                  color: presentationMode ? "#ffffff" : "#64748b",
+                  border: presentationMode ? "none" : "1.5px solid rgba(15,23,42,0.12)",
+                  fontWeight: 700,
+                }}
+                onClick={() => setPresentationMode((v) => !v)}
               >
-                {active.showGuidesDuringInstall ? "⊙ Guides On" : "⊙ Guides"}
+                {presentationMode ? "✦ Presenting" : "✦ Present"}
               </button>
               <button
                 style={{ ...topBarBtn,
@@ -2930,7 +2945,7 @@ export default function Page() {
       <div style={
         screen === "CUSTOMER_VIEW"
           ? { display: "contents" }
-          : { display: "grid", gridTemplateColumns: "360px 1fr", flex: 1, overflow: "hidden", minHeight: 0 }
+          : { display: "grid", gridTemplateColumns: `${presentationMode ? 240 : 360}px 1fr`, flex: 1, overflow: "hidden", minHeight: 0 }
       }>
 
       {/* ── CUSTOMER RIGHT SIDEBAR ── */}
@@ -3112,7 +3127,7 @@ export default function Page() {
         <div style={{ flex: 1, overflow: "auto", padding: "16px" }}>
 
           {/* ── Edit / Settings tab switcher ── */}
-          {active && liveStep !== "START" && (
+          {active && liveStep !== "START" && !presentationMode && (
             <div style={{ display: "flex", gap: 3, padding: "0 0 10px", flexShrink: 0 }}>
               {(["edit", "settings"] as const).map((tab) => (
                 <button key={tab} onClick={() => setUiTab(tab)}
@@ -3153,8 +3168,8 @@ export default function Page() {
           {/* ── ACTIVE PROJECT (Edit tab) ── */}
           {liveStep !== "START" && uiTab === "edit" && (
             <>
-              {/* Photo — current project only */}
-              <div style={sectionCard} className="rv-section-card">
+              {/* Photo — current project only — hidden in presentation mode */}
+              {!presentationMode && <div style={sectionCard} className="rv-section-card">
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <div style={sectionLabel}>
                     Photo{(active?.photoSrcs?.length ?? 0) > 1 ? ` (${(active?.photoSrcs?.indexOf(active?.src) ?? 0) + 1}/${active?.photoSrcs?.length})` : ""}
@@ -3249,7 +3264,7 @@ export default function Page() {
                     />
                   </label>
                 )}
-              </div>
+              </div>}
 
               {/* Step navigation — checklist */}
               {active && (
@@ -3450,8 +3465,8 @@ export default function Page() {
                 </div>
               )}
 
-              {/* Roofs */}
-              {active && (
+              {/* Roofs — hidden in presentation mode */}
+              {active && !presentationMode && (
                 <div style={sectionCard}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div style={sectionLabel}>Roofs</div>
@@ -4055,7 +4070,7 @@ export default function Page() {
           )}
 
           {/* ── SETTINGS TAB ── */}
-          {uiTab === "settings" && active && (
+          {uiTab === "settings" && active && !presentationMode && (
             <div style={{ padding: "4px 0 16px" }}>
 
               {/* Roof selector */}
@@ -4344,16 +4359,16 @@ export default function Page() {
               height={screen === "CUSTOMER_VIEW" ? ((active as any)?._customerCanvasH || h) : h}
             />}
 
-            {/* Draft visuals */}
-            {active?.step === "TRACE" && draftLine && (
+            {/* Draft visuals — hidden in presentation mode */}
+            {!presentationMode && active?.step === "TRACE" && draftLine && (
               <Line points={draftLine.points} stroke="rgba(255,255,255,0.9)" strokeWidth={3} dash={[8, 6]} lineCap="round" lineJoin="round" />
             )}
-            {active?.step === "TRACE" && draftHole && draftHole.length >= 2 && (
+            {!presentationMode && active?.step === "TRACE" && draftHole && draftHole.length >= 2 && (
               <Line points={draftHole} stroke="rgba(255,255,255,0.9)" strokeWidth={3} dash={[6, 6]} lineCap="round" lineJoin="round" />
             )}
 
-            {/* Guide lines — dimmed when cleanup preview is active */}
-            {active && showGuides && active.roofs.flatMap((r) => {
+            {/* Guide lines — hidden in presentation mode */}
+            {!presentationMode && active && showGuides && active.roofs.flatMap((r) => {
               const all = [...r.lines];
               if (r.id === activeRoof?.id && draftLine && draftLine.points.length >= 4) all.push({ ...draftLine, id: "draft" });
               const baseOpacity = cleanupPreview ? 0.18 : (active.step === "TRACE" ? 0.95 : 0.45);
@@ -4381,8 +4396,8 @@ export default function Page() {
               ));
             })}
 
-            {/* Roof outlines — dimmed when cleanup preview is active */}
-            {active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.map((r) =>
+            {/* Roof outlines — hidden in presentation mode */}
+            {!presentationMode && active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.map((r) =>
               r.outline.length >= 2 ? (
                 <Line
                   key={`outline-${r.id}`}
@@ -4395,8 +4410,8 @@ export default function Page() {
               ) : null
             )}
 
-            {/* ── AI Outline Overlay ── */}
-            {active?.step === "TRACE" && aiState === "preview" && (() => {
+            {/* ── AI Outline Overlay ── hidden in presentation mode */}
+            {!presentationMode && active?.step === "TRACE" && aiState === "preview" && (() => {
               const dispPoly = aiShowRaw ? aiPolygonRaw : aiPolygon;
               if (!dispPoly || dispPoly.length < 4) return null;
               const isRaw = aiShowRaw;
@@ -4431,8 +4446,8 @@ export default function Page() {
               );
             })()}
 
-            {/* ── Auto-Label Suggestion Overlay ── */}
-            {active?.step === "TRACE" && autoLabelSuggestions.map((s, i) => (
+            {/* ── Auto-Label Suggestion Overlay ── hidden in presentation mode */}
+            {!presentationMode && active?.step === "TRACE" && autoLabelSuggestions.map((s, i) => (
               <Line
                 key={`ailabel-${i}`}
                 points={s.points}
@@ -4447,8 +4462,8 @@ export default function Page() {
               />
             ))}
 
-            {/* ── Facade roof region mask ── */}
-            {active?.step === "TRACE" && edgePanel && edgeMode === "facade" && (
+            {/* ── Facade roof region mask ── hidden in presentation mode */}
+            {!presentationMode && active?.step === "TRACE" && edgePanel && edgeMode === "facade" && (
               <>
                 {/* Dimmed band below the roof region */}
                 <Rect
@@ -4469,8 +4484,8 @@ export default function Page() {
               </>
             )}
 
-            {/* ── Edge Detection overlays ── */}
-            {active?.step === "TRACE" && edgePanel && showDetectedLayer && displaySegs.length > 0 && (
+            {/* ── Edge Detection overlays ── hidden in presentation mode */}
+            {!presentationMode && active?.step === "TRACE" && edgePanel && showDetectedLayer && displaySegs.length > 0 && (
               <>
                 {displaySegs.map((s) => (
                   <Line
@@ -4492,12 +4507,12 @@ export default function Page() {
                 ))}
               </>
             )}
-            {/* Edge-add draft line */}
-            {active?.step === "TRACE" && edgeTool === "ADD_EDGE" && edgeAddDraft && (
+            {/* Edge-add draft line — hidden in presentation mode */}
+            {!presentationMode && active?.step === "TRACE" && edgeTool === "ADD_EDGE" && edgeAddDraft && (
               <Circle x={edgeAddDraft[0]} y={edgeAddDraft[1]} radius={5} fill="rgba(250,204,21,0.9)" />
             )}
-            {/* Plane suggestion polygons */}
-            {active?.step === "TRACE" && planeSuggs.map((ps) => {
+            {/* Plane suggestion polygons — hidden in presentation mode */}
+            {!presentationMode && active?.step === "TRACE" && planeSuggs.map((ps) => {
               const isHovered = ps.id === hoveredSuggId;
               return (
                 <Line
@@ -4513,10 +4528,8 @@ export default function Page() {
               );
             })}
 
-            {/* ── Cleanup preview overlay ── */}
-            {/* "Before" ghost: current geometry shown faded                          */}
-            {/* "After"  clean: cleaned geometry shown in green at full opacity       */}
-            {cleanupPreview && activeRoof && active?.step === "TRACE" && (
+            {/* ── Cleanup preview overlay ── hidden in presentation mode */}
+            {!presentationMode && cleanupPreview && activeRoof && active?.step === "TRACE" && (
               <>
                 {/* After: cleaned outline */}
                 {cleanupPreview.outline.length >= 4 && (
@@ -4543,8 +4556,8 @@ export default function Page() {
               </>
             )}
 
-            {/* Hole outlines */}
-            {active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.flatMap((r) =>
+            {/* Hole outlines — hidden in presentation mode */}
+            {!presentationMode && active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.flatMap((r) =>
               r.holes.map((holePts, i) => (
                 <Line
                   key={`hole-${r.id}-${i}`}
@@ -4784,8 +4797,9 @@ export default function Page() {
               );
             })}
 
-            {/* edit handles */}
-            {active &&
+            {/* edit handles — hidden in presentation mode */}
+            {!presentationMode &&
+              active &&
               active.step === "TRACE" &&
               active.showEditHandles &&
               activeRoof?.closed &&
@@ -4804,8 +4818,8 @@ export default function Page() {
                 />
               ))}
 
-            {/* Auto-detect overlay — shown as amber suggestion before the user commits */}
-            {autoSuggest && active?.step === "TRACE" && (
+            {/* Auto-detect overlay — hidden in presentation mode */}
+            {!presentationMode && autoSuggest && active?.step === "TRACE" && (
               <>
                 <Line
                   points={autoSuggest.outline}
