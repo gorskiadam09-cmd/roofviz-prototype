@@ -887,6 +887,11 @@ function rdpSimplify(pts: [number, number][], epsilon: number): [number, number]
   return [pts[0], pts[pts.length - 1]];
 }
 
+/** Scale a flat [x,y,x,y,...] points array by (sx, sy). */
+function rescalePoints(pts: number[], sx: number, sy: number): number[] {
+  return pts.map((v, i) => (i % 2 === 0 ? v * sx : v * sy));
+}
+
 /* ------------------- Main ------------------- */
 export default function Page() {
   const stageRef = useRef<any>(null);
@@ -897,6 +902,8 @@ export default function Page() {
   const [w, setW] = useState(1100);
   const [h, setH] = useState(700);
   const [stageKey, setStageKey] = useState(0);
+  // Tracks previous canvas dims so geometry can be rescaled when the container resizes
+  const prevCanvasRef = useRef<{ w: number; h: number } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -904,8 +911,12 @@ export default function Page() {
     const ro = new ResizeObserver(() => {
       if (isCustomerViewRef.current) return; // Stage dims frozen in customer view
       const r = el.getBoundingClientRect();
-      setW(Math.max(1, Math.floor(r.width)));
-      setH(Math.max(1, Math.floor(r.height)));
+      const nw = Math.max(1, Math.floor(r.width));
+      const nh = Math.max(1, Math.floor(r.height));
+      // Initialise on first measurement; geometry rescaling reads this before each update
+      if (!prevCanvasRef.current) prevCanvasRef.current = { w: nw, h: nh };
+      setW(nw);
+      setH(nh);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -913,6 +924,9 @@ export default function Page() {
 
   const [photos, setPhotos] = useState<PhotoProject[]>([]);
   const [activePhotoId, setActivePhotoId] = useState<string>("");
+  // Ref kept in sync so geometry-rescale effect always reads the latest value
+  const activePhotoIdRef = useRef(activePhotoId);
+  useEffect(() => { activePhotoIdRef.current = activePhotoId; }, [activePhotoId]);
   const [screen, setScreen] = useState<"MENU" | "PROJECT" | "CUSTOMER_VIEW">("MENU");
   const [customerViewData, setCustomerViewData] = useState<{
     name: string;
@@ -1286,6 +1300,51 @@ export default function Page() {
     requestAnimationFrame(() => { stageRef.current?.batchDraw?.(); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCustomerView, w, h, activePhotoId]);
+
+  // Rescale all stored geometry when the canvas container changes size.
+  // Points are stored in world coords where the photo fills (0,0,w,h), so any
+  // change to w/h must be reflected in every roof outline, line, and brush stroke.
+  useEffect(() => {
+    const prev = prevCanvasRef.current;
+    if (!prev || isCustomerViewRef.current) return;
+    const sx = w / prev.w;
+    const sy = h / prev.h;
+    prevCanvasRef.current = { w, h };
+    if (Math.abs(sx - 1) < 0.001 && Math.abs(sy - 1) < 0.001) return;
+
+    const rescaleRoof = (r: Roof): Roof => ({
+      ...r,
+      outline: rescalePoints(r.outline, sx, sy),
+      holes: r.holes.map((hole) => rescalePoints(hole, sx, sy)),
+      lines: r.lines.map((l) => ({ ...l, points: rescalePoints(l.points, sx, sy) })),
+      iceWaterBrush: (r.iceWaterBrush ?? []).map((s) => ({
+        ...s,
+        points: rescalePoints(s.points, sx, sy),
+      })),
+    });
+
+    setPhotos((ps) =>
+      ps.map((p) => {
+        if (p.id !== activePhotoIdRef.current) return p;
+        return {
+          ...p,
+          roofs: p.roofs.map(rescaleRoof),
+          stagePos: { x: p.stagePos.x * sx, y: p.stagePos.y * sy },
+          photoStates: Object.fromEntries(
+            Object.entries(p.photoStates).map(([key, val]) => [
+              key,
+              {
+                ...val,
+                roofs: val.roofs.map(rescaleRoof),
+                stagePos: { x: val.stagePos.x * sx, y: val.stagePos.y * sy },
+              },
+            ])
+          ),
+        };
+      })
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [w, h]);
 
   // Re-measure on window resize / orientation change
   useEffect(() => {
