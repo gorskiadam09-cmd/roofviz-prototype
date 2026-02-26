@@ -995,6 +995,7 @@ export default function Page() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
   const [presentationMode, setPresentationMode] = useState(false);
+  const [isCustomerView, setIsCustomerView] = useState(false);
 
   // ── Cleanup state ─────────────────────────────────────────────────────────
   const [cleanupOpen, setCleanupOpen]           = useState(false);
@@ -1180,6 +1181,25 @@ export default function Page() {
       }
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Customer View (fullscreen presentation) ────────────────────────────────
+
+  function enterCustomerView() {
+    setIsCustomerView(true);
+    try { document.documentElement.requestFullscreen?.(); } catch {}
+  }
+
+  function exitCustomerView() {
+    setIsCustomerView(false);
+    try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
+  }
+
+  // Sync isCustomerView if user presses ESC to exit fullscreen natively
+  useEffect(() => {
+    const handler = () => { if (!document.fullscreenElement) setIsCustomerView(false); };
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
 
   function patchActive(updater: (p: PhotoProject) => PhotoProject) {
@@ -2891,11 +2911,53 @@ export default function Page() {
     <div style={
       screen === "CUSTOMER_VIEW"
         ? { display: "flex", flexDirection: "row", height: "100dvh", overflow: "hidden" }
+        : isCustomerView
+        ? { position: "fixed", inset: 0, zIndex: 9999, display: "flex", flexDirection: "column", background: "#0c1524" }
         : { display: "flex", flexDirection: "column", height: "100vh", background: "#f8fafc" }
     }>
 
+      {/* ── CUSTOMER VIEW TOP BAR ── */}
+      {isCustomerView && active && (
+        <div style={{
+          height: 52, flexShrink: 0,
+          background: "rgba(255,255,255,0.06)",
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+          display: "flex", alignItems: "center",
+          padding: "0 20px", gap: 16,
+        }}>
+          <Image src="/roofviz-logo.png" alt="RoofViz" width={90} height={26} priority style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1, textAlign: "center" as const, fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>
+            {STEP_TITLE[liveStep] ?? liveStep}
+          </span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+            <button
+              onClick={goBack}
+              disabled={stepIndex(liveStep) === 0}
+              style={{ padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                cursor: stepIndex(liveStep) === 0 ? "default" : "pointer",
+                border: "1.5px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.08)",
+                color: stepIndex(liveStep) === 0 ? "rgba(255,255,255,0.25)" : "#e2e8f0" }}
+            >← Back</button>
+            <button
+              onClick={goNext}
+              disabled={!canGoNext()}
+              style={{ padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                cursor: canGoNext() ? "pointer" : "default", border: "none",
+                background: canGoNext() ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : "rgba(255,255,255,0.08)",
+                color: canGoNext() ? "#ffffff" : "rgba(255,255,255,0.25)" }}
+            >Next →</button>
+            <button
+              onClick={exitCustomerView}
+              style={{ padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+                cursor: "pointer", border: "1.5px solid rgba(255,100,100,0.35)",
+                background: "rgba(255,80,80,0.12)", color: "#fca5a5", marginLeft: 4 }}
+            >✕ Exit</button>
+          </div>
+        </div>
+      )}
+
       {/* ── TOP BAR (PROJECT editor only) ── */}
-      {screen !== "CUSTOMER_VIEW" && (
+      {screen !== "CUSTOMER_VIEW" && !isCustomerView && (
         <header style={{
           display: "flex", alignItems: "center", gap: 12,
           height: 56, flexShrink: 0,
@@ -2953,6 +3015,17 @@ export default function Page() {
               >
                 {presentationMode ? "✦ Presenting" : "✦ Present"}
               </button>
+              {presentationMode && (
+                <button
+                  style={{ ...topBarBtn,
+                    background: "linear-gradient(135deg,#0ea5e9,#0284c7)",
+                    color: "#ffffff", border: "none", fontWeight: 700,
+                  }}
+                  onClick={enterCustomerView}
+                >
+                  ⛶ Customer View
+                </button>
+              )}
               <button
                 style={{ ...topBarBtn,
                   background: liveStep === "EXPORT" ? "linear-gradient(135deg,#16a34a,#15803d)" : "#f8fafc",
@@ -2975,7 +3048,9 @@ export default function Page() {
       <div style={
         screen === "CUSTOMER_VIEW"
           ? { display: "contents" }
-          : { display: "grid", gridTemplateColumns: `${presentationMode ? 240 : 360}px 1fr`, flex: 1, overflow: "hidden", minHeight: 0 }
+          : isCustomerView
+        ? { display: "grid", gridTemplateColumns: "0px 1fr", flex: 1, overflow: "hidden", minHeight: 0 }
+        : { display: "grid", gridTemplateColumns: `${presentationMode ? 240 : 360}px 1fr`, flex: 1, overflow: "hidden", minHeight: 0 }
       }>
 
       {/* ── CUSTOMER RIGHT SIDEBAR ── */}
@@ -3116,7 +3191,7 @@ export default function Page() {
       <aside style={{
         background: "#f8fafc",
         borderRight: "1px solid rgba(15,23,42,0.08)",
-        display: screen === "CUSTOMER_VIEW" ? "none" : "flex",
+        display: (screen === "CUSTOMER_VIEW" || isCustomerView) ? "none" : "flex",
         flexDirection: "column",
         overflow: "hidden",
       }}>
