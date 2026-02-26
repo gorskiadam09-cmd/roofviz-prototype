@@ -896,6 +896,7 @@ export default function Page() {
 
   const [w, setW] = useState(1100);
   const [h, setH] = useState(700);
+  const [stageKey, setStageKey] = useState(0);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -1195,11 +1196,47 @@ export default function Page() {
     try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
   }
 
-  // Sync isCustomerView if user presses ESC to exit fullscreen natively
+  // Helper: measure container after layout settles (double RAF) and bump stageKey
+  function scheduleRemeasure() {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!containerRef.current) return;
+      const r = containerRef.current.getBoundingClientRect();
+      const nw = Math.max(1, Math.floor(r.width));
+      const nh = Math.max(1, Math.floor(r.height));
+      setW(nw);
+      setH(nh);
+      setStageKey((k) => k + 1);
+    }));
+  }
+
+  // Sync isCustomerView if user presses ESC to exit fullscreen natively;
+  // also re-measure after fullscreen transition completes.
   useEffect(() => {
-    const handler = () => { if (!document.fullscreenElement) setIsCustomerView(false); };
+    const handler = () => {
+      if (!document.fullscreenElement) setIsCustomerView(false);
+      scheduleRemeasure();
+    };
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Re-measure whenever customer view is toggled (layout changes before fullscreen fires)
+  useEffect(() => {
+    scheduleRemeasure();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCustomerView]);
+
+  // Re-measure on window resize / orientation change
+  useEffect(() => {
+    const handler = () => scheduleRemeasure();
+    window.addEventListener("resize", handler);
+    window.addEventListener("orientationchange", handler);
+    return () => {
+      window.removeEventListener("resize", handler);
+      window.removeEventListener("orientationchange", handler);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function patchActive(updater: (p: PhotoProject) => PhotoProject) {
@@ -3049,7 +3086,7 @@ export default function Page() {
         screen === "CUSTOMER_VIEW"
           ? { display: "contents" }
           : isCustomerView
-        ? { display: "grid", gridTemplateColumns: "0px 1fr", flex: 1, overflow: "hidden", minHeight: 0 }
+        ? { display: "flex", flexDirection: "row", flex: 1, overflow: "hidden", minHeight: 0 }
         : { display: "grid", gridTemplateColumns: `${presentationMode ? 240 : 360}px 1fr`, flex: 1, overflow: "hidden", minHeight: 0 }
       }>
 
@@ -3191,9 +3228,14 @@ export default function Page() {
       <aside style={{
         background: "#f8fafc",
         borderRight: "1px solid rgba(15,23,42,0.08)",
-        display: (screen === "CUSTOMER_VIEW" || isCustomerView) ? "none" : "flex",
+        // Collapse via width:0 (not display:none) so canvas stays in a valid
+        // flex/grid cell and the ResizeObserver keeps firing correctly.
+        display: screen === "CUSTOMER_VIEW" ? "none" : "flex",
         flexDirection: "column",
         overflow: "hidden",
+        width: isCustomerView ? 0 : undefined,
+        flexShrink: isCustomerView ? 0 : undefined,
+        minWidth: 0,
       }}>
 
         {/* ── PROJECT EDITOR PANEL ── */}
@@ -4426,9 +4468,12 @@ export default function Page() {
         backgroundSize: "28px 28px",
         position: "relative",
         overflow: "hidden",
+        // In customer view: fill all remaining flex space
+        ...(isCustomerView ? { flex: "1 1 0", minWidth: 0, minHeight: 0 } : {}),
         ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0 } : {}),
       }}>
         <Stage
+          key={stageKey}
           ref={stageRef}
           width={w}
           height={h}
@@ -4451,6 +4496,10 @@ export default function Page() {
           style={{ touchAction: "none" }}
         >
           <Layer>
+            {/* Dev overlay: show measured dimensions in customer view */}
+            {isCustomerView && process.env.NODE_ENV === "development" && (
+              <Text text={`${w}×${h}`} x={8} y={8} fontSize={12} fill="rgba(255,255,255,0.55)" listening={false} />
+            )}
             {/* Customer view: light background covers entire world space */}
             {screen === "CUSTOMER_VIEW" && (
               <Rect x={-50000} y={-50000} width={200000} height={200000} fill="#e8edf2" />
