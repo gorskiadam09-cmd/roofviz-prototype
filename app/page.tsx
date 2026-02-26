@@ -1000,7 +1000,10 @@ export default function Page() {
   const [isCustomerView, setIsCustomerView] = useState(false);
   // Refs to keep Stage dimensions stable while in customer view (avoids coordinate-space mismatch)
   const isCustomerViewRef = useRef(false);
-  const customerViewDims = useRef<{ w: number; h: number } | null>(null);
+  const customerViewDims = useRef<{
+    w: number; h: number;
+    stageScale: number; stagePos: { x: number; y: number };
+  } | null>(null);
   // Screen dimensions measured while in customer view (used for CSS scale only)
   const [cvScreenW, setCvScreenW] = useState(0);
   const [cvScreenH, setCvScreenH] = useState(0);
@@ -1195,14 +1198,28 @@ export default function Page() {
 
   function enterCustomerView() {
     isCustomerViewRef.current = true;
-    customerViewDims.current = { w, h }; // Freeze Stage dims at current edit-mode size
+    // Save all state needed to fully restore edit-mode after exit
+    customerViewDims.current = {
+      w, h,
+      stageScale: active?.stageScale ?? 1,
+      stagePos: active?.stagePos ?? { x: 0, y: 0 },
+    };
     setIsCustomerView(true);
     try { document.documentElement.requestFullscreen?.(); } catch {}
   }
 
   function exitCustomerView() {
+    const saved = customerViewDims.current;
     isCustomerViewRef.current = false;
     customerViewDims.current = null;
+    // Immediately restore Stage dims + transform so the coordinate space is correct
+    // before any async fullscreen-exit resize fires. Batch all updates together.
+    if (saved) {
+      setW(saved.w);
+      setH(saved.h);
+      patchActive((p) => ({ ...p, stageScale: saved.stageScale, stagePos: saved.stagePos }));
+    }
+    setStageKey((k) => k + 1); // Force clean Konva remount at restored dims
     setIsCustomerView(false);
     try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
   }
@@ -1226,25 +1243,41 @@ export default function Page() {
     }));
   }
 
-  // Sync isCustomerView if user presses ESC to exit fullscreen natively;
-  // also re-measure after fullscreen transition completes.
+  // Sync isCustomerView if user presses ESC to exit fullscreen natively.
   useEffect(() => {
     const handler = () => {
-      if (!document.fullscreenElement) {
+      if (!document.fullscreenElement && isCustomerViewRef.current) {
+        // ESC key exit — restore dims exactly like the button does
+        const saved = customerViewDims.current;
         isCustomerViewRef.current = false;
         customerViewDims.current = null;
+        if (saved) {
+          setW(saved.w);
+          setH(saved.h);
+          // Note: patchActive is stale here; stageScale/stagePos unchanged during cv so OK to skip
+        }
+        setStageKey((k) => k + 1);
         setIsCustomerView(false);
+        // Don't scheduleRemeasure here — ResizeObserver fires naturally as fullscreen exits
+      } else if (document.fullscreenElement) {
+        // Fullscreen just entered — measure the new container size for CSS scaling
+        scheduleRemeasure();
       }
-      scheduleRemeasure();
     };
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-measure whenever customer view is toggled (layout changes before fullscreen fires)
+  // Re-measure on enter only; exit restores dims directly (avoids measuring stale fullscreen container)
   useEffect(() => {
-    scheduleRemeasure();
+    if (isCustomerView) scheduleRemeasure();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCustomerView]);
+
+  // Force Konva to fully repaint after customer view toggle
+  useEffect(() => {
+    requestAnimationFrame(() => { stageRef.current?.batchDraw?.(); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCustomerView]);
 
