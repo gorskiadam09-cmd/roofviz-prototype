@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { cleanupGeometry, strengthToOptions } from "@/app/lib/cleanupGeometry";
 import { cleanAiOutline } from "@/app/lib/aiOutlineCleanup";
@@ -1210,18 +1210,25 @@ export default function Page() {
 
   function exitCustomerView() {
     const saved = customerViewDims.current;
-    isCustomerViewRef.current = false;
-    customerViewDims.current = null;
-    // Immediately restore Stage dims + transform so the coordinate space is correct
-    // before any async fullscreen-exit resize fires. Batch all updates together.
+    // Restore Stage dims + transform immediately (batched React update).
     if (saved) {
       setW(saved.w);
       setH(saved.h);
       patchActive((p) => ({ ...p, stageScale: saved.stageScale, stagePos: saved.stagePos }));
     }
-    setStageKey((k) => k + 1); // Force clean Konva remount at restored dims
     setIsCustomerView(false);
-    try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
+
+    if (document.fullscreenElement) {
+      // Stay in "blocked" mode (isCustomerViewRef.current = true) so the ResizeObserver
+      // cannot overwrite the just-restored w/h while the window is still fullscreen-sized.
+      // The fullscreenchange handler will clear the refs once fullscreen actually exits.
+      try { document.exitFullscreen?.(); } catch {}
+    } else {
+      // Not in fullscreen — safe to clear refs immediately and remount Stage.
+      isCustomerViewRef.current = false;
+      customerViewDims.current = null;
+      setStageKey((k) => k + 1);
+    }
   }
 
   // Helper: measure container after layout settles (double RAF) and bump stageKey
@@ -1243,24 +1250,23 @@ export default function Page() {
     }));
   }
 
-  // Sync isCustomerView if user presses ESC to exit fullscreen natively.
+  // Handle fullscreen enter/exit.
   useEffect(() => {
     const handler = () => {
-      if (!document.fullscreenElement && isCustomerViewRef.current) {
-        // ESC key exit — restore dims exactly like the button does
-        const saved = customerViewDims.current;
-        isCustomerViewRef.current = false;
-        customerViewDims.current = null;
-        if (saved) {
-          setW(saved.w);
-          setH(saved.h);
-          // Note: patchActive is stale here; stageScale/stagePos unchanged during cv so OK to skip
+      if (!document.fullscreenElement) {
+        // Fullscreen exited — clear the block on ResizeObserver regardless of how we got here.
+        if (isCustomerViewRef.current) {
+          const saved = customerViewDims.current;
+          isCustomerViewRef.current = false;
+          customerViewDims.current = null;
+          // Restore dims: no-op if exitCustomerView() already set them; first-time if ESC pressed.
+          if (saved) { setW(saved.w); setH(saved.h); }
+          setStageKey((k) => k + 1); // Clean remount now that window is back to edit-mode size
+          setIsCustomerView(false);  // No-op for button exit; handles native ESC exit
         }
-        setStageKey((k) => k + 1);
-        setIsCustomerView(false);
-        // Don't scheduleRemeasure here — ResizeObserver fires naturally as fullscreen exits
-      } else if (document.fullscreenElement) {
-        // Fullscreen just entered — measure the new container size for CSS scaling
+        // ResizeObserver is now unblocked and will update w/h to actual container size.
+      } else {
+        // Fullscreen just entered — measure the container for CSS scaling.
         scheduleRemeasure();
       }
     };
@@ -1275,11 +1281,11 @@ export default function Page() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCustomerView]);
 
-  // Force Konva to fully repaint after customer view toggle
-  useEffect(() => {
+  // Force Konva to fully repaint after customer view toggle or any dimension/project change
+  useLayoutEffect(() => {
     requestAnimationFrame(() => { stageRef.current?.batchDraw?.(); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCustomerView]);
+  }, [isCustomerView, w, h, activePhotoId]);
 
   // Re-measure on window resize / orientation change
   useEffect(() => {
