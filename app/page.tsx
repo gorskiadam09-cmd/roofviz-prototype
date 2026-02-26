@@ -183,6 +183,29 @@ function uid() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
 
+// Compress an image data-URL to max 1400px on longest side, JPEG 0.82.
+// Keeps localStorage well under the 5 MB quota for typical job photos.
+function compressForStorage(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    img.onload = () => {
+      const MAX = 1400;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(dataUrl); return; }
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL("image/jpeg", 0.82));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
@@ -1663,7 +1686,7 @@ export default function Page() {
       (file) =>
         new Promise<string>((resolve) => {
           const fr = new FileReader();
-          fr.onload = () => resolve(String(fr.result));
+          fr.onload = () => compressForStorage(String(fr.result)).then(resolve);
           fr.readAsDataURL(file);
         })
     );
@@ -2922,7 +2945,10 @@ export default function Page() {
                 onClick={() => {
                   const next = !presentationMode;
                   setPresentationMode(next);
-                  if (next && active) patchActive((p) => ({ ...p, step: "TEAROFF" }));
+                  if (next && active) {
+                    patchActive((p) => ({ ...p, step: "TEAROFF" }));
+                    setUiTab("edit");
+                  }
                 }}
               >
                 {presentationMode ? "✦ Presenting" : "✦ Present"}
@@ -3123,6 +3149,28 @@ export default function Page() {
                   borderRadius: 99, transition: "width 0.35s ease",
                 }} />
               </div>
+
+              {/* Photo switcher — presentation mode only, shown when >1 photo */}
+              {presentationMode && (active.photoSrcs?.length ?? 0) > 1 && (() => {
+                const srcs = active.photoSrcs;
+                const idx = srcs.indexOf(active.src);
+                const total = srcs.length;
+                return (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, gap: 6 }}>
+                    <button
+                      onClick={() => switchToPhoto(srcs[(idx - 1 + total) % total])}
+                      style={{ padding: "4px 10px", borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.12)", background: "#fff", color: "#334155", flexShrink: 0 }}
+                    >‹</button>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "#475569", textAlign: "center" as const }}>
+                      Photo {idx + 1} / {total}
+                    </span>
+                    <button
+                      onClick={() => switchToPhoto(srcs[(idx + 1) % total])}
+                      style={{ padding: "4px 10px", borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.12)", background: "#fff", color: "#334155", flexShrink: 0 }}
+                    >›</button>
+                  </div>
+                );
+              })()}
             </>
           )}
         </div>
