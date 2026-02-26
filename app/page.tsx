@@ -902,6 +902,7 @@ export default function Page() {
     if (!containerRef.current) return;
     const el = containerRef.current;
     const ro = new ResizeObserver(() => {
+      if (isCustomerViewRef.current) return; // Stage dims frozen in customer view
       const r = el.getBoundingClientRect();
       setW(Math.max(1, Math.floor(r.width)));
       setH(Math.max(1, Math.floor(r.height)));
@@ -997,6 +998,12 @@ export default function Page() {
   const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
   const [presentationMode, setPresentationMode] = useState(false);
   const [isCustomerView, setIsCustomerView] = useState(false);
+  // Refs to keep Stage dimensions stable while in customer view (avoids coordinate-space mismatch)
+  const isCustomerViewRef = useRef(false);
+  const customerViewDims = useRef<{ w: number; h: number } | null>(null);
+  // Screen dimensions measured while in customer view (used for CSS scale only)
+  const [cvScreenW, setCvScreenW] = useState(0);
+  const [cvScreenH, setCvScreenH] = useState(0);
 
   // ── Cleanup state ─────────────────────────────────────────────────────────
   const [cleanupOpen, setCleanupOpen]           = useState(false);
@@ -1187,11 +1194,15 @@ export default function Page() {
   // ── Customer View (fullscreen presentation) ────────────────────────────────
 
   function enterCustomerView() {
+    isCustomerViewRef.current = true;
+    customerViewDims.current = { w, h }; // Freeze Stage dims at current edit-mode size
     setIsCustomerView(true);
     try { document.documentElement.requestFullscreen?.(); } catch {}
   }
 
   function exitCustomerView() {
+    isCustomerViewRef.current = false;
+    customerViewDims.current = null;
     setIsCustomerView(false);
     try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
   }
@@ -1203,8 +1214,14 @@ export default function Page() {
       const r = containerRef.current.getBoundingClientRect();
       const nw = Math.max(1, Math.floor(r.width));
       const nh = Math.max(1, Math.floor(r.height));
-      setW(nw);
-      setH(nh);
+      if (isCustomerViewRef.current) {
+        // In customer view: only update screen dims for CSS scale — Stage dims stay frozen
+        setCvScreenW(nw);
+        setCvScreenH(nh);
+      } else {
+        setW(nw);
+        setH(nh);
+      }
       setStageKey((k) => k + 1);
     }));
   }
@@ -1213,7 +1230,11 @@ export default function Page() {
   // also re-measure after fullscreen transition completes.
   useEffect(() => {
     const handler = () => {
-      if (!document.fullscreenElement) setIsCustomerView(false);
+      if (!document.fullscreenElement) {
+        isCustomerViewRef.current = false;
+        customerViewDims.current = null;
+        setIsCustomerView(false);
+      }
       scheduleRemeasure();
     };
     document.addEventListener("fullscreenchange", handler);
@@ -2711,6 +2732,16 @@ export default function Page() {
       color,
     };
   };
+
+  // ── Customer view: keep Stage at edit-mode dimensions, CSS-scale to fill screen ──
+  const cvDims = customerViewDims.current;
+  // Dimensions passed to Konva Stage (frozen when in customer view)
+  const stageW = (isCustomerView && cvDims) ? cvDims.w : w;
+  const stageH = (isCustomerView && cvDims) ? cvDims.h : h;
+  // CSS scale to make the fixed-size Stage fill the fullscreen container
+  const cvScale = (isCustomerView && cvDims && cvScreenW > 0 && cvScreenH > 0)
+    ? Math.min(cvScreenW / cvDims.w, cvScreenH / cvDims.h)
+    : 1;
 
   // ── MENU SCREEN ────────────────────────────────────────────────────────────
   if (screen === "MENU") {
@@ -4468,15 +4499,21 @@ export default function Page() {
         backgroundSize: "28px 28px",
         position: "relative",
         overflow: "hidden",
-        // In customer view: fill all remaining flex space
-        ...(isCustomerView ? { flex: "1 1 0", minWidth: 0, minHeight: 0 } : {}),
+        // In customer view: fill all remaining flex space and center the fixed-size Stage
+        ...(isCustomerView ? { flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" } : {}),
         ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0 } : {}),
       }}>
+        {/* In customer view, CSS-scale the Stage to fill the screen without changing world coords */}
+        <div style={isCustomerView && cvDims ? {
+          transform: `scale(${cvScale})`,
+          transformOrigin: "center center",
+          flexShrink: 0,
+        } : {}}>
         <Stage
           key={stageKey}
           ref={stageRef}
-          width={w}
-          height={h}
+          width={stageW}
+          height={stageH}
           onMouseDown={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
           onMouseMove={screen !== "CUSTOMER_VIEW" ? onStageMove : undefined}
           onMouseUp={screen !== "CUSTOMER_VIEW" ? onStageUp : undefined}
@@ -4498,7 +4535,7 @@ export default function Page() {
           <Layer>
             {/* Dev overlay: show measured dimensions in customer view */}
             {isCustomerView && process.env.NODE_ENV === "development" && (
-              <Text text={`${w}×${h}`} x={8} y={8} fontSize={12} fill="rgba(255,255,255,0.55)" listening={false} />
+              <Text text={`${stageW}×${stageH}`} x={8} y={8} fontSize={12} fill="rgba(255,255,255,0.55)" listening={false} />
             )}
             {/* Customer view: light background covers entire world space */}
             {screen === "CUSTOMER_VIEW" && (
@@ -4510,8 +4547,8 @@ export default function Page() {
                 <Text
                   text="Upload a photo to begin"
                   x={0}
-                  y={h / 2 - 22}
-                  width={w}
+                  y={stageH / 2 - 22}
+                  width={stageW}
                   align="center"
                   fill="rgba(255,255,255,0.55)"
                   fontSize={17}
@@ -4520,8 +4557,8 @@ export default function Page() {
                 <Text
                   text="Use the Photo panel on the left"
                   x={0}
-                  y={h / 2 + 6}
-                  width={w}
+                  y={stageH / 2 + 6}
+                  width={stageW}
                   align="center"
                   fill="rgba(255,255,255,0.28)"
                   fontSize={13}
@@ -4531,8 +4568,8 @@ export default function Page() {
 
             {photoImg && <KonvaImage
               image={photoImg}
-              width={screen === "CUSTOMER_VIEW" ? ((active as any)?._customerCanvasW || w) : w}
-              height={screen === "CUSTOMER_VIEW" ? ((active as any)?._customerCanvasH || h) : h}
+              width={screen === "CUSTOMER_VIEW" ? ((active as any)?._customerCanvasW || stageW) : stageW}
+              height={screen === "CUSTOMER_VIEW" ? ((active as any)?._customerCanvasH || stageH) : stageH}
             />}
 
             {/* Draft visuals — hidden in presentation mode */}
@@ -4643,14 +4680,14 @@ export default function Page() {
               <>
                 {/* Dimmed band below the roof region */}
                 <Rect
-                  x={0} y={Math.round(h * edgeRoofRegionFraction)}
-                  width={w} height={h - Math.round(h * edgeRoofRegionFraction)}
+                  x={0} y={Math.round(stageH * edgeRoofRegionFraction)}
+                  width={stageW} height={stageH - Math.round(stageH * edgeRoofRegionFraction)}
                   fill="rgba(0,0,0,0.35)"
                   listening={false}
                 />
                 {/* Dashed boundary line */}
                 <Line
-                  points={[0, Math.round(h * edgeRoofRegionFraction), w, Math.round(h * edgeRoofRegionFraction)]}
+                  points={[0, Math.round(stageH * edgeRoofRegionFraction), stageW, Math.round(stageH * edgeRoofRegionFraction)]}
                   stroke="rgba(56,189,248,0.9)"
                   strokeWidth={2}
                   dash={[10, 6]}
@@ -4763,7 +4800,7 @@ export default function Page() {
                 <Group key={`install-${r.id}`} clipFunc={(ctx) => clipPolygonPath(ctx, r.outline)}>
                   {/* Tearoff (decking) */}
 {atLeast(currentStep, "TEAROFF") && deckingImg && (
-  <KonvaImage image={deckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
+  <KonvaImage image={deckingImg} x={0} y={0} width={stageW} height={stageH} opacity={0.92} />
 )}
 
 {/* Subtle structure guides — faint valley/hip/ridge lines visible during install */}
@@ -4792,7 +4829,7 @@ export default function Page() {
 {stepIndex(currentStep) >= stepIndex("SYNTHETIC") &&
   stepIndex(currentStep) < stepIndex("SHINGLES") &&
   syntheticImg && (
-    <KonvaImage image={syntheticImg} x={0} y={0} width={w} height={h} opacity={0.86} />
+    <KonvaImage image={syntheticImg} x={0} y={0} width={stageW} height={stageH} opacity={0.86} />
   )}
 
 {/* Ice & water — always visible once reached */}
@@ -4907,7 +4944,7 @@ export default function Page() {
                           fillPatternOffsetY={shingleOffsetY}
                           fillPatternRotation={r.shingleRotation ?? 0}
                         />
-                        <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
+                        <Rect x={0} y={0} width={stageW} height={stageH} fill="rgba(0,0,0,0.06)" />
                       </>
                     );
                   })()}
@@ -4966,7 +5003,7 @@ export default function Page() {
                   {/* dormer holes reveal original photo */}
                   {photoImg && r.holes.map((holePts, idx) => (
                     <Group key={`hole-reveal-${r.id}-${idx}`} clipFunc={(ctx) => clipPolygonPath(ctx, holePts)}>
-                      <KonvaImage image={photoImg} width={w} height={h} />
+                      <KonvaImage image={photoImg} width={stageW} height={stageH} />
                     </Group>
                   ))}
                 </Group>
@@ -5021,6 +5058,7 @@ export default function Page() {
             )}
           </Layer>
         </Stage>
+        </div>{/* end CSS-scale wrapper */}
       </main>
       </div>
     </div>
