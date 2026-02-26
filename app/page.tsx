@@ -922,12 +922,9 @@ export default function Page() {
     if (!containerRef.current) return;
     const el = containerRef.current;
     const ro = new ResizeObserver(() => {
-      if (isCustomerViewRef.current) return; // Stage dims frozen in customer view
       const r = el.getBoundingClientRect();
-      const nw = Math.max(1, Math.floor(r.width));
-      const nh = Math.max(1, Math.floor(r.height));
-      setW(nw);
-      setH(nh);
+      setW(Math.max(1, Math.floor(r.width)));
+      setH(Math.max(1, Math.floor(r.height)));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -1020,26 +1017,16 @@ export default function Page() {
   const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
   const [presentationMode, setPresentationMode] = useState(false);
   const [isCustomerView, setIsCustomerView] = useState(false);
-  // Refs to keep Stage dimensions stable while in customer view (avoids coordinate-space mismatch)
-  const isCustomerViewRef = useRef(false);
-  const customerViewDims = useRef<{
-    w: number; h: number;
-    stageScale: number; stagePos: { x: number; y: number };
-  } | null>(null);
-  // Screen dimensions measured while in customer view (used for CSS scale only)
-  const [cvScreenW, setCvScreenW] = useState(0);
-  const [cvScreenH, setCvScreenH] = useState(0);
+  // Save stageScale/stagePos before entering customer view so we can restore on exit
+  const savedEditViewRef = useRef<{ stageScale: number; stagePos: { x: number; y: number } } | null>(null);
 
   const photoTx = useMemo((): PhotoTransform => {
     const img = photoImg as HTMLImageElement | undefined;
-    const sw = (isCustomerView && customerViewDims.current) ? customerViewDims.current.w : w;
-    const sh = (isCustomerView && customerViewDims.current) ? customerViewDims.current.h : h;
     if (!img?.naturalWidth || !img?.naturalHeight) {
-      return { scale: 1, drawW: sw, drawH: sh, offX: 0, offY: 0 };
+      return { scale: 1, drawW: w, drawH: h, offX: 0, offY: 0 };
     }
-    return getPhotoTransform(img.naturalWidth, img.naturalHeight, sw, sh);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [photoImg, w, h, isCustomerView]);
+    return getPhotoTransform(img.naturalWidth, img.naturalHeight, w, h);
+  }, [photoImg, w, h]);
 
   // ── Cleanup state ─────────────────────────────────────────────────────────
   const [cleanupOpen, setCleanupOpen]           = useState(false);
@@ -1230,10 +1217,8 @@ export default function Page() {
   // ── Customer View (fullscreen presentation) ────────────────────────────────
 
   function enterCustomerView() {
-    isCustomerViewRef.current = true;
-    // Save all state needed to fully restore edit-mode after exit
-    customerViewDims.current = {
-      w, h,
+    // Save edit-mode zoom/pan so we can restore it after customer view
+    savedEditViewRef.current = {
       stageScale: active?.stageScale ?? 1,
       stagePos: active?.stagePos ?? { x: 0, y: 0 },
     };
@@ -1242,25 +1227,15 @@ export default function Page() {
   }
 
   function exitCustomerView() {
-    const saved = customerViewDims.current;
-    // Restore Stage dims + transform immediately (batched React update).
+    // Restore zoom/pan to what it was before entering customer view
+    const saved = savedEditViewRef.current;
     if (saved) {
-      setW(saved.w);
-      setH(saved.h);
       patchActive((p) => ({ ...p, stageScale: saved.stageScale, stagePos: saved.stagePos }));
+      savedEditViewRef.current = null;
     }
     setIsCustomerView(false);
-
     if (document.fullscreenElement) {
-      // Stay in "blocked" mode (isCustomerViewRef.current = true) so the ResizeObserver
-      // cannot overwrite the just-restored w/h while the window is still fullscreen-sized.
-      // The fullscreenchange handler will clear the refs once fullscreen actually exits.
       try { document.exitFullscreen?.(); } catch {}
-    } else {
-      // Not in fullscreen — safe to clear refs immediately and remount Stage.
-      isCustomerViewRef.current = false;
-      customerViewDims.current = null;
-      setStageKey((k) => k + 1);
     }
   }
 
@@ -1269,48 +1244,20 @@ export default function Page() {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (!containerRef.current) return;
       const r = containerRef.current.getBoundingClientRect();
-      const nw = Math.max(1, Math.floor(r.width));
-      const nh = Math.max(1, Math.floor(r.height));
-      if (isCustomerViewRef.current) {
-        // In customer view: only update screen dims for CSS scale — Stage dims stay frozen
-        setCvScreenW(nw);
-        setCvScreenH(nh);
-      } else {
-        setW(nw);
-        setH(nh);
-      }
-      setStageKey((k) => k + 1);
+      setW(Math.max(1, Math.floor(r.width)));
+      setH(Math.max(1, Math.floor(r.height)));
     }));
   }
 
-  // Handle fullscreen enter/exit.
+  // Handle native ESC exit from fullscreen (button exit is handled by exitCustomerView directly)
   useEffect(() => {
     const handler = () => {
-      if (!document.fullscreenElement) {
-        // Fullscreen exited — clear the block on ResizeObserver regardless of how we got here.
-        if (isCustomerViewRef.current) {
-          const saved = customerViewDims.current;
-          isCustomerViewRef.current = false;
-          customerViewDims.current = null;
-          // Restore dims: no-op if exitCustomerView() already set them; first-time if ESC pressed.
-          if (saved) { setW(saved.w); setH(saved.h); }
-          setStageKey((k) => k + 1); // Clean remount now that window is back to edit-mode size
-          setIsCustomerView(false);  // No-op for button exit; handles native ESC exit
-        }
-        // ResizeObserver is now unblocked and will update w/h to actual container size.
-      } else {
-        // Fullscreen just entered — measure the container for CSS scaling.
-        scheduleRemeasure();
+      if (!document.fullscreenElement && isCustomerView) {
+        exitCustomerView();
       }
     };
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Re-measure on enter only; exit restores dims directly (avoids measuring stale fullscreen container)
-  useEffect(() => {
-    if (isCustomerView) scheduleRemeasure();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCustomerView]);
 
@@ -1760,9 +1707,17 @@ export default function Page() {
   function startProject() {
     const id = uid();
     const roof1 = defaultRoof("Roof 1");
+    const existingNums = photos
+      .map((p) => {
+        const m = p.name.match(/^New Project(?: (\d+))?$/);
+        return m ? (m[1] ? parseInt(m[1]) : 1) : 0;
+      })
+      .filter(Boolean);
+    const nextNum = existingNums.length === 0 ? 0 : Math.max(...existingNums) + 1;
+    const name = nextNum === 0 ? "New Project" : `New Project ${nextNum}`;
     const item: PhotoProject = {
       id,
-      name: projectName || "My Roof Project",
+      name,
       src: "",
       photoSrcs: [],
       step: "TRACE",
@@ -2809,241 +2764,194 @@ export default function Page() {
     };
   };
 
-  // ── Customer view: keep Stage at edit-mode dimensions, CSS-scale to fill screen ──
-  const cvDims = customerViewDims.current;
-  // Dimensions passed to Konva Stage (frozen when in customer view)
-  const stageW = (isCustomerView && cvDims) ? cvDims.w : w;
-  const stageH = (isCustomerView && cvDims) ? cvDims.h : h;
-  // CSS scale to make the fixed-size Stage fill the fullscreen container
-  const cvScale = (isCustomerView && cvDims && cvScreenW > 0 && cvScreenH > 0)
-    ? Math.min(cvScreenW / cvDims.w, cvScreenH / cvDims.h)
-    : 1;
+  const stageW = w;
+  const stageH = h;
 
   // ── MENU SCREEN ────────────────────────────────────────────────────────────
   if (screen === "MENU") {
     return (
       <div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "system-ui, -apple-system, sans-serif" }}>
-        {/* Top nav */}
+        {/* Header */}
         <header style={{
-          background: "#fff",
+          background: "#ffffff",
           borderBottom: "1px solid rgba(15,23,42,0.08)",
-          padding: "0 48px",
-          height: 72,
+          padding: "0 32px",
+          height: 64,
           display: "flex",
           alignItems: "center",
-          flexShrink: 0,
+          gap: 16,
+          boxShadow: "0 1px 3px rgba(15,23,42,0.05)",
         }}>
-          <Image src="/roofviz-logo.png" alt="RoofViz" width={165} height={48} priority />
-          <div style={{ marginLeft: "auto", fontSize: 13, color: "#94a3b8", fontWeight: 500, letterSpacing: "0.02em" }}>
-            Professional Roof Visualization
-          </div>
+          <Image src="/roofviz-logo.png" alt="RoofViz" width={140} height={40} priority />
+          <div style={{ flex: 1 }} />
+          <button
+            onClick={startProject}
+            style={{
+              display: "flex", alignItems: "center", gap: 7,
+              padding: "9px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700,
+              cursor: "pointer", border: "none",
+              background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+              color: "#ffffff",
+              boxShadow: "0 2px 8px rgba(37,99,235,0.28)",
+            }}
+          >
+            <span style={{ fontSize: 18, lineHeight: 1 }}>+</span> New Project
+          </button>
         </header>
 
-        {/* Hero banner */}
-        <div style={{
-          background: "linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%)",
-          padding: "56px 48px",
-          textAlign: "center",
-          color: "#fff",
-        }}>
-          <h1 style={{ fontSize: 30, fontWeight: 800, margin: "0 0 12px", lineHeight: 1.25 }}>
-            Walk Customers Through Their New Roof
-          </h1>
-          <p style={{ fontSize: 15, color: "rgba(255,255,255,0.68)", maxWidth: 560, margin: "0 auto", lineHeight: 1.7 }}>
-            Upload a job-site photo, trace the roof, and visualize every installation layer — from tear-off to cap shingles. Export a professional 2-page PDF to share with your customer.
-          </p>
-        </div>
+        {/* Content */}
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "36px 24px 60px" }}>
 
-        {/* Content area */}
-        <div style={{ maxWidth: 920, margin: "0 auto", padding: "40px 24px 60px" }}>
-
-          {/* How it works */}
-          <div className="rv-fade-in-up" style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", marginBottom: 28, boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#94a3b8", textTransform: "uppercase", marginBottom: 20 }}>HOW IT WORKS</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 20 }}>
-
-              {/* Step 1 — Upload Photo */}
-              <div className="rv-how-step" style={{ textAlign: "center" }}>
-                <svg viewBox="0 0 64 56" width="64" height="56" style={{ display: "block", margin: "0 auto 12px" }}>
-                  <rect x="6" y="16" width="52" height="34" rx="5" fill="none" stroke="#2563eb" strokeWidth="2"/>
-                  <rect x="22" y="8" width="20" height="10" rx="3" fill="none" stroke="#2563eb" strokeWidth="2"/>
-                  <circle cx="32" cy="33" r="9" fill="none" stroke="#2563eb" strokeWidth="2"/>
-                  <circle cx="32" cy="33" r="4" fill="#2563eb" opacity="0.3"/>
-                  <rect x="46" y="20" width="6" height="4" rx="1" fill="#2563eb"/>
-                  <line x1="26" y1="28" x2="32" y2="22" stroke="#2563eb" strokeWidth="1.5" strokeLinecap="round"/>
-                </svg>
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>Upload Photo</div>
-                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>Add a job-site photo of the roof.</div>
-              </div>
-
-              {/* Step 2 — Trace the Roof */}
-              <div className="rv-how-step" style={{ textAlign: "center" }}>
-                <svg viewBox="0 0 64 56" width="64" height="56" style={{ display: "block", margin: "0 auto 12px" }}>
-                  <polygon points="32,8 6,34 58,34" fill="rgba(37,99,235,0.07)" stroke="#2563eb" strokeWidth="2" strokeLinejoin="round"/>
-                  <line x1="6" y1="34" x2="6" y2="50" stroke="#2563eb" strokeWidth="2"/>
-                  <line x1="58" y1="34" x2="58" y2="50" stroke="#2563eb" strokeWidth="2"/>
-                  <line x1="6" y1="50" x2="58" y2="50" stroke="#2563eb" strokeWidth="2"/>
-                  <circle cx="32" cy="8" r="4" fill="#2563eb"/>
-                  <circle cx="6" cy="34" r="4" fill="#2563eb"/>
-                  <circle cx="58" cy="34" r="4" fill="#2563eb"/>
-                  <circle cx="6" cy="50" r="3" fill="rgba(37,99,235,0.4)"/>
-                  <circle cx="58" cy="50" r="3" fill="rgba(37,99,235,0.4)"/>
-                </svg>
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>Trace the Roof</div>
-                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>Outline each section and label the edges.</div>
-              </div>
-
-              {/* Step 3 — Build Layers */}
-              <div className="rv-how-step" style={{ textAlign: "center" }}>
-                <svg viewBox="0 0 64 56" width="64" height="56" style={{ display: "block", margin: "0 auto 12px" }}>
-                  <rect x="6" y="8"  width="52" height="9" rx="2" fill="#0f172a" opacity="0.85"/>
-                  <rect x="6" y="19" width="52" height="9" rx="2" fill="#1d4ed8" opacity="0.75"/>
-                  <rect x="6" y="30" width="52" height="9" rx="2" fill="#60a5fa" opacity="0.70"/>
-                  <rect x="6" y="41" width="52" height="9" rx="2" fill="#4b4e55" opacity="0.85"/>
-                  <text x="10" y="16.5" fontSize="5.5" fill="#fff" fontFamily="sans-serif" fontWeight="600">Ice &amp; Water</text>
-                  <text x="10" y="27.5" fontSize="5.5" fill="#fff" fontFamily="sans-serif" fontWeight="600">Synthetic</text>
-                  <text x="10" y="38.5" fontSize="5.5" fill="#fff" fontFamily="sans-serif" fontWeight="600">Pro-Start</text>
-                  <text x="10" y="49.5" fontSize="5.5" fill="#fff" fontFamily="sans-serif" fontWeight="600">Shingles</text>
-                </svg>
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>Build Layers</div>
-                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>Step through every material layer live.</div>
-              </div>
-
-              {/* Step 4 — Export PDF */}
-              <div className="rv-how-step" style={{ textAlign: "center" }}>
-                <svg viewBox="0 0 64 56" width="64" height="56" style={{ display: "block", margin: "0 auto 12px" }}>
-                  <rect x="10" y="4" width="36" height="46" rx="3" fill="none" stroke="#2563eb" strokeWidth="2"/>
-                  <polyline points="30,4 30,18 46,18" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinejoin="round"/>
-                  <line x1="16" y1="24" x2="40" y2="24" stroke="#2563eb" strokeWidth="1.5"/>
-                  <line x1="16" y1="30" x2="40" y2="30" stroke="#2563eb" strokeWidth="1.5"/>
-                  <line x1="16" y1="36" x2="32" y2="36" stroke="#2563eb" strokeWidth="1.5"/>
-                  <circle cx="51" cy="42" r="9" fill="#2563eb"/>
-                  <line x1="51" y1="37" x2="51" y2="45" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
-                  <polyline points="47,42 51,46 55,42" fill="none" stroke="#fff" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
-                </svg>
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#0f172a", marginBottom: 4 }}>Export PDF</div>
-                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>Share a 2-page report with your customer.</div>
-              </div>
-
-            </div>
-          </div>
-
-          {/* Start new project */}
-          <div className="rv-fade-in-up" style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", marginBottom: 28, boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)", animationDelay: "0.08s" }}>
-            <h2 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", margin: "0 0 6px" }}>Start a project</h2>
-            <p style={{ fontSize: 13, color: "#64748b", margin: "0 0 20px", lineHeight: 1.65 }}>
-              Upload a photo and trace the roof to begin your visualization.
-            </p>
-            <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-              <div style={{ flex: 1, minWidth: 220 }}>
-                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#334155", marginBottom: 6 }}>
-                  Project name
-                </label>
-                <input
-                  value={projectName}
-                  onChange={(e) => setProjectName(e.target.value)}
-                  style={inputStyle}
-                  placeholder="e.g. 123 Oak Street"
-                />
-              </div>
+          {photos.length === 0 ? (
+            /* Empty state */
+            <div style={{
+              textAlign: "center", padding: "80px 24px",
+              background: "#ffffff", borderRadius: 20,
+              boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)",
+            }}>
+              <div style={{ fontSize: 48, marginBottom: 16, opacity: 0.2 }}>🏠</div>
+              <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", margin: "0 0 10px" }}>
+                No projects yet
+              </h2>
+              <p style={{ fontSize: 14, color: "#64748b", margin: "0 0 28px", lineHeight: 1.7 }}>
+                Create your first project to start visualizing a roof installation.
+              </p>
               <button
-                className="rv-btn-primary"
-                style={{ ...primaryBtn, width: "auto", padding: "12px 28px", marginTop: 0 }}
                 onClick={startProject}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8,
+                  padding: "12px 28px", borderRadius: 12, fontSize: 15, fontWeight: 700,
+                  cursor: "pointer", border: "none",
+                  background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                  color: "#ffffff",
+                  boxShadow: "0 2px 8px rgba(37,99,235,0.28)",
+                }}
               >
-                Start Project
+                <span style={{ fontSize: 20, lineHeight: 1 }}>+</span> Create First Project
               </button>
             </div>
-          </div>
-
-          {/* Saved projects */}
-          {photos.length > 0 && (
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#94a3b8", textTransform: "uppercase", marginBottom: 14 }}>
-                SAVED PROJECTS
+          ) : (
+            <>
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                marginBottom: 20,
+              }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#64748b", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                  {photos.length} Project{photos.length !== 1 ? "s" : ""}
+                </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+                gap: 16,
+              }}>
                 {photos.map((p) => (
                   <div
                     key={p.id}
-                    className="rv-project-card rv-fade-in-up"
                     style={{
-                      background: "#fff",
-                      border: "1.5px solid rgba(15,23,42,0.08)",
-                      borderRadius: 14,
+                      background: "#ffffff",
+                      borderRadius: 16,
                       overflow: "hidden",
-                      boxShadow: "0 1px 3px rgba(15,23,42,0.06)",
+                      boxShadow: "0 1px 4px rgba(15,23,42,0.07), 0 0 0 1px rgba(15,23,42,0.05)",
+                      cursor: "pointer",
+                      transition: "box-shadow 0.15s, transform 0.15s",
+                    }}
+                    onClick={() => openProject(p.id)}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 16px rgba(15,23,42,0.12), 0 0 0 1px rgba(15,23,42,0.06)";
+                      (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLDivElement).style.boxShadow = "0 1px 4px rgba(15,23,42,0.07), 0 0 0 1px rgba(15,23,42,0.05)";
+                      (e.currentTarget as HTMLDivElement).style.transform = "translateY(0)";
                     }}
                   >
-                    {/* Thumbnail — click to open */}
-                    <button
-                      onClick={() => openProject(p.id)}
-                      style={{
-                        display: "block", width: "100%", padding: 0, border: "none",
-                        cursor: "pointer", background: "none",
-                      }}
-                    >
-                      <div style={{
-                        height: 130,
-                        background: p.src ? "none" : "linear-gradient(135deg, #e2e8f0, #cbd5e1)",
-                        display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
-                      }}>
-                        {p.src
-                          ? <img src={p.src} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          : <div style={{ fontSize: 36, opacity: 0.25 }}>🏠</div>
-                        }
-                      </div>
-                    </button>
-
-                    <div style={{ padding: "10px 14px 12px" }}>
-                      {/* Inline rename / project name */}
-                      {renamingId === p.id ? (
-                        <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                          <input
-                            autoFocus
-                            value={renamingName}
-                            onChange={(e) => setRenamingName(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") { renameProject(p.id, renamingName); setRenamingId(null); }
-                              if (e.key === "Escape") setRenamingId(null);
-                            }}
-                            style={{ flex: 1, padding: "5px 9px", borderRadius: 7, border: "1.5px solid rgba(37,99,235,0.40)", fontSize: 13, fontWeight: 600 }}
-                          />
-                          <button
-                            onClick={() => { renameProject(p.id, renamingName); setRenamingId(null); }}
-                            style={{ padding: "5px 10px", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", background: "#2563eb", color: "#fff" }}
-                          >✓</button>
-                        </div>
-                      ) : (
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                          <div
-                            style={{ flex: 1, fontSize: 14, fontWeight: 700, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
-                            onClick={() => openProject(p.id)}
-                          >
-                            {p.name || "Untitled Project"}
-                          </div>
-                          {/* Rename button */}
-                          <button
-                            onClick={() => { setRenamingId(p.id); setRenamingName(p.name); }}
-                            title="Rename project"
-                            style={{ flexShrink: 0, padding: "3px 7px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: "1px solid rgba(15,23,42,0.12)", background: "#f8fafc", color: "#64748b" }}
-                          >✎</button>
-                          {/* Delete button */}
-                          <button
-                            onClick={() => { if (window.confirm(`Delete "${p.name || "Untitled"}"?`)) deleteProject(p.id); }}
-                            title="Delete project"
-                            style={{ flexShrink: 0, padding: "3px 7px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: "1px solid rgba(220,38,38,0.22)", background: "rgba(220,38,38,0.05)", color: "#dc2626" }}
-                          >✕</button>
+                    {/* Thumbnail */}
+                    <div style={{
+                      height: 140,
+                      background: p.src ? "none" : "linear-gradient(135deg, #e2e8f0, #cbd5e1)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      overflow: "hidden", position: "relative",
+                    }}>
+                      {p.src
+                        ? <img src={p.src} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        : <div style={{ fontSize: 40, opacity: 0.18 }}>🏠</div>
+                      }
+                      {/* Step badge */}
+                      {p.step && p.step !== "TRACE" && (
+                        <div style={{
+                          position: "absolute", bottom: 8, right: 8,
+                          background: "rgba(15,23,42,0.75)", color: "#e2e8f0",
+                          fontSize: 10, fontWeight: 700, padding: "3px 8px",
+                          borderRadius: 20, backdropFilter: "blur(4px)",
+                        }}>
+                          {STEP_TITLE[p.step] ?? p.step}
                         </div>
                       )}
-                      <div style={{ fontSize: 11, color: "#64748b" }}>
-                        {STEP_TITLE[p.step]} &nbsp;·&nbsp; {p.roofs.length} roof{p.roofs.length !== 1 ? "s" : ""}
-                      </div>
+                    </div>
+
+                    {/* Info row */}
+                    <div
+                      style={{ padding: "10px 12px 12px", display: "flex", alignItems: "center", gap: 8 }}
+                      onClick={(e) => e.stopPropagation()} /* don't open on inner click */
+                    >
+                      {renamingId === p.id ? (
+                        <input
+                          autoFocus
+                          value={renamingName}
+                          onChange={(e) => setRenamingName(e.target.value)}
+                          onBlur={() => { renameProject(p.id, renamingName); setRenamingId(null); }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { renameProject(p.id, renamingName); setRenamingId(null); }
+                            if (e.key === "Escape") setRenamingId(null);
+                          }}
+                          style={{
+                            flex: 1, padding: "4px 8px", borderRadius: 6,
+                            border: "1.5px solid rgba(37,99,235,0.45)",
+                            fontSize: 13, fontWeight: 600, outline: "none",
+                            background: "#f8fafc",
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            flex: 1, fontSize: 13, fontWeight: 700, color: "#0f172a",
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            cursor: "text", padding: "4px 2px",
+                          }}
+                          title="Click to rename"
+                          onClick={(e) => { e.stopPropagation(); setRenamingId(p.id); setRenamingName(p.name); }}
+                        >
+                          {p.name}
+                        </div>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm(`Delete "${p.name}"? This cannot be undone.`)) {
+                            setPhotos((prev) => prev.filter((x) => x.id !== p.id));
+                            if (activePhotoId === p.id) setActivePhotoId(prev => prev === p.id ? (photos.find(x => x.id !== p.id)?.id ?? "") : prev);
+                          }
+                        }}
+                        title="Delete project"
+                        style={{
+                          width: 30, height: 30, borderRadius: 8, border: "none",
+                          background: "transparent", color: "#94a3b8",
+                          cursor: "pointer", fontSize: 16, display: "flex",
+                          alignItems: "center", justifyContent: "center", flexShrink: 0,
+                          transition: "background 0.12s, color 0.12s",
+                        }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.09)"; (e.currentTarget as HTMLButtonElement).style.color = "#ef4444"; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "#94a3b8"; }}
+                      >
+                        ✕
+                      </button>
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
+            </>
           )}
         </div>
       </div>
@@ -4579,12 +4487,7 @@ export default function Page() {
         ...(isCustomerView ? { flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" } : {}),
         ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0 } : {}),
       }}>
-        {/* In customer view, CSS-scale the Stage to fill the screen without changing world coords */}
-        <div style={isCustomerView && cvDims ? {
-          transform: `scale(${cvScale})`,
-          transformOrigin: "center center",
-          flexShrink: 0,
-        } : {}}>
+        <div>
         <Stage
           key={stageKey}
           ref={stageRef}

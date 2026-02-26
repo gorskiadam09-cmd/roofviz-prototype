@@ -231,11 +231,11 @@ describe("shinglePalette()", () => {
 // Adjust the import path to match your project layout:
 import Page from "../app/page";
 
-// Helper — renders and clicks "Start Project"
+// Helper — renders and clicks "Create First Project" (empty-state button on MENU screen)
 async function startProject() {
   const user = userEvent.setup();
   render(<Page />);
-  await user.click(screen.getByRole("button", { name: "Start Project" }));
+  await user.click(screen.getByRole("button", { name: /Create First Project/i }));
   return user;
 }
 
@@ -246,21 +246,23 @@ async function openAdvanced() {
   return user;
 }
 
-describe("Page — initial (START) screen", () => {
-  it("shows the start heading", () => {
+describe("Page — initial MENU screen", () => {
+  it("shows the empty state heading when no projects exist", () => {
     render(<Page />);
-    expect(screen.getByText("Start a project")).toBeInTheDocument();
+    expect(screen.getByText("No projects yet")).toBeInTheDocument();
   });
 
-  it("shows the project name input with default value", () => {
-    render(<Page />);
-    expect(screen.getByDisplayValue("My Roof Project")).toBeInTheDocument();
-  });
-
-  it("shows the Start Project button", () => {
+  it("shows the Create First Project button on empty state", () => {
     render(<Page />);
     expect(
-      screen.getByRole("button", { name: "Start Project" })
+      screen.getByRole("button", { name: /Create First Project/i })
+    ).toBeInTheDocument();
+  });
+
+  it("shows the New Project button in the header", () => {
+    render(<Page />);
+    expect(
+      screen.getByRole("button", { name: /New Project/i })
     ).toBeInTheDocument();
   });
 
@@ -270,13 +272,10 @@ describe("Page — initial (START) screen", () => {
     expect(screen.queryByRole("button", { name: "Continue →" })).not.toBeInTheDocument();
   });
 
-  it("allows the user to change the project name", async () => {
-    const user = userEvent.setup();
-    render(<Page />);
-    const input = screen.getByDisplayValue("My Roof Project");
-    await user.clear(input);
-    await user.type(input, "Oak Street");
-    expect(screen.getByDisplayValue("Oak Street")).toBeInTheDocument();
+  it("new project is auto-named 'New Project'", async () => {
+    await startProject();
+    // The project header should show the auto-generated name
+    expect(screen.getByDisplayValue("New Project")).toBeInTheDocument();
   });
 });
 
