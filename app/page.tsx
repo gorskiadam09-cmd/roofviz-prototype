@@ -573,6 +573,7 @@ function ShinyMetalStroke({
         points={points}
         stroke={metalRGBA(color, opacity)}
         strokeWidth={width}
+        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         shadowColor="rgba(0,0,0,0.18)"
@@ -584,6 +585,7 @@ function ShinyMetalStroke({
         points={points}
         stroke="rgba(255,255,255,0.28)"
         strokeWidth={Math.max(2, width * 0.22)}
+        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         opacity={0.9}
@@ -592,6 +594,7 @@ function ShinyMetalStroke({
         points={points}
         stroke="rgba(0,0,0,0.14)"
         strokeWidth={Math.max(1, width * 0.1)}
+        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         dash={[6, 10]}
@@ -608,6 +611,7 @@ function StarterStroke({ points, width }: { points: number[]; width: number }) {
         points={points}
         stroke="rgba(18,18,20,0.92)"
         strokeWidth={width}
+        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         shadowColor="rgba(0,0,0,0.12)"
@@ -619,6 +623,7 @@ function StarterStroke({ points, width }: { points: number[]; width: number }) {
         points={points}
         stroke="rgba(255,255,255,0.10)"
         strokeWidth={Math.max(2, width * 0.18)}
+        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         opacity={0.82}
@@ -634,6 +639,7 @@ function RidgeVentStroke({ points, width }: { points: number[]; width: number })
         points={points}
         stroke="rgba(15,15,16,0.90)"
         strokeWidth={width}
+        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         shadowColor="rgba(0,0,0,0.12)"
@@ -645,6 +651,7 @@ function RidgeVentStroke({ points, width }: { points: number[]; width: number })
         points={points}
         stroke="rgba(255,255,255,0.10)"
         strokeWidth={Math.max(2, width * 0.16)}
+        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         opacity={0.85}
@@ -653,6 +660,7 @@ function RidgeVentStroke({ points, width }: { points: number[]; width: number })
         points={points}
         stroke="rgba(255,255,255,0.10)"
         strokeWidth={Math.max(2, width * 0.10)}
+        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         dash={[6, 8]}
@@ -667,13 +675,17 @@ function CapBand({
   width,
   shinglesImg,
   patternScale,
+  clipStrokeWidth,
 }: {
   points: number[];
   width: number;
   shinglesImg: HTMLImageElement;
   patternScale: number;
+  clipStrokeWidth?: number;
 }) {
   if (points.length < 4) return null;
+
+  const clipW = clipStrokeWidth ?? width;
 
   return (
     <Group
@@ -682,7 +694,7 @@ function CapBand({
         ctx.beginPath();
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        ctx.lineWidth = width;
+        ctx.lineWidth = clipW;
         ctx.moveTo(points[0], points[1]);
         for (let i = 2; i < points.length; i += 2) ctx.lineTo(points[i], points[i + 1]);
         ctx.stroke();
@@ -705,6 +717,7 @@ function CapBand({
         points={points}
         stroke="rgba(0,0,0,0.18)"
         strokeWidth={Math.max(1, width * 0.18)}
+        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
       />
@@ -887,14 +900,14 @@ function rdpSimplify(pts: [number, number][], epsilon: number): [number, number]
   return [pts[0], pts[pts.length - 1]];
 }
 
-type PhotoTransform = { scale: number; drawW: number; drawH: number; offX: number; offY: number };
+type PhotoTransform = { scale: number; drawW: number; drawH: number; offX: number; offY: number; imgW: number; imgH: number };
 
 /** Compute a "contain" photo transform — photo fits inside stage without distortion */
 function getPhotoTransform(imgW: number, imgH: number, sw: number, sh: number): PhotoTransform {
   const scale = Math.min(sw / imgW, sh / imgH);
   const drawW = imgW * scale;
   const drawH = imgH * scale;
-  return { scale, drawW, drawH, offX: (sw - drawW) / 2, offY: (sh - drawH) / 2 };
+  return { scale, drawW, drawH, offX: (sw - drawW) / 2, offY: (sh - drawH) / 2, imgW, imgH };
 }
 
 /** Image-space flat array → stage-space flat array */
@@ -1023,7 +1036,7 @@ export default function Page() {
   const photoTx = useMemo((): PhotoTransform => {
     const img = photoImg as HTMLImageElement | undefined;
     if (!img?.naturalWidth || !img?.naturalHeight) {
-      return { scale: 1, drawW: w, drawH: h, offX: 0, offY: 0 };
+      return { scale: 1, drawW: w, drawH: h, offX: 0, offY: 0, imgW: w, imgH: h };
     }
     return getPhotoTransform(img.naturalWidth, img.naturalHeight, w, h);
   }, [photoImg, w, h]);
@@ -2218,11 +2231,12 @@ export default function Page() {
       return;
     }
 
-    // Brush ice & water painting — start a new stroke
+    // Brush ice & water painting — start a new stroke (store in photo-space)
     if (active.step === "ICE_WATER" && tool === "BRUSH_ICE_WATER" && activeRoof.closed) {
+      const bPos = stageToImgPts([pos.x, pos.y], photoTx);
       brushPaintingRef.current = true;
-      brushStrokeRef.current = [pos.x, pos.y];
-      setBrushDraft({ points: [pos.x, pos.y], size: activeRoof.iceWaterBrushSize ?? 30 });
+      brushStrokeRef.current = [bPos[0], bPos[1]];
+      setBrushDraft({ points: [bPos[0], bPos[1]], size: activeRoof.iceWaterBrushSize ?? 30 });
       return;
     }
   }
@@ -2233,15 +2247,16 @@ export default function Page() {
     if (!stage) return;
     const rawPos = stage.getPointerPosition();
     if (!rawPos) return;
-    const scale = stage.scaleX();
-    const x = (rawPos.x - stage.x()) / scale;
-    const y = (rawPos.y - stage.y()) / scale;
+    const sc = stage.scaleX();
+    const wx = (rawPos.x - stage.x()) / sc;
+    const wy = (rawPos.y - stage.y()) / sc;
+    const bPos = stageToImgPts([wx, wy], photoTx);
     const prev = brushStrokeRef.current;
     if (prev.length >= 2) {
       const lx = prev[prev.length - 2], ly = prev[prev.length - 1];
-      if ((x - lx) ** 2 + (y - ly) ** 2 < 25) return; // skip if <5px movement
+      if ((bPos[0] - lx) ** 2 + (bPos[1] - ly) ** 2 < 9) return; // skip if <3px movement in photo-space
     }
-    brushStrokeRef.current = [...prev, x, y];
+    brushStrokeRef.current = [...prev, bPos[0], bPos[1]];
     setBrushDraft({ points: brushStrokeRef.current, size: activeRoof?.iceWaterBrushSize ?? 30 });
   }
 
@@ -2253,7 +2268,7 @@ export default function Page() {
       const epsilon = Math.max(3, Math.min(12, size * 0.35));
       const simplified = rdpSimplify(rawPts, epsilon);
       const finalPts = simplified.length >= 4 ? snapAngles(simplified) : rawPts;
-      const newStroke = { id: uid(), points: stageToImgPts(finalPts, photoTx), size };
+      const newStroke = { id: uid(), points: finalPts, size };
       patchActiveRoof((r) => ({ ...r, iceWaterBrush: [...(r.iceWaterBrush ?? []), newStroke] }));
     }
     brushPaintingRef.current = false;
@@ -2261,13 +2276,12 @@ export default function Page() {
     setBrushDraft(null);
   }
 
-  function updateOutlinePoint(i: number, x: number, y: number) {
+  function updateOutlinePoint(i: number, photoX: number, photoY: number) {
     if (!activeRoof) return;
-    const iPos = stageToImgPts([x, y], photoTx);
     patchActiveRoof((r) => {
       const next = r.outline.slice();
-      next[i * 2] = iPos[0];
-      next[i * 2 + 1] = iPos[1];
+      next[i * 2] = photoX;
+      next[i * 2 + 1] = photoY;
       return { ...r, outline: next };
     });
   }
@@ -4545,121 +4559,421 @@ export default function Page() {
               </>
             )}
 
+            {/* ── PHOTO GROUP: photo + all geometry overlays in photo-space ─────── */}
             {photoImg && (
-              <KonvaImage
-                image={photoImg}
-                x={photoTx.offX}
-                y={photoTx.offY}
-                width={photoTx.drawW}
-                height={photoTx.drawH}
-              />
-            )}
+              <Group x={photoTx.offX} y={photoTx.offY} scaleX={photoTx.scale} scaleY={photoTx.scale}>
 
-            {/* Draft visuals — hidden in presentation mode */}
-            {!presentationMode && active?.step === "TRACE" && draftLine && (
-              <Line points={imgToStage(draftLine.points, photoTx)} stroke="rgba(255,255,255,0.9)" strokeWidth={3} dash={[8, 6]} lineCap="round" lineJoin="round" />
-            )}
-            {!presentationMode && active?.step === "TRACE" && draftHole && draftHole.length >= 2 && (
-              <Line points={imgToStage(draftHole, photoTx)} stroke="rgba(255,255,255,0.9)" strokeWidth={3} dash={[6, 6]} lineCap="round" lineJoin="round" />
-            )}
+                {/* Photo at natural size */}
+                <KonvaImage image={photoImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} />
 
-            {/* Guide lines — hidden in presentation mode */}
-            {!presentationMode && active && showGuides && active.roofs.flatMap((r) => {
-              const all = [...r.lines];
-              if (r.id === activeRoof?.id && draftLine && draftLine.points.length >= 4) all.push({ ...draftLine, id: "draft" });
-              const baseOpacity = cleanupPreview ? 0.18 : (active.step === "TRACE" ? 0.95 : 0.45);
-              return all.map((l) => (
-                <React.Fragment key={`guide-${r.id}-${l.id}`}>
+                {/* Draft visuals — hidden in presentation mode */}
+                {!presentationMode && active?.step === "TRACE" && draftLine && (
+                  <Line points={draftLine.points} stroke="rgba(255,255,255,0.9)" strokeWidth={3} strokeScaleEnabled={false} dash={[8, 6]} lineCap="round" lineJoin="round" />
+                )}
+                {!presentationMode && active?.step === "TRACE" && draftHole && draftHole.length >= 2 && (
+                  <Line points={draftHole} stroke="rgba(255,255,255,0.9)" strokeWidth={3} strokeScaleEnabled={false} dash={[6, 6]} lineCap="round" lineJoin="round" />
+                )}
+
+                {/* Guide lines — hidden in presentation mode */}
+                {!presentationMode && active && showGuides && active.roofs.flatMap((r) => {
+                  const all = [...r.lines];
+                  if (r.id === activeRoof?.id && draftLine && draftLine.points.length >= 4) all.push({ ...draftLine, id: "draft" });
+                  const baseOpacity = cleanupPreview ? 0.18 : (active.step === "TRACE" ? 0.95 : 0.45);
+                  return all.map((l) => (
+                    <React.Fragment key={`guide-${r.id}-${l.id}`}>
+                      <Line
+                        points={l.points}
+                        stroke="#000"
+                        strokeWidth={7}
+                        strokeScaleEnabled={false}
+                        dash={[10, 7]}
+                        lineCap="round"
+                        lineJoin="round"
+                        opacity={baseOpacity * 0.35}
+                      />
+                      <Line
+                        points={l.points}
+                        stroke={kindColor(l.kind)}
+                        strokeWidth={4}
+                        strokeScaleEnabled={false}
+                        dash={[10, 7]}
+                        lineCap="round"
+                        lineJoin="round"
+                        opacity={baseOpacity}
+                      />
+                    </React.Fragment>
+                  ));
+                })}
+
+                {/* Roof outlines — hidden in presentation mode */}
+                {!presentationMode && active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.map((r) =>
+                  r.outline.length >= 2 ? (
+                    <Line
+                      key={`outline-${r.id}`}
+                      points={r.outline}
+                      closed={r.closed}
+                      stroke={r.id === active.activeRoofId ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.55)"}
+                      strokeWidth={r.id === active.activeRoofId ? 2.5 : 2}
+                      strokeScaleEnabled={false}
+                      opacity={cleanupPreview && r.id === active.activeRoofId ? 0.18 : 1}
+                    />
+                  ) : null
+                )}
+
+                {/* ── AI Outline Overlay ── hidden in presentation mode */}
+                {!presentationMode && active?.step === "TRACE" && aiState === "preview" && (() => {
+                  const dispPoly = aiShowRaw ? aiPolygonRaw : aiPolygon;
+                  if (!dispPoly || dispPoly.length < 4) return null;
+                  const isRaw = aiShowRaw;
+                  return (
+                    <>
+                      <Line
+                        points={dispPoly}
+                        closed={true}
+                        fill={isRaw ? "rgba(239,68,68,0.06)" : "rgba(16,185,129,0.08)"}
+                        stroke={isRaw ? "rgba(239,68,68,0.80)" : "rgba(16,185,129,0.92)"}
+                        strokeWidth={2.5}
+                        strokeScaleEnabled={false}
+                        dash={isRaw ? [5, 7] : [9, 5]}
+                        lineCap="round"
+                        lineJoin="round"
+                        listening={false}
+                        shadowColor={isRaw ? "rgba(239,68,68,0.4)" : "rgba(16,185,129,0.5)"}
+                        shadowBlur={8}
+                      />
+                      {Array.from({ length: dispPoly.length / 2 }).map((_, i) => (
+                        <Circle
+                          key={i}
+                          x={dispPoly[i * 2]}
+                          y={dispPoly[i * 2 + 1]}
+                          radius={5 / photoTx.scale}
+                          fill={isRaw ? "#ef4444" : "#10b981"}
+                          stroke="#fff"
+                          strokeWidth={1.5}
+                          strokeScaleEnabled={false}
+                          listening={false}
+                        />
+                      ))}
+                    </>
+                  );
+                })()}
+
+                {/* ── Auto-Label Suggestion Overlay ── hidden in presentation mode */}
+                {!presentationMode && active?.step === "TRACE" && autoLabelSuggestions.map((s, i) => (
                   <Line
-                    points={imgToStage(l.points, photoTx)}
-                    stroke="#000"
-                    strokeWidth={7}
-                    dash={[10, 7]}
-                    lineCap="round"
-                    lineJoin="round"
-                    opacity={baseOpacity * 0.35}
-                  />
-                  <Line
-                    points={imgToStage(l.points, photoTx)}
-                    stroke={kindColor(l.kind)}
-                    strokeWidth={4}
-                    dash={[10, 7]}
-                    lineCap="round"
-                    lineJoin="round"
-                    opacity={baseOpacity}
-                  />
-                </React.Fragment>
-              ));
-            })}
-
-            {/* Roof outlines — hidden in presentation mode */}
-            {!presentationMode && active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.map((r) =>
-              r.outline.length >= 2 ? (
-                <Line
-                  key={`outline-${r.id}`}
-                  points={imgToStage(r.outline, photoTx)}
-                  closed={r.closed}
-                  stroke={r.id === active.activeRoofId ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.55)"}
-                  strokeWidth={r.id === active.activeRoofId ? 2.5 : 2}
-                  opacity={cleanupPreview && r.id === active.activeRoofId ? 0.18 : 1}
-                />
-              ) : null
-            )}
-
-            {/* ── AI Outline Overlay ── hidden in presentation mode */}
-            {!presentationMode && active?.step === "TRACE" && aiState === "preview" && (() => {
-              const dispPoly = aiShowRaw ? aiPolygonRaw : aiPolygon;
-              if (!dispPoly || dispPoly.length < 4) return null;
-              const dispPolyStage = imgToStage(dispPoly, photoTx);
-              const isRaw = aiShowRaw;
-              return (
-                <>
-                  <Line
-                    points={dispPolyStage}
-                    closed={true}
-                    fill={isRaw ? "rgba(239,68,68,0.06)" : "rgba(16,185,129,0.08)"}
-                    stroke={isRaw ? "rgba(239,68,68,0.80)" : "rgba(16,185,129,0.92)"}
-                    strokeWidth={2.5}
-                    dash={isRaw ? [5, 7] : [9, 5]}
+                    key={`ailabel-${i}`}
+                    points={s.points}
+                    stroke={s.kind === "RIDGE" ? "rgba(245,158,11,0.92)" : "rgba(100,116,139,0.92)"}
+                    strokeWidth={3}
+                    strokeScaleEnabled={false}
+                    dash={[12, 6]}
                     lineCap="round"
                     lineJoin="round"
                     listening={false}
-                    shadowColor={isRaw ? "rgba(239,68,68,0.4)" : "rgba(16,185,129,0.5)"}
+                    shadowColor={s.kind === "RIDGE" ? "rgba(245,158,11,0.4)" : "rgba(100,116,139,0.4)"}
                     shadowBlur={8}
                   />
-                  {Array.from({ length: dispPolyStage.length / 2 }).map((_, i) => (
+                ))}
+
+                {/* ── Cleanup preview overlay ── hidden in presentation mode */}
+                {!presentationMode && cleanupPreview && activeRoof && active?.step === "TRACE" && (
+                  <>
+                    {/* After: cleaned outline */}
+                    {cleanupPreview.outline.length >= 4 && (
+                      <Line
+                        points={cleanupPreview.outline}
+                        closed={cleanupPreview.closed}
+                        stroke="rgba(74,222,128,0.95)"
+                        strokeWidth={2.5}
+                        strokeScaleEnabled={false}
+                        lineCap="round"
+                        lineJoin="round"
+                      />
+                    )}
+                    {/* After: cleaned lines */}
+                    {cleanupPreview.lines.map((l) => (
+                      <Line
+                        key={`cp-after-${l.id}`}
+                        points={l.points}
+                        stroke="rgba(74,222,128,0.95)"
+                        strokeWidth={4}
+                        strokeScaleEnabled={false}
+                        lineCap="round"
+                        lineJoin="round"
+                      />
+                    ))}
+                  </>
+                )}
+
+                {/* Hole outlines — hidden in presentation mode */}
+                {!presentationMode && active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.flatMap((r) =>
+                  r.holes.map((holePts, i) => (
+                    <Line
+                      key={`hole-${r.id}-${i}`}
+                      points={holePts}
+                      closed={holePts.length >= 6}
+                      stroke="rgba(255,255,255,0.82)"
+                      dash={[8, 6]}
+                      strokeWidth={2}
+                      strokeScaleEnabled={false}
+                      lineCap="round"
+                      lineJoin="round"
+                      opacity={0.9}
+                    />
+                  ))
+                )}
+
+                {/* Install overlays per roof */}
+                {active && active.roofs.map((r) => {
+                  if (!r.closed || r.outline.length < 6) return null;
+
+                  const eaves = r.lines.filter((l) => l.kind === "EAVE");
+                  const rakes = r.lines.filter((l) => l.kind === "RAKE");
+                  const valleys = r.lines.filter((l) => l.kind === "VALLEY");
+                  const ridges = r.lines.filter((l) => l.kind === "RIDGE");
+                  const hips = r.lines.filter((l) => l.kind === "HIP");
+
+                  // Shingle eave alignment — compute in photo-space, use stage-space equivalent for offset
+                  const eaveYsPhoto = eaves.flatMap((l) => l.points.filter((_, idx) => idx % 2 === 1));
+                  const eaveYPhoto = eaveYsPhoto.length > 0 ? eaveYsPhoto.reduce((a, b) => a + b, 0) / eaveYsPhoto.length : 0;
+                  const eaveY = photoTx.offY + eaveYPhoto * photoTx.scale; // equiv. stage-space Y for alignment
+                  const courseH = 11;
+                  const effectivePatternScale = r.shingleScale / photoTx.scale;
+                  const shingleOffsetY = ((-(eaveY + 5000) / r.shingleScale % courseH) + courseH) % courseH;
+
+                  return (
+                    <Group key={`install-${r.id}`} clipFunc={(ctx) => clipPolygonPath(ctx, r.outline)}>
+                      {/* Tearoff (decking) */}
+                      {atLeast(currentStep, "TEAROFF") && deckingImg && (
+                        <KonvaImage image={deckingImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} opacity={0.92} />
+                      )}
+
+                      {/* Subtle structure guides — faint valley/hip/ridge lines visible during install */}
+                      {atLeast(currentStep, "TEAROFF") && !atLeast(currentStep, "SHINGLES") && (
+                        <>
+                          {valleys.map((l) => (
+                            <Line key={`guide-v-${r.id}-${l.id}`} points={l.points} stroke="rgba(255,255,255,0.13)" strokeWidth={3} strokeScaleEnabled={false} dash={[10, 8]} lineCap="round" lineJoin="round" />
+                          ))}
+                          {ridges.map((l) => (
+                            <Line key={`guide-r-${r.id}-${l.id}`} points={l.points} stroke="rgba(255,255,255,0.10)" strokeWidth={2} strokeScaleEnabled={false} dash={[8, 7]} lineCap="round" lineJoin="round" />
+                          ))}
+                          {hips.map((l) => (
+                            <Line key={`guide-h-${r.id}-${l.id}`} points={l.points} stroke="rgba(255,255,255,0.11)" strokeWidth={2} strokeScaleEnabled={false} dash={[9, 7]} lineCap="round" lineJoin="round" />
+                          ))}
+                        </>
+                      )}
+
+                      {/*
+                        IMPORTANT FIX: draw order + step gating
+                        - Synthetic should ONLY show during SYNTHETIC step window (>=SYNTHETIC and <SHINGLES)
+                        - Ice & Water should ALWAYS show when step >= ICE_WATER (and it draws ON TOP of synthetic)
+                        - Metals and starter strips draw on top of underlayments
+                      */}
+
+                      {/* Synthetic (field) — only before shingles */}
+                      {stepIndex(currentStep) >= stepIndex("SYNTHETIC") &&
+                        stepIndex(currentStep) < stepIndex("SHINGLES") &&
+                        syntheticImg && (
+                          <KonvaImage image={syntheticImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} opacity={0.86} />
+                        )}
+
+                      {/* Ice & water — always visible once reached */}
+                      {atLeast(currentStep, "ICE_WATER") && (
+                        <>
+                          {(r.iceWaterOnEaves !== false) && eaves.map((l) => (
+                            <Line
+                              key={`iwe-${r.id}-${l.id}`}
+                              points={l.points}
+                              stroke="rgba(18,23,38,0.92)"
+                              strokeWidth={r.iceWaterEaveW}
+                              strokeScaleEnabled={false}
+                              lineCap="round"
+                              lineJoin="round"
+                              opacity={0.92}
+                            />
+                          ))}
+                          {(r.iceWaterOnValleys !== false) && valleys.map((l) => (
+                            <Line
+                              key={`iwv-${r.id}-${l.id}`}
+                              points={l.points}
+                              stroke="rgba(18,23,38,0.92)"
+                              strokeWidth={r.iceWaterValleyW}
+                              strokeScaleEnabled={false}
+                              lineCap="round"
+                              lineJoin="round"
+                              opacity={0.92}
+                            />
+                          ))}
+                          {(r.iceWaterBrush ?? []).map((stroke) => (
+                            <Line
+                              key={`iwb-${r.id}-${stroke.id}`}
+                              points={stroke.points}
+                              stroke="rgba(18,23,38,0.92)"
+                              strokeWidth={stroke.size}
+                              strokeScaleEnabled={false}
+                              lineCap="round"
+                              lineJoin="round"
+                              opacity={0.92}
+                              listening={false}
+                            />
+                          ))}
+                        </>
+                      )}
+                      {/* Live brush stroke preview while painting */}
+                      {tool === "BRUSH_ICE_WATER" && brushDraft && brushDraft.points.length >= 4 && r.id === active?.activeRoofId && (
+                        <Line
+                          points={brushDraft.points}
+                          stroke="rgba(18,23,38,0.85)"
+                          strokeWidth={brushDraft.size}
+                          strokeScaleEnabled={false}
+                          lineCap="round"
+                          lineJoin="round"
+                          opacity={0.75}
+                          listening={false}
+                        />
+                      )}
+
+                      {/* GUTTER APRON (eaves) */}
+                      {atLeast(currentStep, "GUTTER_APRON") && eaves.map((l) => (
+                        <ShinyMetalStroke key={`apron-${r.id}-${l.id}`} points={l.points} width={r.gutterApronW} color={r.gutterApronColor} />
+                      ))}
+
+                      {/* DRIP EDGE (rakes) */}
+                      {atLeast(currentStep, "DRIP_EDGE") && rakes.map((l) => (
+                        <ShinyMetalStroke key={`drip-${r.id}-${l.id}`} points={l.points} width={r.dripEdgeW} color={r.dripEdgeColor} />
+                      ))}
+
+                      {/* VALLEY METAL (valleys) — Galvanized: narrow strip; W-Valley (colored): wider channel */}
+                      {atLeast(currentStep, "VALLEY_METAL") && valleys.map((l) => (
+                        <ShinyMetalStroke
+                          key={`vm-${r.id}-${l.id}`}
+                          points={l.points}
+                          width={r.valleyMetalColor === "Galvanized" ? r.valleyMetalW : r.valleyMetalW * 2.5}
+                          color={r.valleyMetalColor}
+                          opacity={0.995}
+                        />
+                      ))}
+
+                      {/* PRO-START (eaves always; rakes optional based on proStartOnRakes) */}
+                      {atLeast(currentStep, "PRO_START") && (
+                        <>
+                          {eaves.map((l) => (
+                            <StarterStroke key={`ps-e-${r.id}-${l.id}`} points={l.points} width={r.proStartW} />
+                          ))}
+                          {r.proStartOnRakes && rakes.map((l) => (
+                            <StarterStroke key={`ps-r-${r.id}-${l.id}`} points={l.points} width={r.proStartW} />
+                          ))}
+                        </>
+                      )}
+
+                      {/* SHINGLES — aligned to eave line via fillPatternOffsetY */}
+                      {atLeast(currentStep, "SHINGLES") && shinglesImg && (
+                        <>
+                          <Rect
+                            x={-5000}
+                            y={-5000}
+                            width={12000}
+                            height={12000}
+                            opacity={0.98}
+                            fillPatternImage={shinglesImg}
+                            fillPatternRepeat="repeat"
+                            fillPatternScaleX={effectivePatternScale}
+                            fillPatternScaleY={effectivePatternScale}
+                            fillPatternOffsetY={shingleOffsetY}
+                            fillPatternRotation={r.shingleRotation ?? 0}
+                          />
+                          <Rect x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} fill="rgba(0,0,0,0.06)" />
+                        </>
+                      )}
+
+                      {/* RIDGE VENT */}
+                      {atLeast(currentStep, "RIDGE_VENT") && ridges.map((l) => (
+                        <RidgeVentStroke key={`rv-${r.id}-${l.id}`} points={l.points} width={r.ridgeVentW} />
+                      ))}
+
+                      {/* CAP SHINGLES */}
+                      {atLeast(currentStep, "CAP_SHINGLES") && shinglesImg && ridges.map((l) => (
+                        <CapBand key={`cap-${r.id}-${l.id}`} points={l.points} width={r.capW} clipStrokeWidth={r.capW / photoTx.scale} shinglesImg={shinglesImg} patternScale={effectivePatternScale} />
+                      ))}
+
+                      {/* Valley seam / W-Valley on top of shingles */}
+                      {atLeast(currentStep, "SHINGLES") && valleys.map((l) =>
+                        r.valleyMetalColor === "Galvanized" ? (
+                          /* Galvanized open valley: subtle crease visible through shingles */
+                          <Group key={`vline-${r.id}-${l.id}`}>
+                            <Line points={l.points} stroke="rgba(0,0,0,0.12)"      strokeWidth={5}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                            <Line points={l.points} stroke="rgba(220,225,230,0.28)" strokeWidth={2.5} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                            <Line points={l.points} stroke="rgba(255,255,255,0.12)" strokeWidth={1}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                          </Group>
+                        ) : (
+                          /* W-Valley: colored metal channel sits ON TOP of shingles — shingles woven around it */
+                          <ShinyMetalStroke
+                            key={`vline-${r.id}-${l.id}`}
+                            points={l.points}
+                            width={r.valleyMetalW * 2.5}
+                            color={r.valleyMetalColor}
+                            opacity={0.99}
+                          />
+                        )
+                      )}
+
+                      {/* Hip seam — subtle crease visible through shingles */}
+                      {atLeast(currentStep, "SHINGLES") && hips.map((l) => (
+                        <Group key={`hline-${r.id}-${l.id}`}>
+                          <Line points={l.points} stroke="rgba(0,0,0,0.30)"      strokeWidth={5}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                          <Line points={l.points} stroke="rgba(210,215,220,0.55)" strokeWidth={2.5} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                        </Group>
+                      ))}
+
+                      {/* Ridge fold — crease tinted to match shingle color so it blends naturally */}
+                      {atLeast(currentStep, "SHINGLES") && !atLeast(currentStep, "CAP_SHINGLES") && (() => {
+                        const [rr, rg, rb] = shingleRGB(active.shingleColor);
+                        return ridges.map((l) => (
+                          <Group key={`ridgefold-${r.id}-${l.id}`}>
+                            <Line points={l.points} stroke="rgba(0,0,0,0.22)"                    strokeWidth={5}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                            <Line points={l.points} stroke={`rgba(${rr},${rg},${rb},0.55)`}      strokeWidth={2.5} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                            <Line points={l.points} stroke={`rgba(${rr+30},${rg+30},${rb+30},0.22)`} strokeWidth={1} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                          </Group>
+                        ));
+                      })()}
+
+                      {/* dormer holes reveal original photo */}
+                      {photoImg && r.holes.map((holePts, idx) => (
+                        <Group key={`hole-reveal-${r.id}-${idx}`} clipFunc={(ctx) => clipPolygonPath(ctx, holePts)}>
+                          <KonvaImage image={photoImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} />
+                        </Group>
+                      ))}
+                    </Group>
+                  );
+                })}
+
+                {/* edit handles — hidden in presentation mode */}
+                {!presentationMode &&
+                  active &&
+                  active.step === "TRACE" &&
+                  active.showEditHandles &&
+                  activeRoof?.closed &&
+                  activeRoof.outline.length >= 6 &&
+                  Array.from({ length: activeRoof.outline.length / 2 }).map((_, idx) => (
                     <Circle
-                      key={i}
-                      x={dispPolyStage[i * 2]}
-                      y={dispPolyStage[i * 2 + 1]}
-                      radius={5}
-                      fill={isRaw ? "#ef4444" : "#10b981"}
-                      stroke="#fff"
-                      strokeWidth={1.5}
-                      listening={false}
+                      key={`pt-${idx}`}
+                      x={activeRoof.outline[idx * 2]}
+                      y={activeRoof.outline[idx * 2 + 1]}
+                      radius={10 / photoTx.scale}
+                      fill="rgba(255,255,255,0.90)"
+                      stroke="rgba(15,23,42,0.45)"
+                      strokeWidth={2}
+                      strokeScaleEnabled={false}
+                      draggable
+                      onDragMove={(e) => updateOutlinePoint(idx, e.target.x(), e.target.y())}
                     />
                   ))}
-                </>
-              );
-            })()}
 
-            {/* ── Auto-Label Suggestion Overlay ── hidden in presentation mode */}
-            {!presentationMode && active?.step === "TRACE" && autoLabelSuggestions.map((s, i) => (
-              <Line
-                key={`ailabel-${i}`}
-                points={imgToStage(s.points, photoTx)}
-                stroke={s.kind === "RIDGE" ? "rgba(245,158,11,0.92)" : "rgba(100,116,139,0.92)"}
-                strokeWidth={3}
-                dash={[12, 6]}
-                lineCap="round"
-                lineJoin="round"
-                listening={false}
-                shadowColor={s.kind === "RIDGE" ? "rgba(245,158,11,0.4)" : "rgba(100,116,139,0.4)"}
-                shadowBlur={8}
-              />
-            ))}
+              </Group>
+            )}
+            {/* ── END PHOTO GROUP ── */}
 
-            {/* ── Facade roof region mask ── hidden in presentation mode */}
+            {/* ── Facade roof region mask (stage-space) ── hidden in presentation mode */}
             {!presentationMode && active?.step === "TRACE" && edgePanel && edgeMode === "facade" && (
               <>
                 {/* Dimmed band below the roof region */}
@@ -4681,7 +4995,7 @@ export default function Page() {
               </>
             )}
 
-            {/* ── Edge Detection overlays ── hidden in presentation mode */}
+            {/* ── Edge Detection overlays (stage-space) ── hidden in presentation mode */}
             {!presentationMode && active?.step === "TRACE" && edgePanel && showDetectedLayer && displaySegs.length > 0 && (
               <>
                 {displaySegs.map((s) => (
@@ -4725,300 +5039,7 @@ export default function Page() {
               );
             })}
 
-            {/* ── Cleanup preview overlay ── hidden in presentation mode */}
-            {!presentationMode && cleanupPreview && activeRoof && active?.step === "TRACE" && (
-              <>
-                {/* After: cleaned outline */}
-                {cleanupPreview.outline.length >= 4 && (
-                  <Line
-                    points={imgToStage(cleanupPreview.outline, photoTx)}
-                    closed={cleanupPreview.closed}
-                    stroke="rgba(74,222,128,0.95)"
-                    strokeWidth={2.5}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                )}
-                {/* After: cleaned lines */}
-                {cleanupPreview.lines.map((l) => (
-                  <Line
-                    key={`cp-after-${l.id}`}
-                    points={imgToStage(l.points, photoTx)}
-                    stroke="rgba(74,222,128,0.95)"
-                    strokeWidth={4}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                ))}
-              </>
-            )}
-
-            {/* Hole outlines — hidden in presentation mode */}
-            {!presentationMode && active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.flatMap((r) =>
-              r.holes.map((holePts, i) => (
-                <Line
-                  key={`hole-${r.id}-${i}`}
-                  points={imgToStage(holePts, photoTx)}
-                  closed={holePts.length >= 6}
-                  stroke="rgba(255,255,255,0.82)"
-                  dash={[8, 6]}
-                  strokeWidth={2}
-                  lineCap="round"
-                  lineJoin="round"
-                  opacity={0.9}
-                />
-              ))
-            )}
-
-            {/* Install overlays per roof */}
-            {active && active.roofs.map((r) => {
-              if (!r.closed || r.outline.length < 6) return null;
-
-              const eaves = r.lines.filter((l) => l.kind === "EAVE");
-              const rakes = r.lines.filter((l) => l.kind === "RAKE");
-              const valleys = r.lines.filter((l) => l.kind === "VALLEY");
-              const ridges = r.lines.filter((l) => l.kind === "RIDGE");
-              const hips = r.lines.filter((l) => l.kind === "HIP");
-
-              return (
-                <Group key={`install-${r.id}`} clipFunc={(ctx) => clipPolygonPath(ctx, imgToStage(r.outline, photoTx))}>
-                  {/* Tearoff (decking) */}
-{atLeast(currentStep, "TEAROFF") && deckingImg && (
-  <KonvaImage image={deckingImg} x={photoTx.offX} y={photoTx.offY} width={photoTx.drawW} height={photoTx.drawH} opacity={0.92} />
-)}
-
-{/* Subtle structure guides — faint valley/hip/ridge lines visible during install */}
-{atLeast(currentStep, "TEAROFF") && !atLeast(currentStep, "SHINGLES") && (
-  <>
-    {valleys.map((l) => (
-      <Line key={`guide-v-${r.id}-${l.id}`} points={imgToStage(l.points, photoTx)} stroke="rgba(255,255,255,0.13)" strokeWidth={3} dash={[10, 8]} lineCap="round" lineJoin="round" />
-    ))}
-    {ridges.map((l) => (
-      <Line key={`guide-r-${r.id}-${l.id}`} points={imgToStage(l.points, photoTx)} stroke="rgba(255,255,255,0.10)" strokeWidth={2} dash={[8, 7]} lineCap="round" lineJoin="round" />
-    ))}
-    {hips.map((l) => (
-      <Line key={`guide-h-${r.id}-${l.id}`} points={imgToStage(l.points, photoTx)} stroke="rgba(255,255,255,0.11)" strokeWidth={2} dash={[9, 7]} lineCap="round" lineJoin="round" />
-    ))}
-  </>
-)}
-
-{/*
-  IMPORTANT FIX: draw order + step gating
-  - Synthetic should ONLY show during SYNTHETIC step window (>=SYNTHETIC and <SHINGLES)
-  - Ice & Water should ALWAYS show when step >= ICE_WATER (and it draws ON TOP of synthetic)
-  - Metals and starter strips draw on top of underlayments
-*/}
-
-{/* Synthetic (field) — only before shingles */}
-{stepIndex(currentStep) >= stepIndex("SYNTHETIC") &&
-  stepIndex(currentStep) < stepIndex("SHINGLES") &&
-  syntheticImg && (
-    <KonvaImage image={syntheticImg} x={photoTx.offX} y={photoTx.offY} width={photoTx.drawW} height={photoTx.drawH} opacity={0.86} />
-  )}
-
-{/* Ice & water — always visible once reached */}
-{atLeast(currentStep, "ICE_WATER") && (
-  <>
-    {(r.iceWaterOnEaves !== false) && eaves.map((l) => (
-      <Line
-        key={`iwe-${r.id}-${l.id}`}
-        points={imgToStage(l.points, photoTx)}
-        stroke="rgba(18,23,38,0.92)"
-        strokeWidth={r.iceWaterEaveW}
-        lineCap="round"
-        lineJoin="round"
-        opacity={0.92}
-      />
-    ))}
-    {(r.iceWaterOnValleys !== false) && valleys.map((l) => (
-      <Line
-        key={`iwv-${r.id}-${l.id}`}
-        points={imgToStage(l.points, photoTx)}
-        stroke="rgba(18,23,38,0.92)"
-        strokeWidth={r.iceWaterValleyW}
-        lineCap="round"
-        lineJoin="round"
-        opacity={0.92}
-      />
-    ))}
-    {(r.iceWaterBrush ?? []).map((stroke) => (
-      <Line
-        key={`iwb-${r.id}-${stroke.id}`}
-        points={imgToStage(stroke.points, photoTx)}
-        stroke="rgba(18,23,38,0.92)"
-        strokeWidth={stroke.size}
-        lineCap="round"
-        lineJoin="round"
-        opacity={0.92}
-        listening={false}
-      />
-    ))}
-  </>
-)}
-{/* Live brush stroke preview while painting */}
-{tool === "BRUSH_ICE_WATER" && brushDraft && brushDraft.points.length >= 4 && r.id === active?.activeRoofId && (
-  <Line
-    points={brushDraft.points}
-    stroke="rgba(18,23,38,0.85)"
-    strokeWidth={brushDraft.size}
-    lineCap="round"
-    lineJoin="round"
-    opacity={0.75}
-    listening={false}
-  />
-)}
-
-                  {/* GUTTER APRON (eaves) */}
-                  {atLeast(currentStep, "GUTTER_APRON") && eaves.map((l) => (
-                    <ShinyMetalStroke key={`apron-${r.id}-${l.id}`} points={imgToStage(l.points, photoTx)} width={r.gutterApronW} color={r.gutterApronColor} />
-                  ))}
-
-                  {/* DRIP EDGE (rakes) */}
-                  {atLeast(currentStep, "DRIP_EDGE") && rakes.map((l) => (
-                    <ShinyMetalStroke key={`drip-${r.id}-${l.id}`} points={imgToStage(l.points, photoTx)} width={r.dripEdgeW} color={r.dripEdgeColor} />
-                  ))}
-
-                  {/* VALLEY METAL (valleys) — Galvanized: narrow strip; W-Valley (colored): wider channel */}
-                  {atLeast(currentStep, "VALLEY_METAL") && valleys.map((l) => (
-                    <ShinyMetalStroke
-                      key={`vm-${r.id}-${l.id}`}
-                      points={imgToStage(l.points, photoTx)}
-                      width={r.valleyMetalColor === "Galvanized" ? r.valleyMetalW : r.valleyMetalW * 2.5}
-                      color={r.valleyMetalColor}
-                      opacity={0.995}
-                    />
-                  ))}
-
-                  {/* PRO-START (eaves always; rakes optional based on proStartOnRakes) */}
-                  {atLeast(currentStep, "PRO_START") && (
-                    <>
-                      {eaves.map((l) => (
-                        <StarterStroke key={`ps-e-${r.id}-${l.id}`} points={imgToStage(l.points, photoTx)} width={r.proStartW} />
-                      ))}
-                      {r.proStartOnRakes && rakes.map((l) => (
-                        <StarterStroke key={`ps-r-${r.id}-${l.id}`} points={imgToStage(l.points, photoTx)} width={r.proStartW} />
-                      ))}
-                    </>
-                  )}
-
-                  {/* SHINGLES — aligned to eave line via fillPatternOffsetY */}
-                  {atLeast(currentStep, "SHINGLES") && shinglesImg && (() => {
-                    // Compute the average Y of all eave points so shingle courses align
-                    // parallel to the eave (courses run level with the gutter line).
-                    const eaveYs = eaves.flatMap((l) => imgToStage(l.points, photoTx).filter((_, i) => i % 2 === 1));
-                    const eaveY = eaveYs.length > 0
-                      ? eaveYs.reduce((a, b) => a + b, 0) / eaveYs.length
-                      : 0;
-                    // courseH in texture pixels must match makeShingleTexture (11px).
-                    const courseH = 11;
-                    // Shift the pattern so a course boundary lands exactly on eaveY.
-                    const shingleOffsetY = ((-(eaveY + 5000) / r.shingleScale % courseH) + courseH) % courseH;
-                    return (
-                      <>
-                        <Rect
-                          x={-5000}
-                          y={-5000}
-                          width={12000}
-                          height={12000}
-                          opacity={0.98}
-                          fillPatternImage={shinglesImg}
-                          fillPatternRepeat="repeat"
-                          fillPatternScaleX={r.shingleScale}
-                          fillPatternScaleY={r.shingleScale}
-                          fillPatternOffsetY={shingleOffsetY}
-                          fillPatternRotation={r.shingleRotation ?? 0}
-                        />
-                        <Rect x={0} y={0} width={stageW} height={stageH} fill="rgba(0,0,0,0.06)" />
-                      </>
-                    );
-                  })()}
-
-                  {/* RIDGE VENT */}
-                  {atLeast(currentStep, "RIDGE_VENT") && ridges.map((l) => (
-                    <RidgeVentStroke key={`rv-${r.id}-${l.id}`} points={imgToStage(l.points, photoTx)} width={r.ridgeVentW} />
-                  ))}
-
-                  {/* CAP SHINGLES */}
-                  {atLeast(currentStep, "CAP_SHINGLES") && shinglesImg && ridges.map((l) => (
-                    <CapBand key={`cap-${r.id}-${l.id}`} points={imgToStage(l.points, photoTx)} width={r.capW} shinglesImg={shinglesImg} patternScale={r.shingleScale} />
-                  ))}
-
-                  {/* Valley seam / W-Valley on top of shingles */}
-                  {atLeast(currentStep, "SHINGLES") && valleys.map((l) =>
-                    r.valleyMetalColor === "Galvanized" ? (
-                      /* Galvanized open valley: subtle crease visible through shingles */
-                      <Group key={`vline-${r.id}-${l.id}`}>
-                        <Line points={imgToStage(l.points, photoTx)} stroke="rgba(0,0,0,0.12)"      strokeWidth={5}   lineCap="round" lineJoin="round" />
-                        <Line points={imgToStage(l.points, photoTx)} stroke="rgba(220,225,230,0.28)" strokeWidth={2.5} lineCap="round" lineJoin="round" />
-                        <Line points={imgToStage(l.points, photoTx)} stroke="rgba(255,255,255,0.12)" strokeWidth={1}   lineCap="round" lineJoin="round" />
-                      </Group>
-                    ) : (
-                      /* W-Valley: colored metal channel sits ON TOP of shingles — shingles woven around it */
-                      <ShinyMetalStroke
-                        key={`vline-${r.id}-${l.id}`}
-                        points={imgToStage(l.points, photoTx)}
-                        width={r.valleyMetalW * 2.5}
-                        color={r.valleyMetalColor}
-                        opacity={0.99}
-                      />
-                    )
-                  )}
-
-                  {/* Hip seam — subtle crease visible through shingles */}
-                  {atLeast(currentStep, "SHINGLES") && hips.map((l) => (
-                    <Group key={`hline-${r.id}-${l.id}`}>
-                      <Line points={imgToStage(l.points, photoTx)} stroke="rgba(0,0,0,0.30)"      strokeWidth={5}   lineCap="round" lineJoin="round" />
-                      <Line points={imgToStage(l.points, photoTx)} stroke="rgba(210,215,220,0.55)" strokeWidth={2.5} lineCap="round" lineJoin="round" />
-                    </Group>
-                  ))}
-
-                  {/* Ridge fold — crease tinted to match shingle color so it blends naturally */}
-                  {atLeast(currentStep, "SHINGLES") && !atLeast(currentStep, "CAP_SHINGLES") && (() => {
-                    const [rr, rg, rb] = shingleRGB(active.shingleColor);
-                    return ridges.map((l) => (
-                      <Group key={`ridgefold-${r.id}-${l.id}`}>
-                        <Line points={imgToStage(l.points, photoTx)} stroke="rgba(0,0,0,0.22)"                    strokeWidth={5}   lineCap="round" lineJoin="round" />
-                        <Line points={imgToStage(l.points, photoTx)} stroke={`rgba(${rr},${rg},${rb},0.55)`}      strokeWidth={2.5} lineCap="round" lineJoin="round" />
-                        <Line points={imgToStage(l.points, photoTx)} stroke={`rgba(${rr+30},${rg+30},${rb+30},0.22)`} strokeWidth={1} lineCap="round" lineJoin="round" />
-                      </Group>
-                    ));
-                  })()}
-
-                  {/* dormer holes reveal original photo */}
-                  {photoImg && r.holes.map((holePts, idx) => (
-                    <Group key={`hole-reveal-${r.id}-${idx}`} clipFunc={(ctx) => clipPolygonPath(ctx, imgToStage(holePts, photoTx))}>
-                      <KonvaImage image={photoImg} x={photoTx.offX} y={photoTx.offY} width={photoTx.drawW} height={photoTx.drawH} />
-                    </Group>
-                  ))}
-                </Group>
-              );
-            })}
-
-            {/* edit handles — hidden in presentation mode */}
-            {!presentationMode &&
-              active &&
-              active.step === "TRACE" &&
-              active.showEditHandles &&
-              activeRoof?.closed &&
-              activeRoof.outline.length >= 6 &&
-              Array.from({ length: activeRoof.outline.length / 2 }).map((_, idx) => {
-                const sx = imgToStage([activeRoof.outline[idx * 2], activeRoof.outline[idx * 2 + 1]], photoTx);
-                return (
-                  <Circle
-                    key={`pt-${idx}`}
-                    x={sx[0]}
-                    y={sx[1]}
-                    radius={10}
-                    fill="rgba(255,255,255,0.90)"
-                    stroke="rgba(15,23,42,0.45)"
-                    strokeWidth={2}
-                    draggable
-                    onDragMove={(e) => updateOutlinePoint(idx, e.target.x(), e.target.y())}
-                  />
-                );
-              })}
-
-            {/* Auto-detect overlay — hidden in presentation mode */}
+            {/* Auto-detect overlay — stage-space, hidden in presentation mode */}
             {!presentationMode && autoSuggest && active?.step === "TRACE" && (
               <>
                 <Line
