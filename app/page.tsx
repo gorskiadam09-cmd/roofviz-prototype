@@ -3592,20 +3592,14 @@ export default function Page() {
                       {showShareModal && (() => {
                         const projectName = active?.name || "Your Roof";
                         const canSend = shareEmail.includes("@") && shareEmail.includes(".");
-                        const isBusy = shareEmailSending || shareStatus === "compressing" || shareStatus === "uploading";
+                        const isBusy = shareStatus === "compressing" || shareStatus === "uploading";
                         const statusLabel = shareStatus === "compressing" ? "Preparing photos…" : shareStatus === "uploading" ? "Uploading photos…" : shareStatus === "sending" ? "Sending email…" : "";
                         return (
                           <div style={{ marginTop: 10, padding: 14, background: "#f8fafc", borderRadius: 10, border: "1.5px solid rgba(37,99,235,0.18)" }}>
                             <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Share with Customer</div>
-                            {shareEmailSent ? (
-                              <div style={{ textAlign: "center", padding: "14px 0" }}>
-                                <div style={{ fontSize: 22, marginBottom: 6 }}>✓</div>
-                                <div style={{ fontSize: 13, fontWeight: 700, color: "#16a34a" }}>Link sent to {shareEmail}</div>
-                                <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>The customer can open it on any device.</div>
-                              </div>
-                            ) : (
+                            {(
                               <>
-                                {/* Email input + send */}
+                                {/* Email input + open mail client */}
                                 <input
                                   type="email"
                                   placeholder="customer@email.com"
@@ -3617,34 +3611,22 @@ export default function Page() {
                                   style={{ ...primaryBtn, marginTop: 0, padding: "9px 14px", fontSize: 12, width: "100%", boxSizing: "border-box" as const, opacity: canSend && !isBusy ? 1 : 0.45 }}
                                   disabled={!canSend || isBusy}
                                   onClick={async () => {
-                                    setShareEmailSending(true);
                                     setShareErrorMsg("");
+                                    setShareStatus("compressing");
                                     try {
                                       const urlMap = await prepareAllPhotoUrls();
                                       const shareUrl = generateShareUrl(urlMap);
-                                      setShareStatus("sending");
-                                      const res = await fetch("/api/send-email", {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ to: shareEmail, shareUrl, projectName }),
-                                      });
-                                      const text = await res.text();
-                                      let body: { ok?: boolean; error?: string } = {};
-                                      try { body = JSON.parse(text); } catch { /* non-JSON */ }
-                                      if (!res.ok || body.error) {
-                                        setShareErrorMsg(`Send failed (${res.status}): ${body.error || text.slice(0, 120)}`);
-                                      } else {
-                                        setShareEmailSent(true);
-                                      }
+                                      const subject = encodeURIComponent(`Your ${projectName} Roof Visualization`);
+                                      const body = encodeURIComponent(`Hi,\n\nHere is your interactive roof visualization:\n\n${shareUrl}\n\nYou can view it on any device.`);
+                                      window.location.href = `mailto:${shareEmail}?subject=${subject}&body=${body}`;
                                     } catch (e) {
-                                      setShareErrorMsg(`Network error: ${e}`);
+                                      setShareErrorMsg(`Error preparing link: ${e}`);
                                     } finally {
-                                      setShareEmailSending(false);
                                       setShareStatus("");
                                     }
                                   }}
                                 >
-                                  {statusLabel || "Send Link"}
+                                  {statusLabel || "Open in Email"}
                                 </button>
                                 {shareErrorMsg && (
                                   <div style={{ fontSize: 11, color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6, padding: "7px 10px", marginTop: 6, lineHeight: 1.4 }}>
