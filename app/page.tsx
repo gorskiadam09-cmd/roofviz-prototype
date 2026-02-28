@@ -1046,6 +1046,90 @@ function stageToImgPts(pts: number[], tx: PhotoTransform): number[] {
   return pts.map((v, i) => (i % 2 === 0 ? (v - tx.offX) / tx.scale : (v - tx.offY) / tx.scale));
 }
 
+/* ------------------- Logo animation ------------------- */
+function LogoAnimated({
+  width = 175,
+  height = 51,
+  showCheck = true,
+  href,
+  onClick,
+  style,
+}: {
+  width?: number;
+  height?: number;
+  showCheck?: boolean;
+  href?: string;
+  onClick?: () => void;
+  style?: React.CSSProperties;
+}) {
+  // New value on every mount → animation always replays on load/refresh
+  const [mountKey] = useState(() => Date.now());
+
+  const inner = (
+    <span style={{ position: "relative", display: "inline-flex", alignItems: "center", ...style }}>
+      <motion.span
+        key={`logo-pop-${mountKey}`}
+        initial={{ opacity: 0, scale: 0.72, y: 7 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ type: "spring", stiffness: 320, damping: 20 }}
+        style={{ display: "inline-flex" }}
+      >
+        <Image src="/roofviz-logo.png" alt="RoofViz" width={width} height={height} priority />
+      </motion.span>
+
+      {showCheck && (
+        <motion.svg
+          key={`logo-check-${mountKey}`}
+          viewBox="0 0 22 22"
+          width={20}
+          height={20}
+          style={{
+            position: "absolute",
+            top: -5,
+            right: -10,
+            overflow: "visible",
+            pointerEvents: "none",
+          }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.30 }}
+        >
+          {/* Soft glow behind check */}
+          <circle cx="11" cy="11" r="7" fill="rgba(22,163,74,0.10)" />
+          <motion.path
+            d="M5.5 11.5 L9.5 15.5 L17 7.5"
+            fill="none"
+            stroke="#16a34a"
+            strokeWidth={2.4}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ filter: "drop-shadow(0 1px 3px rgba(22,163,74,0.45))" }}
+            initial={{ pathLength: 0, opacity: 1 }}
+            animate={{ pathLength: 1, opacity: 1 }}
+            transition={{ delay: 0.34, duration: 0.46, ease: "easeOut" }}
+          />
+        </motion.svg>
+      )}
+    </span>
+  );
+
+  if (href) {
+    return (
+      <a href={href} style={{ display: "inline-flex", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "none" }}>
+        {inner}
+      </a>
+    );
+  }
+  if (onClick) {
+    return (
+      <button onClick={onClick} style={{ display: "inline-flex", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+        {inner}
+      </button>
+    );
+  }
+  return <>{inner}</>;
+}
+
 /* ------------------- Main ------------------- */
 export default function Page() {
   const stageRef = useRef<any>(null);
@@ -2978,7 +3062,7 @@ export default function Page() {
           top: 0,
           zIndex: 20,
         }}>
-          <Image src="/roofviz-logo.png" alt="RoofViz" width={140} height={41} priority />
+          <LogoAnimated href={process.env.NEXT_PUBLIC_APP_URL || "/"} showCheck={true} />
           <div style={{ flex: 1 }} />
           <button
             onClick={startProject}
@@ -3223,12 +3307,7 @@ export default function Page() {
             style={{ ...topBarBtn, padding: "5px 10px", color: "#64748b", flexShrink: 0 }}>
             ← Menu
           </button>
-          <button onClick={() => setScreen("MENU")} className="rv-logo-btn"
-            style={{ background: "none", border: "none", cursor: "pointer",
-              padding: 0, flexShrink: 0, display: "flex", alignItems: "center" }}
-            title="Back to menu">
-            <Image src="/roofviz-logo.png" alt="RoofViz" width={140} height={41} priority />
-          </button>
+          <LogoAnimated onClick={() => setScreen("MENU")} width={140} height={41} showCheck={false} style={{ flexShrink: 0 }} />
           {active && (
             <input
               value={active.name}
