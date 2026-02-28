@@ -1,54 +1,43 @@
+import { Resend } from "resend";
 import { NextRequest, NextResponse } from "next/server";
-import nodemailer from "nodemailer";
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function POST(req: NextRequest) {
-  try {
-    const { to, shareUrl, projectName } = (await req.json()) as {
-      to: string;
-      shareUrl: string;
-      projectName: string;
-    };
+  const { to, shareUrl, projectName } = await req.json();
 
-    if (!to || !shareUrl) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
-    }
-
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: (process.env.GMAIL_USER ?? "").trim(),
-        pass: (process.env.GMAIL_APP_PASSWORD ?? "").trim(),
-      },
-    });
-
-    await transporter.sendMail({
-      from: `RoofViz <${(process.env.GMAIL_USER ?? "").trim()}>`,
-      to,
-      subject: `${projectName} — Your Roof Installation Preview`,
-      html: `
-        <div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;color:#0f172a;">
-          <img src="https://roofviz-prototype.vercel.app/roofviz-logo.png" alt="RoofViz" width="148" style="margin-bottom:24px;" />
-          <h2 style="font-size:20px;font-weight:800;margin:0 0 12px;">Your Roof Installation Preview</h2>
-          <p style="font-size:15px;color:#475569;line-height:1.65;margin:0 0 24px;">
-            Your contractor has prepared a personalized preview of your <strong>${projectName}</strong> roof installation.
-            Click the button below to step through each layer — from tear-off to finished shingles — and try different shingle colors.
-          </p>
-          <a href="${shareUrl}"
-             style="display:inline-block;padding:14px 28px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;font-size:15px;font-weight:700;text-decoration:none;border-radius:10px;box-shadow:0 2px 8px rgba(37,99,235,0.35);">
-            View Your Roof Preview →
-          </a>
-          <p style="font-size:12px;color:#94a3b8;margin:28px 0 0;line-height:1.6;">
-            No sign-up required. Just open the link and explore.<br />
-            If the button doesn't work, copy this link into your browser:<br />
-            <a href="${shareUrl}" style="color:#2563eb;word-break:break-all;">${shareUrl}</a>
-          </p>
-        </div>
-      `,
-    });
-
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("send-email error:", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+  if (!to || !shareUrl) {
+    return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
+
+  const from = process.env.RESEND_FROM_EMAIL ?? "RoofViz <onboarding@resend.dev>";
+
+  const { error } = await resend.emails.send({
+    from,
+    to,
+    subject: `Your ${projectName ?? "Roof"} Visualization`,
+    html: `
+      <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;color:#1e293b">
+        <img src="https://roofviz-prototype-1ycw.vercel.app/roofviz-logo.png" alt="RoofViz" width="120" style="margin-bottom:24px"/>
+        <h2 style="margin:0 0 12px;font-size:20px">Your roof visualization is ready</h2>
+        <p style="margin:0 0 24px;color:#475569;font-size:15px;line-height:1.6">
+          Click the button below to view your interactive roof visualization for <strong>${projectName ?? "your project"}</strong>.
+          You can explore each installation step on any device.
+        </p>
+        <a href="${shareUrl}"
+          style="display:inline-block;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;text-decoration:none;padding:13px 28px;border-radius:10px;font-weight:600;font-size:15px">
+          View Roof Visualization →
+        </a>
+        <p style="margin:24px 0 0;font-size:12px;color:#94a3b8">
+          Or copy this link: <a href="${shareUrl}" style="color:#2563eb">${shareUrl}</a>
+        </p>
+      </div>
+    `,
+  });
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
 }
