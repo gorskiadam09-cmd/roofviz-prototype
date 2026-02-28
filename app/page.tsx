@@ -2,6 +2,7 @@
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { AnimatePresence, motion } from "framer-motion";
 import { cleanupGeometry, strengthToOptions } from "@/app/lib/cleanupGeometry";
 import { cleanAiOutline } from "@/app/lib/aiOutlineCleanup";
 import { detectEdges, autoDetectMode, type LabeledSegment } from "@/app/lib/edgeDetection";
@@ -293,6 +294,21 @@ const STEP_SHORT: Partial<Record<Step, string>> = {
   RIDGE_VENT:   "Ridge Vent",
   CAP_SHINGLES: "Cap Shingles",
   EXPORT:       "Export PDF",
+};
+
+const STEP_TIP: Partial<Record<Step, string>> = {
+  TRACE:        "Click to place outline points. Click the first point again to close the shape.",
+  TEAROFF:      "The decking texture appears once your outline is closed.",
+  GUTTER_APRON: "Gutter apron sits beneath ice & water at the eave — installed first.",
+  ICE_WATER:    "Apply at least 24\" up from the eave and 36\" into each valley.",
+  SYNTHETIC:    "Laps 2\" at each course. Runs horizontally across the full field.",
+  DRIP_EDGE:    "Installed on rake edges after underlayment, before cap shingles.",
+  VALLEY_METAL: "Set a color in Settings to upgrade from galvanized to W-valley metal.",
+  PRO_START:    "Starter strip provides the sealant bond for the first shingle course.",
+  SHINGLES:     "Architectural shingles install bottom-to-top with a 5⅝\" exposure.",
+  RIDGE_VENT:   "Size the vent to match the attic's net free area for proper airflow.",
+  CAP_SHINGLES: "Each cap piece overlaps 5\" and is nailed through the ridge vent.",
+  EXPORT:       "The PDF has two pages: finished shingles + underlayment/metals layer.",
 };
 
 // Returns the subset of STEPS that should appear given the lines drawn across all roofs.
@@ -960,6 +976,9 @@ export default function Page() {
   const [shareEmailSent, setShareEmailSent] = useState(false);
   const [shareStatus, setShareStatus] = useState<"" | "compressing" | "uploading" | "sending" | "copied">("");
   const [shareErrorMsg, setShareErrorMsg] = useState("");
+  const [toastMsg, setToastMsg] = useState("");
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const active = useMemo(() => {
     if (screen === "CUSTOMER_VIEW" && customerViewData) {
@@ -1250,6 +1269,13 @@ export default function Page() {
     if (document.fullscreenElement) {
       try { document.exitFullscreen?.(); } catch {}
     }
+  }
+
+  function showToast(msg: string) {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToastMsg(msg);
+    setToastVisible(true);
+    toastTimerRef.current = setTimeout(() => setToastVisible(false), 3200);
   }
 
   // Helper: measure container after layout settles (double RAF) and bump stageKey
@@ -1850,6 +1876,7 @@ export default function Page() {
     setTool("TRACE_ROOF");
     setDraftLine(null);
     setDraftHole(null);
+    showToast("Roof added — trace its outline on the canvas");
   }
 
   function switchToPhoto(newSrc: string) {
@@ -1941,6 +1968,7 @@ export default function Page() {
     } else {
       setTool("NONE");
     }
+    if (next === "EXPORT") showToast("Visualization complete — export your PDF below");
   }
 
   function goBack() {
@@ -2139,6 +2167,7 @@ export default function Page() {
         if (dist(iPos[0], iPos[1], x0, y0) <= imageCloseRadius) {
           patchActiveRoof((r) => ({ ...r, closed: true }));
           setTool("NONE");
+          showToast("Roof outline closed ✓");
           return;
         }
       }
@@ -2655,7 +2684,7 @@ export default function Page() {
     background: "#ffffff",
     borderRadius: 14,
     padding: "16px 18px",
-    boxShadow: "0 1px 3px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)",
+    boxShadow: "0 2px 8px rgba(15,23,42,0.07), 0 0 0 1px rgba(15,23,42,0.05)",
     marginBottom: 10,
   };
 
@@ -2713,9 +2742,9 @@ export default function Page() {
     fontWeight: 600,
     cursor: "pointer",
     border: "none",
-    background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+    background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 60%, #1e40af 100%)",
     color: "#ffffff",
-    boxShadow: "0 2px 6px rgba(37,99,235,0.28)",
+    boxShadow: "0 3px 10px rgba(37,99,235,0.40), 0 1px 3px rgba(37,99,235,0.20)",
     marginTop: 8,
     letterSpacing: "0.01em",
   };
@@ -2784,6 +2813,22 @@ export default function Page() {
     };
   };
 
+  const accentSectionHeader: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: 8,
+    marginBottom: 10, paddingLeft: 10, borderLeft: "3px solid #2563eb",
+  };
+  const stepBadge: React.CSSProperties = {
+    display: "inline-flex", alignItems: "center", justifyContent: "center",
+    width: 22, height: 22, borderRadius: 6,
+    background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+    color: "#ffffff", fontSize: 11, fontWeight: 700, flexShrink: 0,
+  };
+  const tipBox: React.CSSProperties = {
+    marginTop: 8, padding: "9px 12px", borderRadius: 9,
+    background: "rgba(37,99,235,0.05)", border: "1px solid rgba(37,99,235,0.12)",
+    fontSize: 12, color: "#475569", lineHeight: 1.55,
+  };
+
   const stageW = w;
   const stageH = h;
 
@@ -2805,7 +2850,7 @@ export default function Page() {
           top: 0,
           zIndex: 20,
         }}>
-          <Image src="/roofviz-logo.png" alt="RoofViz" width={130} height={38} priority />
+          <Image src="/roofviz-logo.png" alt="RoofViz" width={140} height={41} priority />
           <div style={{ flex: 1 }} />
           <button
             onClick={startProject}
@@ -3039,10 +3084,10 @@ export default function Page() {
       {screen !== "CUSTOMER_VIEW" && !isCustomerView && (
         <header style={{
           display: "flex", alignItems: "center", gap: 10,
-          height: 52, flexShrink: 0,
+          height: 60, flexShrink: 0,
           background: "#ffffff",
           borderBottom: "1px solid rgba(15,23,42,0.06)",
-          boxShadow: "0 1px 3px rgba(15,23,42,0.04)",
+          boxShadow: "0 2px 8px rgba(15,23,42,0.06), 0 1px 0 rgba(15,23,42,0.04)",
           padding: "0 18px", zIndex: 10,
         }}>
           <button onClick={() => setScreen("MENU")}
@@ -3050,7 +3095,12 @@ export default function Page() {
             style={{ ...topBarBtn, padding: "5px 10px", color: "#64748b", flexShrink: 0 }}>
             ← Menu
           </button>
-          <Image src="/roofviz-logo.png" alt="RoofViz" width={100} height={29} priority style={{ flexShrink: 0, opacity: 0.9 }} />
+          <button onClick={() => setScreen("MENU")} className="rv-logo-btn"
+            style={{ background: "none", border: "none", cursor: "pointer",
+              padding: 0, flexShrink: 0, display: "flex", alignItems: "center" }}
+            title="Back to menu">
+            <Image src="/roofviz-logo.png" alt="RoofViz" width={140} height={41} priority />
+          </button>
           {active && (
             <input
               value={active.name}
@@ -3299,12 +3349,13 @@ export default function Page() {
         }}>
           {active && (
             <>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: "#475569", letterSpacing: "0.02em" }}>
-                  Step {stepIndex(liveStep) + 1} / {STEPS.length}
+              <div style={accentSectionHeader}>
+                <span key={liveStep} className="rv-badge-pop" style={stepBadge}>
+                  {stepIndex(liveStep) + 1}
                 </span>
-                <span style={{ fontSize: 10, color: "#94a3b8", maxWidth: 160, textAlign: "right" as const, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
-                  {STEP_TITLE[liveStep] ?? liveStep}
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#334155",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
+                  {STEP_SHORT[liveStep] ?? liveStep}
                 </span>
               </div>
               <div style={{ height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
@@ -3348,16 +3399,19 @@ export default function Page() {
 
           {/* ── Edit / Settings tab switcher ── */}
           {active && liveStep !== "START" && !presentationMode && (
-            <div style={{ display: "flex", gap: 2, padding: "8px 0 10px", flexShrink: 0 }}>
+            <div style={{ display: "flex", gap: 0, flexShrink: 0,
+              background: "#f1f5f9", borderRadius: 10, padding: "3px", marginBottom: 10 }}>
               {(["edit", "settings"] as const).map((tab) => (
-                <button key={tab} onClick={() => setUiTab(tab)}
-                  className="rv-tab-btn"
-                  style={{ ...tabBtnBase,
-                    background: uiTab === tab ? "#ffffff" : "transparent",
+                <button key={tab} onClick={() => setUiTab(tab)} className="rv-tab-btn"
+                  style={{ ...tabBtnBase, position: "relative", background: "transparent",
                     color: uiTab === tab ? "#1e293b" : "#94a3b8",
-                    boxShadow: uiTab === tab ? "0 1px 3px rgba(15,23,42,0.08)" : "none",
-                    fontWeight: uiTab === tab ? 600 : 500,
-                  }}>
+                    fontWeight: uiTab === tab ? 600 : 500, zIndex: 1 }}>
+                  {uiTab === tab && (
+                    <motion.span layoutId="tab-indicator"
+                      style={{ position: "absolute", inset: 0, borderRadius: 7,
+                        background: "#ffffff", boxShadow: "0 1px 3px rgba(15,23,42,0.10)", zIndex: -1 }}
+                      transition={{ type: "spring", stiffness: 400, damping: 30 }} />
+                  )}
                   {tab === "edit" ? "Edit" : "⚙ Settings"}
                 </button>
               ))}
@@ -3393,8 +3447,10 @@ export default function Page() {
               {/* Photo — current project only — hidden in presentation mode */}
               {!presentationMode && <div style={sectionCard} className="rv-section-card">
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={sectionLabel}>
-                    Photo{(active?.photoSrcs?.length ?? 0) > 1 ? ` (${(active?.photoSrcs?.indexOf(active?.src) ?? 0) + 1}/${active?.photoSrcs?.length})` : ""}
+                  <div style={accentSectionHeader}>
+                    <span style={sectionLabel}>
+                      Photo{(active?.photoSrcs?.length ?? 0) > 1 ? ` (${(active?.photoSrcs?.indexOf(active?.src) ?? 0) + 1}/${active?.photoSrcs?.length})` : ""}
+                    </span>
                   </div>
                   {active?.src && (
                     <button
@@ -3553,24 +3609,22 @@ export default function Page() {
                     {STEP_TITLE[liveStep]}
                   </div>
                   {STEP_HINT[liveStep] && (
-                    <p style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, margin: "0 0 12px" }}>
+                    <p style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, margin: "0 0 8px" }}>
                       {STEP_HINT[liveStep]}
                     </p>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <button
-                      className="rv-btn-ghost"
-                      style={ghostBtn}
-                      onClick={goBack}
-                      disabled={stepIndex(liveStep) === 0}
-                    >
-                      ← Back
-                    </button>
+                  {STEP_TIP[liveStep] && (
+                    <div style={tipBox}>💡 {STEP_TIP[liveStep]}</div>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+                    <button className="rv-btn-ghost" style={ghostBtn} onClick={goBack}
+                      disabled={stepIndex(liveStep) === 0}>← Back</button>
                     <button
                       className="rv-btn-primary"
                       style={{ ...primaryBtn, margin: 0 }}
                       onClick={goNext}
                       disabled={!canGoNext()}
+                      title={!canGoNext() && liveStep === "TRACE" ? "Complete roof outline to continue" : undefined}
                     >
                       Continue →
                     </button>
@@ -3692,7 +3746,9 @@ export default function Page() {
               {active && !presentationMode && (
                 <div style={sectionCard}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div style={sectionLabel}>Roofs</div>
+                    <div style={accentSectionHeader}>
+                      <span style={sectionLabel}>Roofs</span>
+                    </div>
                     <button className="rv-btn-small" style={smallBtn} onClick={addRoof}>+ Add Roof</button>
                   </div>
 
@@ -5162,6 +5218,26 @@ export default function Page() {
                 </div>
               )}
       </main>
+      <AnimatePresence>
+        {toastVisible && (
+          <motion.div key="toast"
+            initial={{ opacity: 0, y: 24, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.95 }}
+            transition={{ type: "spring", stiffness: 380, damping: 28 }}
+            style={{
+              position: "fixed", bottom: 28, left: "50%",
+              transform: "translateX(-50%)", zIndex: 9999,
+              background: "rgba(15,23,42,0.90)", backdropFilter: "blur(10px)",
+              color: "#ffffff", fontSize: 13, fontWeight: 500,
+              padding: "10px 18px", borderRadius: 10,
+              boxShadow: "0 8px 28px rgba(0,0,0,0.22), 0 0 0 1px rgba(255,255,255,0.08)",
+              pointerEvents: "none", whiteSpace: "nowrap" as const,
+            }}>
+            {toastMsg}
+          </motion.div>
+        )}
+      </AnimatePresence>
       </div>
     </div>
   );

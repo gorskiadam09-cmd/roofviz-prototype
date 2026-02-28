@@ -196,3 +196,13 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(15,23,42,0.12); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(15,23,42,0.24); }
+
+@keyframes badge-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+.rv-badge-pop { animation: badge-pop 0.32s ease both; }
+
+.rv-logo-btn { transition: opacity 0.15s ease; }
+.rv-logo-btn:hover { opacity: 0.80; }
