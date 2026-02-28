@@ -1067,11 +1067,12 @@ function LogoAnimated({
 
   const inner = (
     <span style={{ position: "relative", display: "inline-flex", alignItems: "center", ...style }}>
+      {/* Logo slides in from the left */}
       <motion.span
         key={`logo-pop-${mountKey}`}
-        initial={{ opacity: 0, scale: 0.72, y: 7 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ type: "spring", stiffness: 320, damping: 20 }}
+        initial={{ opacity: 0, x: -36 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ type: "spring", stiffness: 260, damping: 22 }}
         style={{ display: "inline-flex" }}
       >
         <Image src="/roofviz-logo.png" alt="RoofViz" width={width} height={height} priority />
@@ -1090,26 +1091,37 @@ function LogoAnimated({
             overflow: "visible",
             pointerEvents: "none",
           }}
-          initial={{ opacity: 0, scale: 0.5 }}
+          initial={{ opacity: 0, scale: 0.55 }}
           animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.28, type: "spring", stiffness: 380, damping: 18 }}
+          transition={{ delay: 0.36, type: "spring", stiffness: 360, damping: 20 }}
         >
           {/* Solid green circle */}
           <circle cx="16" cy="16" r="11" fill="#16a34a" />
           {/* Outer glow ring */}
           <circle cx="16" cy="16" r="13" fill="none" stroke="rgba(22,163,74,0.30)" strokeWidth={2} />
-          {/* Bold white checkmark */}
+          {/* Downstroke: top-left → valley — speeds up going down (easeIn) */}
           <motion.path
-            d="M9 16.5 L13.5 21 L23 11"
+            d="M9 14.5 L13.5 21"
             fill="none"
             stroke="#ffffff"
             strokeWidth={3}
             strokeLinecap="round"
             strokeLinejoin="round"
-            style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.18))" }}
             initial={{ pathLength: 0 }}
             animate={{ pathLength: 1 }}
-            transition={{ delay: 0.42, duration: 0.40, ease: "easeOut" }}
+            transition={{ delay: 0.50, duration: 0.24, ease: "easeIn" }}
+          />
+          {/* Upstroke: valley → top-right — slows as it reaches the top (easeOut) */}
+          <motion.path
+            d="M13.5 21 L23 11"
+            fill="none"
+            stroke="#ffffff"
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            initial={{ pathLength: 0 }}
+            animate={{ pathLength: 1 }}
+            transition={{ delay: 0.74, duration: 0.30, ease: "easeOut" }}
           />
         </motion.svg>
       )}
