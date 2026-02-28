@@ -1080,33 +1080,36 @@ function LogoAnimated({
       {showCheck && (
         <motion.svg
           key={`logo-check-${mountKey}`}
-          viewBox="0 0 22 22"
-          width={20}
-          height={20}
+          viewBox="0 0 32 32"
+          width={32}
+          height={32}
           style={{
             position: "absolute",
-            top: -5,
-            right: -10,
+            top: -10,
+            right: -14,
             overflow: "visible",
             pointerEvents: "none",
           }}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.30 }}
+          initial={{ opacity: 0, scale: 0.5 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.28, type: "spring", stiffness: 380, damping: 18 }}
         >
-          {/* Soft glow behind check */}
-          <circle cx="11" cy="11" r="7" fill="rgba(22,163,74,0.10)" />
+          {/* Solid green circle */}
+          <circle cx="16" cy="16" r="11" fill="#16a34a" />
+          {/* Outer glow ring */}
+          <circle cx="16" cy="16" r="13" fill="none" stroke="rgba(22,163,74,0.30)" strokeWidth={2} />
+          {/* Bold white checkmark */}
           <motion.path
-            d="M5.5 11.5 L9.5 15.5 L17 7.5"
+            d="M9 16.5 L13.5 21 L23 11"
             fill="none"
-            stroke="#16a34a"
-            strokeWidth={2.4}
+            stroke="#ffffff"
+            strokeWidth={3}
             strokeLinecap="round"
             strokeLinejoin="round"
-            style={{ filter: "drop-shadow(0 1px 3px rgba(22,163,74,0.45))" }}
-            initial={{ pathLength: 0, opacity: 1 }}
-            animate={{ pathLength: 1, opacity: 1 }}
-            transition={{ delay: 0.34, duration: 0.46, ease: "easeOut" }}
+            style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.18))" }}
+            initial={{ pathLength: 0 }}
+            animate={{ pathLength: 1 }}
+            transition={{ delay: 0.42, duration: 0.40, ease: "easeOut" }}
           />
         </motion.svg>
       )}
