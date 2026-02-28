@@ -5095,41 +5095,22 @@ export default function Page() {
                       {atLeast(currentStep, "ICE_WATER") && (
                         <>
                           {(r.iceWaterOnEaves !== false) && eaves.map((l) => (
-                            <Line
-                              key={`iwe-${r.id}-${l.id}`}
-                              points={l.points}
-                              stroke="rgba(18,23,38,0.92)"
-                              strokeWidth={r.iceWaterEaveW}
-                              strokeScaleEnabled={false}
-                              lineCap="round"
-                              lineJoin="round"
-                              opacity={0.92}
-                            />
+                            <Group key={`iwe-${r.id}-${l.id}`}>
+                              <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterEaveW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                              <Line points={l.points} stroke="rgba(255,255,255,0.07)" strokeWidth={r.iceWaterEaveW * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                            </Group>
                           ))}
                           {(r.iceWaterOnValleys !== false) && valleys.map((l) => (
-                            <Line
-                              key={`iwv-${r.id}-${l.id}`}
-                              points={l.points}
-                              stroke="rgba(18,23,38,0.92)"
-                              strokeWidth={r.iceWaterValleyW}
-                              strokeScaleEnabled={false}
-                              lineCap="round"
-                              lineJoin="round"
-                              opacity={0.92}
-                            />
+                            <Group key={`iwv-${r.id}-${l.id}`}>
+                              <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterValleyW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                              <Line points={l.points} stroke="rgba(255,255,255,0.07)" strokeWidth={r.iceWaterValleyW * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                            </Group>
                           ))}
                           {(r.iceWaterBrush ?? []).map((stroke) => (
-                            <Line
-                              key={`iwb-${r.id}-${stroke.id}`}
-                              points={stroke.points}
-                              stroke="rgba(18,23,38,0.92)"
-                              strokeWidth={stroke.size}
-                              strokeScaleEnabled={false}
-                              lineCap="round"
-                              lineJoin="round"
-                              opacity={0.92}
-                              listening={false}
-                            />
+                            <Group key={`iwb-${r.id}-${stroke.id}`} listening={false}>
+                              <Line points={stroke.points} stroke="#111827" strokeWidth={stroke.size} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                              <Line points={stroke.points} stroke="rgba(255,255,255,0.07)" strokeWidth={stroke.size * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                            </Group>
                           ))}
                         </>
                       )}
@@ -5137,12 +5118,11 @@ export default function Page() {
                       {tool === "BRUSH_ICE_WATER" && brushDraft && brushDraft.points.length >= 4 && r.id === active?.activeRoofId && (
                         <Line
                           points={brushDraft.points}
-                          stroke="rgba(18,23,38,0.85)"
+                          stroke="#111827"
                           strokeWidth={brushDraft.size}
                           strokeScaleEnabled={false}
                           lineCap="round"
                           lineJoin="round"
-                          opacity={0.75}
                           listening={false}
                         />
                       )}
