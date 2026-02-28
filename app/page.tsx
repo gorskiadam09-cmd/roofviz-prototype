@@ -979,6 +979,7 @@ export default function Page() {
   const [toastMsg, setToastMsg] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(true);
 
   const active = useMemo(() => {
     if (screen === "CUSTOMER_VIEW" && customerViewData) {
@@ -3083,13 +3084,13 @@ export default function Page() {
       {/* ── TOP BAR (PROJECT editor only) ── */}
       {screen !== "CUSTOMER_VIEW" && !isCustomerView && (
         <header style={{
-          display: "flex", alignItems: "center", gap: 10,
-          height: 60, flexShrink: 0,
+          flexShrink: 0,
           background: "#ffffff",
-          borderBottom: "1px solid rgba(15,23,42,0.06)",
           boxShadow: "0 2px 8px rgba(15,23,42,0.06), 0 1px 0 rgba(15,23,42,0.04)",
-          padding: "0 18px", zIndex: 10,
+          zIndex: 10,
         }}>
+          {/* Row 1 — main bar */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, height: 56, padding: "0 18px" }}>
           <button onClick={() => setScreen("MENU")}
             className="rv-topbar-btn"
             style={{ ...topBarBtn, padding: "5px 10px", color: "#64748b", flexShrink: 0 }}>
@@ -3110,7 +3111,7 @@ export default function Page() {
                 flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: "#0f172a",
                 background: "transparent", border: "none",
                 padding: "4px 8px", outline: "none",
-                letterSpacing: "0.01em",
+                letterSpacing: "0.01em", textAlign: "center",
               }}
             />
           )}
@@ -3140,6 +3141,7 @@ export default function Page() {
                 onClick={() => {
                   const next = !presentationMode;
                   setPresentationMode(next);
+                  setDrawerOpen(!next);
                   if (next && active) {
                     patchActive((p) => ({ ...p, step: "TEAROFF" }));
                     setUiTab("edit");
@@ -3176,18 +3178,65 @@ export default function Page() {
               >
                 ↓ Export PDF
               </button>
+              {!presentationMode && (
+                <button className="rv-topbar-btn"
+                  style={{ ...topBarBtn,
+                    background: drawerOpen ? "rgba(37,99,235,0.07)" : "#ffffff",
+                    color: drawerOpen ? "#2563eb" : "#64748b",
+                    borderColor: drawerOpen ? "rgba(37,99,235,0.25)" : "rgba(15,23,42,0.10)",
+                  }}
+                  onClick={() => setDrawerOpen(v => !v)}
+                >
+                  {drawerOpen ? "× Panel" : "☰ Panel"}
+                </button>
+              )}
+            </div>
+          )}
+          </div>
+          {/* Row 2 — step progress strip */}
+          {active && liveStep !== "START" && !presentationMode && (
+            <div style={{ height: 34, display: "flex", alignItems: "center",
+              padding: "0 18px", gap: 0, background: "#f8fafc",
+              borderBottom: "1px solid rgba(15,23,42,0.06)", overflowX: "auto",
+              flexShrink: 0, scrollbarWidth: "none" as any }}>
+              {STEPS.filter(s => s !== "START").map((step, i) => {
+                const liveIdx = stepIndex(liveStep);
+                const thisIdx = stepIndex(step);
+                const isCompleted = thisIdx < liveIdx;
+                const isCurrent = step === liveStep;
+                const isRelevant = relevantSteps(active.roofs).has(step);
+                return (
+                  <React.Fragment key={step}>
+                    {i > 0 && (
+                      <div style={{ width: 12, height: 1, flexShrink: 0,
+                        background: isCompleted ? "#bbf7d0" : "#e2e8f0" }} />
+                    )}
+                    <button onClick={() => jumpToStep(step)} style={{
+                      padding: "3px 9px", borderRadius: 99, fontSize: 11,
+                      fontWeight: isCurrent ? 700 : 500,
+                      border: isCurrent ? "1.5px solid rgba(37,99,235,0.35)" : "1.5px solid transparent",
+                      background: isCurrent ? "rgba(37,99,235,0.08)" : "transparent",
+                      color: isCurrent ? "#2563eb" : isCompleted ? "#16a34a" : "#94a3b8",
+                      opacity: !isRelevant && !isCurrent && !isCompleted ? 0.4 : 1,
+                      cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" as const,
+                    }}>
+                      {isCompleted ? "✓ " : ""}{STEP_SHORT[step] ?? step}
+                    </button>
+                  </React.Fragment>
+                );
+              })}
             </div>
           )}
         </header>
       )}
 
-      {/* ── CONTENT AREA: left panel + canvas side by side ── */}
+      {/* ── CONTENT AREA: canvas + floating drawer overlay ── */}
       <div style={
         screen === "CUSTOMER_VIEW"
           ? { display: "contents" }
           : isCustomerView
         ? { display: "flex", flexDirection: "row", flex: 1, overflow: "hidden", minHeight: 0 }
-        : { display: "grid", gridTemplateColumns: `${presentationMode ? "0" : "360"}px 1fr`, flex: 1, overflow: "hidden", minHeight: 0 }
+        : { display: "flex", flex: 1, overflow: "hidden", minHeight: 0, position: "relative" }
       }>
 
       {/* ── CUSTOMER RIGHT SIDEBAR ── */}
@@ -3324,56 +3373,60 @@ export default function Page() {
         </div>
       )}
 
-      {/* ── LEFT PANEL ── */}
-      <aside style={{
-        background: "#f8fafc",
-        borderRight: presentationMode ? "none" : "1px solid rgba(15,23,42,0.06)",
-        display: screen === "CUSTOMER_VIEW" ? "none" : "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        width: (isCustomerView || presentationMode) ? 0 : undefined,
-        flexShrink: (isCustomerView || presentationMode) ? 0 : undefined,
-        minWidth: 0,
-        transition: "width 0.3s ease",
-      }}>
-
-        {/* ── PROJECT EDITOR PANEL ── */}
-        {screen !== "CUSTOMER_VIEW" && (<>
-
-        {/* Sticky header — step progress only */}
-        <div style={{
-          background: "#ffffff",
-          borderBottom: "1px solid rgba(15,23,42,0.06)",
-          padding: "10px 16px 9px",
-          flexShrink: 0,
-        }}>
-          {active && (
-            <>
-              <div style={accentSectionHeader}>
-                <span key={liveStep} className="rv-badge-pop" style={stepBadge}>
-                  {stepIndex(liveStep) + 1}
-                </span>
-                <span style={{ fontSize: 12, fontWeight: 600, color: "#334155",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
-                  {STEP_SHORT[liveStep] ?? liveStep}
-                </span>
+      {/* ── FLOATING DRAWER ── */}
+      {screen !== "CUSTOMER_VIEW" && !isCustomerView && (
+        <AnimatePresence>
+          {drawerOpen && !presentationMode && (
+            <motion.aside
+              key="drawer"
+              initial={{ x: 310, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 310, opacity: 0 }}
+              transition={{ type: "tween", duration: 0.20, ease: "easeOut" }}
+              style={{
+                position: "absolute", right: 12, top: 12, bottom: 12,
+                width: 300, zIndex: 20,
+                background: "#ffffff",
+                borderRadius: 16,
+                boxShadow: "0 8px 40px rgba(15,23,42,0.16), 0 0 0 1px rgba(15,23,42,0.06)",
+                display: "flex", flexDirection: "column",
+                overflow: "hidden",
+              }}
+            >
+              {/* Drawer header: step badge + step name + close button */}
+              <div style={{ padding: "10px 14px 8px",
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                borderBottom: "1px solid rgba(15,23,42,0.06)", flexShrink: 0 }}>
+                <div style={{ ...accentSectionHeader, marginBottom: 0 }}>
+                  <span key={liveStep} className="rv-badge-pop" style={stepBadge}>
+                    {stepIndex(liveStep) + 1}
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#334155",
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
+                    {STEP_SHORT[liveStep] ?? liveStep}
+                  </span>
+                </div>
+                <button onClick={() => setDrawerOpen(false)}
+                  style={{ background: "none", border: "none", cursor: "pointer",
+                    color: "#94a3b8", fontSize: 18, lineHeight: 1, padding: "2px 6px",
+                    borderRadius: 6 }}>×</button>
               </div>
-              <div style={{ height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
-                <div style={{
-                  height: "100%",
+
+              {/* Progress bar */}
+              <div style={{ height: 3, background: "#e2e8f0", flexShrink: 0 }}>
+                <div style={{ height: "100%",
                   width: `${((stepIndex(liveStep) + 1) / STEPS.length) * 100}%`,
                   background: "linear-gradient(90deg, #2563eb, #60a5fa)",
-                  borderRadius: 99, transition: "width 0.4s ease",
-                }} />
+                  transition: "width 0.4s ease" }} />
               </div>
 
-              {/* Photo switcher — presentation mode only, shown when >1 photo */}
-              {presentationMode && (active.photoSrcs?.length ?? 0) > 1 && (() => {
-                const srcs = active.photoSrcs;
-                const idx = srcs.indexOf(active.src);
+              {/* Photo switcher — presentation mode with >1 photo */}
+              {presentationMode && (active?.photoSrcs?.length ?? 0) > 1 && (() => {
+                const srcs = active!.photoSrcs;
+                const idx = srcs.indexOf(active!.src);
                 const total = srcs.length;
                 return (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 9, gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 14px 0", gap: 6 }}>
                     <button
                       onClick={() => switchToPhoto(srcs[(idx - 1 + total) % total])}
                       className="rv-btn-small"
@@ -3390,12 +3443,9 @@ export default function Page() {
                   </div>
                 );
               })()}
-            </>
-          )}
-        </div>
 
-        {/* Scrollable body */}
-        <div style={{ flex: 1, overflow: "auto", padding: "14px" }}>
+              {/* Scrollable body */}
+              <div style={{ flex: 1, overflow: "auto", padding: "14px" }}>
 
           {/* ── Edit / Settings tab switcher ── */}
           {active && liveStep !== "START" && !presentationMode && (
@@ -4567,9 +4617,26 @@ export default function Page() {
               )}
             </div>
           )}
-        </div>
-        </>)}
-      </aside>
+              </div>
+            </motion.aside>
+          )}
+        </AnimatePresence>
+      )}
+
+      {/* Drawer "open" tab — shown when drawer is closed */}
+      {screen !== "CUSTOMER_VIEW" && !isCustomerView && !presentationMode && !drawerOpen && (
+        <button
+          onClick={() => setDrawerOpen(true)}
+          style={{
+            position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)",
+            zIndex: 20, background: "#ffffff", border: "none", cursor: "pointer",
+            width: 28, height: 56, borderRadius: "10px 0 0 10px",
+            boxShadow: "-2px 0 10px rgba(15,23,42,0.10), 0 0 0 1px rgba(15,23,42,0.06)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: "#64748b", fontSize: 14,
+          }}
+        >‹</button>
+      )}
 
       {/* ── CANVAS ── */}
       <main ref={containerRef} style={{
