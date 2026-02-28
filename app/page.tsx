@@ -167,6 +167,9 @@ type PhotoProject = {
   showGuidesDuringInstall: boolean;
   showEditHandles: boolean;
 
+  realisticMode: boolean;       // "Match Photo Look" toggle, default false
+  realisticStrength: number;    // 0.0–1.0 shadow/depth intensity, default 0.6
+
   stageScale: number;
   stagePos: { x: number; y: number };
 
@@ -569,6 +572,113 @@ function makeShingleTexture(_w: number, _h: number, color: ShingleColor) {
   // Minimal noise for a slight granular texture.
   addNoise(ctx, W, H, 28000, 0.003, 0.022);
   return c.toDataURL("image/png");
+}
+
+// ── Photo-derived shingle texture ──────────────────────────────────────────
+// Samples the uploaded photo in a mosaic of patches, adds shingle course lines,
+// contrast/desaturation normalization, noise, and vignette.
+// Returns a data URL (jpeg); empty string on any error → caller falls back to
+// the procedural makeShingleTexture.
+function makePhotoShingleTexture(photoImg: HTMLImageElement): string {
+  try {
+    const SIZE = 1024;
+    const c = document.createElement("canvas");
+    c.width = SIZE; c.height = SIZE;
+    const ctx = c.getContext("2d")!;
+
+    const iw = photoImg.naturalWidth  || photoImg.width;
+    const ih = photoImg.naturalHeight || photoImg.height;
+    if (iw < 4 || ih < 4) throw new Error("image too small");
+
+    // ── 1. Mosaic: sample random patches from a central region of the photo ──
+    const PATCH = 96;
+    const cols = Math.ceil(SIZE / PATCH) + 1;
+    const rows = Math.ceil(SIZE / PATCH) + 1;
+    const MARGIN = 0.08; // avoid extreme edges of the photo
+
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        // Reproducible-enough random via Math.sin hash
+        const seed = (row * 31 + col * 17 + 3);
+        const rand = (n: number) => Math.abs(Math.sin(seed * 12.9898 + n * 78.233) * 43758.5453) % 1;
+
+        const sx = (MARGIN + rand(0) * (1 - 2 * MARGIN)) * iw;
+        const sy = (MARGIN + rand(1) * (1 - 2 * MARGIN)) * ih;
+        const sw = Math.max(8, Math.min(iw * 0.22, iw - sx));
+        const sh = Math.max(8, Math.min(ih * 0.22, ih - sy));
+        const dx = col * PATCH;
+        const dy = row * PATCH;
+        const jitter = (rand(2) - 0.5) * 6;
+
+        ctx.save();
+        ctx.translate(dx + PATCH / 2, dy + PATCH / 2);
+        ctx.rotate((rand(3) - 0.5) * 0.05); // tiny rotation
+        ctx.drawImage(photoImg, sx, sy, sw, sh, -PATCH / 2 + jitter, -PATCH / 2 + jitter, PATCH, PATCH);
+        ctx.restore();
+      }
+    }
+
+    // ── 2. Color normalize: slight desaturation + contrast bump ──
+    const imgData = ctx.getImageData(0, 0, SIZE, SIZE);
+    const d = imgData.data;
+    let lumSum = 0;
+    for (let i = 0; i < d.length; i += 4) lumSum += d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    const mean = lumSum / (d.length / 4);
+    const factor = 1.16; // contrast multiplier
+    for (let i = 0; i < d.length; i += 4) {
+      let r = d[i], g = d[i + 1], b = d[i + 2];
+      // Desaturate 12%
+      const lum = r * 0.299 + g * 0.587 + b * 0.114;
+      r = r * 0.88 + lum * 0.12;
+      g = g * 0.88 + lum * 0.12;
+      b = b * 0.88 + lum * 0.12;
+      // Contrast
+      d[i]     = Math.max(0, Math.min(255, Math.round((r - mean) * factor + mean)));
+      d[i + 1] = Math.max(0, Math.min(255, Math.round((g - mean) * factor + mean)));
+      d[i + 2] = Math.max(0, Math.min(255, Math.round((b - mean) * factor + mean)));
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    // ── 3. Shingle course lines (horizontal) + tab cuts ──
+    const courseH = 11;
+    const tabW    = 16;
+    ctx.globalCompositeOperation = "multiply";
+    for (let y = 0; y < SIZE; y += courseH) {
+      // Butt-edge shadow
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, y, SIZE, 2);
+      // Highlight below butt edge
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = 0.06;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, y + 2, SIZE, 1);
+      ctx.globalCompositeOperation = "multiply";
+      // Tab dividers (faint, upper half of course)
+      ctx.globalAlpha = 0.06;
+      ctx.fillStyle = "#000000";
+      const offset = (Math.round(y / courseH) % 2) * (tabW / 2);
+      for (let x = offset; x < SIZE; x += tabW) {
+        ctx.fillRect(x, y + 2, 1, Math.round(courseH * 0.55));
+      }
+    }
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+
+    // ── 4. Noise ──
+    addNoise(ctx, SIZE, SIZE, 14000, 0.002, 0.014);
+
+    // ── 5. Subtle vignette ──
+    const vg = ctx.createRadialGradient(SIZE / 2, SIZE / 2, SIZE * 0.28, SIZE / 2, SIZE / 2, SIZE * 0.80);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(0,0,0,0.13)");
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    return c.toDataURL("image/jpeg", 0.88);
+  } catch {
+    return ""; // fallback to procedural shingle texture
+  }
 }
 
 /* ---------- strokes ---------- */
@@ -1023,6 +1133,8 @@ export default function Page() {
         shingleColor: customerShingleColor,
         showGuidesDuringInstall: false,
         showEditHandles: false,
+        realisticMode: false,
+        realisticStrength: 0.6,
         stageScale: fitScale,
         stagePos: { x: fitX, y: fitY },
         photoStates: {},
@@ -1235,6 +1347,8 @@ export default function Page() {
             ...p,
             photoSrcs: p.photoSrcs ?? (p.src ? [p.src] : []),
             photoStates: p.photoStates ?? {},
+            realisticMode: p.realisticMode ?? false,
+            realisticStrength: p.realisticStrength ?? 0.6,
           }));
           const savedActiveId = localStorage.getItem("roofviz_v3_active");
           const restoredId = migrated.find((p) => p.id === savedActiveId)?.id ?? migrated[0].id;
@@ -1766,6 +1880,8 @@ export default function Page() {
       shingleColor: "Barkwood",
       showGuidesDuringInstall: false,
       showEditHandles: false,
+      realisticMode: false,
+      realisticStrength: 0.6,
       stageScale: 1,
       stagePos: { x: 0, y: 0 },
       photoStates: {},
@@ -2362,6 +2478,17 @@ export default function Page() {
     return makeShingleTexture(texW, texH, active.shingleColor);
   }, [active?.id, active?.shingleColor, texW, texH]);
   const shinglesImg = useHtmlImage(shingleSrc);
+
+  // Photo-derived shingle texture — regenerated only when photo / realism settings change
+  const realisticShingleSrc = useMemo(() => {
+    if (!active?.realisticMode || !photoImg || typeof window === "undefined") return "";
+    return makePhotoShingleTexture(photoImg);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.src, active?.realisticMode, photoImg]);
+  const realisticShinglesImg = useHtmlImage(realisticShingleSrc);
+
+  // Resolved texture: photo-derived when realistic + loaded, else procedural
+  const activeShinglesImg = (active?.realisticMode && realisticShinglesImg) ? realisticShinglesImg : shinglesImg;
 
   const metalOptions: MetalColor[] = ["Galvanized", "Aluminum", "White", "Black", "Bronze", "Brown", "Gray"];
 
@@ -4615,6 +4742,45 @@ export default function Page() {
                   </div>
                 </div>
               )}
+
+              {/* ── Match Photo Look (Realistic) ── per-project setting ── */}
+              <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid rgba(15,23,42,0.06)" }}>
+                <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>✦ Match Photo Look</div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 1 }}>Photo-sampled texture + depth lighting</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={active.realisticMode ?? false}
+                    onChange={(e) => patchActive((p) => ({ ...p, realisticMode: e.target.checked }))}
+                    style={{ accentColor: "#2563eb", width: 16, height: 16, flexShrink: 0, cursor: "pointer" }}
+                  />
+                </label>
+                {active.realisticMode && (
+                  <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                    <label style={{ display: "block" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
+                        <span>Realism strength</span>
+                        <span style={{ fontWeight: 700, color: "#334155" }}>{Math.round((active.realisticStrength ?? 0.6) * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0} max={1} step={0.05}
+                        value={active.realisticStrength ?? 0.6}
+                        onChange={(e) => patchActive((p) => ({ ...p, realisticStrength: Number(e.target.value) }))}
+                        style={{ width: "100%", accentColor: "#2563eb" }}
+                      />
+                    </label>
+                    {!active.src && (
+                      <div style={{ fontSize: 11, color: "#94a3b8", background: "#f8fafc", borderRadius: 7, padding: "7px 10px", lineHeight: 1.5 }}>
+                        Upload a photo first — the texture is sampled directly from it.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
             </div>
           )}
               </div>
@@ -5015,7 +5181,7 @@ export default function Page() {
                       )}
 
                       {/* SHINGLES — aligned to eave line via fillPatternOffsetY */}
-                      {atLeast(currentStep, "SHINGLES") && shinglesImg && (
+                      {atLeast(currentStep, "SHINGLES") && activeShinglesImg && (
                         <>
                           <Rect
                             x={-5000}
@@ -5023,7 +5189,7 @@ export default function Page() {
                             width={12000}
                             height={12000}
                             opacity={0.98}
-                            fillPatternImage={shinglesImg}
+                            fillPatternImage={activeShinglesImg}
                             fillPatternRepeat="repeat"
                             fillPatternScaleX={effectivePatternScale}
                             fillPatternScaleY={effectivePatternScale}
@@ -5034,14 +5200,46 @@ export default function Page() {
                         </>
                       )}
 
+                      {/* ── Realistic lighting pass ──
+                          Subtle shadow / highlight strokes along structure lines
+                          to give depth. Only renders when realisticMode is ON. */}
+                      {atLeast(currentStep, "SHINGLES") && (active?.realisticMode) && (() => {
+                        const str = Math.max(0, Math.min(1, active?.realisticStrength ?? 0.6));
+                        return (
+                          <Group listening={false}>
+                            {/* Valleys — concave, so a wide dark stroke centered on the line */}
+                            {valleys.map((l) => (
+                              <Group key={`rlt-v-${r.id}-${l.id}`}>
+                                <Line points={l.points} stroke={`rgba(0,0,0,${(0.32 * str).toFixed(3)})`} strokeWidth={18} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                <Line points={l.points} stroke={`rgba(0,0,0,${(0.22 * str).toFixed(3)})`} strokeWidth={9}  strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                <Line points={l.points} stroke={`rgba(0,0,0,${(0.12 * str).toFixed(3)})`} strokeWidth={4}  strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                              </Group>
+                            ))}
+                            {/* Ridges + hips — convex, so shadow below and highlight above (top-left light) */}
+                            {[...ridges, ...hips].map((l) => {
+                              const shPts  = l.points.map((v, i) => i % 2 === 0 ? v + 1.5 : v + 2.5);
+                              const hiPts  = l.points.map((v, i) => i % 2 === 0 ? v - 1.0 : v - 2.0);
+                              return (
+                                <Group key={`rlt-rh-${r.id}-${l.id}`}>
+                                  <Line points={shPts} stroke={`rgba(0,0,0,${(0.20 * str).toFixed(3)})`}         strokeWidth={10} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                  <Line points={shPts} stroke={`rgba(0,0,0,${(0.12 * str).toFixed(3)})`}         strokeWidth={5}  strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                  <Line points={hiPts} stroke={`rgba(255,255,255,${(0.22 * str).toFixed(3)})`}   strokeWidth={6}  strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                  <Line points={hiPts} stroke={`rgba(255,255,255,${(0.12 * str).toFixed(3)})`}   strokeWidth={2.5} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                </Group>
+                              );
+                            })}
+                          </Group>
+                        );
+                      })()}
+
                       {/* RIDGE VENT */}
                       {atLeast(currentStep, "RIDGE_VENT") && ridges.map((l) => (
                         <RidgeVentStroke key={`rv-${r.id}-${l.id}`} points={l.points} width={r.ridgeVentW} />
                       ))}
 
                       {/* CAP SHINGLES */}
-                      {atLeast(currentStep, "CAP_SHINGLES") && shinglesImg && ridges.map((l) => (
-                        <CapBand key={`cap-${r.id}-${l.id}`} points={l.points} width={r.capW} clipStrokeWidth={r.capW / photoTx.scale} shinglesImg={shinglesImg} patternScale={effectivePatternScale} />
+                      {atLeast(currentStep, "CAP_SHINGLES") && activeShinglesImg && ridges.map((l) => (
+                        <CapBand key={`cap-${r.id}-${l.id}`} points={l.points} width={r.capW} clipStrokeWidth={r.capW / photoTx.scale} shinglesImg={activeShinglesImg} patternScale={effectivePatternScale} />
                       ))}
 
                       {/* Valley seam / W-Valley on top of shingles */}
