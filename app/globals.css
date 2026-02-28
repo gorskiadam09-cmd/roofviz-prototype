@@ -36,8 +36,8 @@ body {
 }
 
 @keyframes pulse-ring {
-  0%   { box-shadow: 0 0 0 0 rgba(37,99,235,0.40); }
-  70%  { box-shadow: 0 0 0 8px rgba(37,99,235,0); }
+  0%   { box-shadow: 0 0 0 0 rgba(37,99,235,0.35); }
+  70%  { box-shadow: 0 0 0 10px rgba(37,99,235,0); }
   100% { box-shadow: 0 0 0 0 rgba(37,99,235,0); }
 }
 
@@ -50,70 +50,19 @@ body {
 
 .rv-fade-in-up  { animation: fadeInUp 0.35s ease both; }
 .rv-fade-in     { animation: fadeIn 0.25s ease both; }
-
 .rv-spin        { display: inline-block; animation: spin 0.8s linear infinite; }
 
-/* Project cards on the menu */
+/* ── Project cards (menu) ────────────────────────────── */
+
 .rv-project-card {
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .rv-project-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 8px 24px rgba(15,23,42,0.13), 0 0 0 1.5px rgba(37,99,235,0.12) !important;
-}
-
-/* Step cards in the left panel */
-.rv-section-card {
-  transition: box-shadow 0.18s ease;
-}
-
-/* Primary button */
-.rv-btn-primary {
-  transition: filter 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
-}
-.rv-btn-primary:hover:not(:disabled) {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(37,99,235,0.38) !important;
-}
-.rv-btn-primary:active:not(:disabled) {
-  transform: translateY(0);
-  filter: brightness(0.97);
-}
-
-/* Ghost button */
-.rv-btn-ghost {
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
-}
-.rv-btn-ghost:hover:not(:disabled) {
-  background: rgba(37,99,235,0.06) !important;
-  border-color: rgba(37,99,235,0.25) !important;
-  color: #1d4ed8 !important;
-}
-
-/* Small buttons */
-.rv-btn-small {
-  transition: background 0.13s ease, transform 0.12s ease;
-}
-.rv-btn-small:hover:not(:disabled) {
-  background: rgba(15,23,42,0.05) !important;
-  transform: translateY(-1px);
-}
-
-/* Trace-active pulse */
-.rv-btn-tracing {
-  animation: pulse-ring 1.8s cubic-bezier(0.4,0,0.6,1) infinite;
-}
-
-/* How-it-works step icons */
-.rv-how-step {
-  transition: transform 0.2s ease;
-}
-.rv-how-step:hover {
   transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(15,23,42,0.12), 0 0 0 1.5px rgba(37,99,235,0.14) !important;
 }
 
-/* Staggered entrance for project cards */
+/* Staggered entrance */
 .rv-project-card:nth-child(1) { animation-delay: 0.00s; }
 .rv-project-card:nth-child(2) { animation-delay: 0.06s; }
 .rv-project-card:nth-child(3) { animation-delay: 0.12s; }
@@ -121,17 +70,129 @@ body {
 .rv-project-card:nth-child(5) { animation-delay: 0.24s; }
 .rv-project-card:nth-child(6) { animation-delay: 0.30s; }
 
-/* Upload drop zone hover */
-.rv-upload-zone {
-  transition: background 0.18s ease, border-color 0.18s ease;
-}
-.rv-upload-zone:hover {
-  background: rgba(37,99,235,0.07) !important;
-  border-color: rgba(37,99,235,0.50) !important;
+/* ── Section cards (left panel) ─────────────────────── */
+
+.rv-section-card {
+  transition: box-shadow 0.2s ease;
 }
 
-/* Scrollbar refinement */
-::-webkit-scrollbar { width: 5px; }
+/* ── Primary button ─────────────────────────────────── */
+
+.rv-btn-primary {
+  transition: filter 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.rv-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37,99,235,0.36) !important;
+}
+.rv-btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.97);
+}
+.rv-btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed !important;
+}
+
+/* ── Green primary button ───────────────────────────── */
+
+.rv-btn-green {
+  transition: filter 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.rv-btn-green:hover:not(:disabled) {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(22,163,74,0.36) !important;
+}
+.rv-btn-green:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* ── Ghost button ───────────────────────────────────── */
+
+.rv-btn-ghost {
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.12s ease;
+}
+.rv-btn-ghost:hover:not(:disabled) {
+  background: rgba(37,99,235,0.05) !important;
+  border-color: rgba(37,99,235,0.22) !important;
+  color: #2563eb !important;
+}
+.rv-btn-ghost:disabled {
+  opacity: 0.4;
+  cursor: not-allowed !important;
+}
+
+/* ── Small secondary button ─────────────────────────── */
+
+.rv-btn-small {
+  transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease, transform 0.12s ease;
+}
+.rv-btn-small:hover:not(:disabled) {
+  background: rgba(15,23,42,0.04) !important;
+  transform: translateY(-1px);
+}
+
+/* ── Top bar button ─────────────────────────────────── */
+
+.rv-topbar-btn {
+  transition: background 0.13s ease, border-color 0.13s ease, color 0.13s ease, box-shadow 0.13s ease;
+}
+.rv-topbar-btn:hover:not(:disabled) {
+  background: rgba(15,23,42,0.04) !important;
+  border-color: rgba(15,23,42,0.20) !important;
+}
+
+/* ── Tab button ─────────────────────────────────────── */
+
+.rv-tab-btn {
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* ── Trace active pulse ─────────────────────────────── */
+
+.rv-btn-tracing {
+  animation: pulse-ring 1.8s cubic-bezier(0.4,0,0.6,1) infinite;
+}
+
+/* ── Upload drop zone ───────────────────────────────── */
+
+.rv-upload-zone {
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+.rv-upload-zone:hover {
+  background: rgba(37,99,235,0.06) !important;
+  border-color: rgba(37,99,235,0.45) !important;
+}
+
+/* ── Step checklist row ─────────────────────────────── */
+
+.rv-step-row {
+  transition: background 0.12s ease;
+}
+.rv-step-row:hover {
+  background: rgba(15,23,42,0.03) !important;
+}
+
+/* ── How-it-works step icons ────────────────────────── */
+
+.rv-how-step {
+  transition: transform 0.2s ease;
+}
+.rv-how-step:hover {
+  transform: translateY(-4px);
+}
+
+/* ── Floating presentation controls ────────────────── */
+
+.rv-float-ctrl {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+/* ── Scrollbar refinement ───────────────────────────── */
+
+::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(15,23,42,0.14); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(15,23,42,0.28); }
+::-webkit-scrollbar-thumb { background: rgba(15,23,42,0.12); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(15,23,42,0.24); }

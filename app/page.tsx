@@ -2653,16 +2653,16 @@ export default function Page() {
   // ── Design tokens ──────────────────────────────────────────────────────────
   const sectionCard: React.CSSProperties = {
     background: "#ffffff",
-    borderRadius: 16,
-    padding: "18px",
-    boxShadow: "0 1px 4px rgba(15,23,42,0.07), 0 0 0 1px rgba(15,23,42,0.05)",
-    marginBottom: 12,
+    borderRadius: 14,
+    padding: "16px 18px",
+    boxShadow: "0 1px 3px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)",
+    marginBottom: 10,
   };
 
   const sectionLabel: React.CSSProperties = {
     fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: "0.08em",
+    fontWeight: 600,
+    letterSpacing: "0.07em",
     color: "#94a3b8",
     textTransform: "uppercase",
   };
@@ -2670,89 +2670,95 @@ export default function Page() {
   const fieldLabel: React.CSSProperties = {
     display: "block",
     fontSize: 12,
-    fontWeight: 600,
-    color: "#334155",
-    marginBottom: 6,
+    fontWeight: 500,
+    color: "#475569",
+    marginBottom: 5,
   };
 
   const inputStyle: React.CSSProperties = {
     display: "block",
     width: "100%",
-    padding: "10px 14px",
-    borderRadius: 10,
-    border: "1.5px solid rgba(15,23,42,0.14)",
-    fontSize: 14,
+    padding: "9px 13px",
+    borderRadius: 9,
+    border: "1.5px solid rgba(15,23,42,0.12)",
+    fontSize: 13,
     fontWeight: 500,
     background: "#ffffff",
     color: "#0f172a",
     boxSizing: "border-box",
     marginBottom: 12,
+    outline: "none",
+    transition: "border-color 0.15s ease",
   };
 
   const selectStyle: React.CSSProperties = {
     width: "100%",
-    padding: "9px 12px",
+    padding: "8px 11px",
     borderRadius: 8,
-    border: "1.5px solid rgba(15,23,42,0.12)",
-    fontSize: 13,
+    border: "1.5px solid rgba(15,23,42,0.11)",
+    fontSize: 12,
     fontWeight: 500,
     background: "#ffffff",
-    color: "#0f172a",
+    color: "#334155",
+    outline: "none",
   };
 
   const primaryBtn: React.CSSProperties = {
     display: "block",
     width: "100%",
-    padding: "13px 20px",
-    minHeight: 46,
-    borderRadius: 12,
-    fontSize: 14,
-    fontWeight: 700,
+    padding: "11px 20px",
+    minHeight: 42,
+    borderRadius: 10,
+    fontSize: 13,
+    fontWeight: 600,
     cursor: "pointer",
     border: "none",
     background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
     color: "#ffffff",
-    boxShadow: "0 2px 8px rgba(37,99,235,0.30)",
+    boxShadow: "0 2px 6px rgba(37,99,235,0.28)",
     marginTop: 8,
+    letterSpacing: "0.01em",
   };
 
   const greenBtn: React.CSSProperties = {
     ...primaryBtn,
     background: "linear-gradient(135deg, #16a34a, #15803d)",
-    boxShadow: "0 2px 8px rgba(22,163,74,0.28)",
+    boxShadow: "0 2px 6px rgba(22,163,74,0.26)",
   };
 
   const ghostBtn: React.CSSProperties = {
-    padding: "10px 16px",
-    borderRadius: 10,
+    padding: "9px 14px",
+    borderRadius: 9,
     fontSize: 13,
-    fontWeight: 600,
+    fontWeight: 500,
     cursor: "pointer",
-    border: "1.5px solid rgba(15,23,42,0.12)",
+    border: "1.5px solid rgba(15,23,42,0.11)",
+    background: "#ffffff",
+    color: "#475569",
+    letterSpacing: "0.01em",
+  };
+
+  const smallBtn: React.CSSProperties = {
+    padding: "6px 11px",
+    borderRadius: 7,
+    fontSize: 11,
+    fontWeight: 500,
+    cursor: "pointer",
+    border: "1.5px solid rgba(15,23,42,0.09)",
     background: "#ffffff",
     color: "#475569",
   };
 
-  const smallBtn: React.CSSProperties = {
-    padding: "7px 12px",
-    borderRadius: 8,
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: "pointer",
-    border: "1.5px solid rgba(15,23,42,0.10)",
-    background: "#ffffff",
-    color: "#334155",
-  };
-
   const topBarBtn: React.CSSProperties = {
-    padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
-    cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.12)",
-    background: "#ffffff", color: "#334155", whiteSpace: "nowrap" as const,
+    padding: "6px 13px", borderRadius: 7, fontSize: 12, fontWeight: 500,
+    cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.10)",
+    background: "#ffffff", color: "#475569", whiteSpace: "nowrap" as const,
+    letterSpacing: "0.01em",
   };
 
   const tabBtnBase: React.CSSProperties = {
-    flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
-    cursor: "pointer", border: "none", borderRadius: 8,
+    flex: 1, padding: "6px 0", fontSize: 12, fontWeight: 500,
+    cursor: "pointer", border: "none", borderRadius: 7,
     transition: "background 0.15s, color 0.15s",
   };
 
@@ -2784,74 +2790,88 @@ export default function Page() {
   // ── MENU SCREEN ────────────────────────────────────────────────────────────
   if (screen === "MENU") {
     return (
-      <div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+      <div className="rv-fade-in" style={{ minHeight: "100vh", background: "#f8fafc" }}>
         {/* Header */}
         <header style={{
           background: "#ffffff",
-          borderBottom: "1px solid rgba(15,23,42,0.08)",
+          borderBottom: "1px solid rgba(15,23,42,0.06)",
           padding: "0 32px",
-          height: 64,
+          height: 60,
           display: "flex",
           alignItems: "center",
           gap: 16,
-          boxShadow: "0 1px 3px rgba(15,23,42,0.05)",
+          boxShadow: "0 1px 4px rgba(15,23,42,0.04)",
+          position: "sticky",
+          top: 0,
+          zIndex: 20,
         }}>
-          <Image src="/roofviz-logo.png" alt="RoofViz" width={140} height={40} priority />
+          <Image src="/roofviz-logo.png" alt="RoofViz" width={130} height={38} priority />
           <div style={{ flex: 1 }} />
           <button
             onClick={startProject}
+            className="rv-btn-primary"
             style={{
-              display: "flex", alignItems: "center", gap: 7,
-              padding: "9px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700,
+              display: "inline-flex", alignItems: "center", gap: 7,
+              padding: "9px 20px", borderRadius: 9, fontSize: 13, fontWeight: 600,
               cursor: "pointer", border: "none",
               background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
               color: "#ffffff",
-              boxShadow: "0 2px 8px rgba(37,99,235,0.28)",
+              boxShadow: "0 2px 6px rgba(37,99,235,0.26)",
+              width: "auto", marginTop: 0, minHeight: 0, letterSpacing: "0.01em",
             }}
           >
-            <span style={{ fontSize: 18, lineHeight: 1 }}>+</span> New Project
+            <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 400 }}>+</span> New Project
           </button>
         </header>
 
         {/* Content */}
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "36px 24px 60px" }}>
+        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "40px 24px 72px" }}>
 
           {photos.length === 0 ? (
             /* Empty state */
-            <div style={{
-              textAlign: "center", padding: "80px 24px",
+            <div className="rv-fade-in" style={{
+              textAlign: "center", padding: "80px 24px 88px",
               background: "#ffffff", borderRadius: 20,
-              boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)",
+              boxShadow: "0 1px 4px rgba(15,23,42,0.05), 0 0 0 1px rgba(15,23,42,0.04)",
             }}>
-              <div style={{ fontSize: 48, marginBottom: 16, opacity: 0.2 }}>🏠</div>
-              <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", margin: "0 0 10px" }}>
+              <div style={{
+                width: 64, height: 64, borderRadius: 16, background: "linear-gradient(135deg,#eff6ff,#dbeafe)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                margin: "0 auto 20px", fontSize: 28,
+              }}>🏠</div>
+              <h2 style={{ fontSize: 20, fontWeight: 600, color: "#0f172a", margin: "0 0 8px" }}>
                 No projects yet
               </h2>
-              <p style={{ fontSize: 14, color: "#64748b", margin: "0 0 28px", lineHeight: 1.7 }}>
+              <p style={{ fontSize: 14, color: "#64748b", margin: "0 0 28px", lineHeight: 1.65, maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}>
                 Create your first project to start visualizing a roof installation.
               </p>
               <button
                 onClick={startProject}
+                className="rv-btn-primary"
                 style={{
                   display: "inline-flex", alignItems: "center", gap: 8,
-                  padding: "12px 28px", borderRadius: 12, fontSize: 15, fontWeight: 700,
-                  cursor: "pointer", border: "none",
+                  padding: "11px 28px", borderRadius: 10, fontSize: 14, fontWeight: 600,
+                  cursor: "pointer", border: "none", width: "auto", marginTop: 0, minHeight: 0,
                   background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
                   color: "#ffffff",
                   boxShadow: "0 2px 8px rgba(37,99,235,0.28)",
+                  letterSpacing: "0.01em",
                 }}
               >
-                <span style={{ fontSize: 20, lineHeight: 1 }}>+</span> Create First Project
+                <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 400 }}>+</span> Create First Project
               </button>
             </div>
           ) : (
             <>
               <div style={{
                 display: "flex", alignItems: "center", justifyContent: "space-between",
-                marginBottom: 20,
+                marginBottom: 24,
               }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#64748b", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                  {photos.length} Project{photos.length !== 1 ? "s" : ""}
+                <div>
+                  <h1 style={{ fontSize: 18, fontWeight: 600, color: "#0f172a", margin: 0 }}>Projects</h1>
+                  <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
+                    {photos.length} project{photos.length !== 1 ? "s" : ""}
+                  </div>
                 </div>
               </div>
               <div style={{
@@ -2862,42 +2882,34 @@ export default function Page() {
                 {photos.map((p) => (
                   <div
                     key={p.id}
+                    className="rv-project-card rv-fade-in-up"
                     style={{
                       background: "#ffffff",
                       borderRadius: 16,
                       overflow: "hidden",
-                      boxShadow: "0 1px 4px rgba(15,23,42,0.07), 0 0 0 1px rgba(15,23,42,0.05)",
+                      boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)",
                       cursor: "pointer",
-                      transition: "box-shadow 0.15s, transform 0.15s",
                     }}
                     onClick={() => openProject(p.id)}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 16px rgba(15,23,42,0.12), 0 0 0 1px rgba(15,23,42,0.06)";
-                      (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)";
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLDivElement).style.boxShadow = "0 1px 4px rgba(15,23,42,0.07), 0 0 0 1px rgba(15,23,42,0.05)";
-                      (e.currentTarget as HTMLDivElement).style.transform = "translateY(0)";
-                    }}
                   >
                     {/* Thumbnail */}
                     <div style={{
-                      height: 140,
-                      background: p.src ? "none" : "linear-gradient(135deg, #e2e8f0, #cbd5e1)",
+                      height: 148,
+                      background: p.src ? "none" : "linear-gradient(135deg, #f1f5f9, #e2e8f0)",
                       display: "flex", alignItems: "center", justifyContent: "center",
                       overflow: "hidden", position: "relative",
                     }}>
                       {p.src
                         ? <img src={p.src} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                        : <div style={{ fontSize: 40, opacity: 0.18 }}>🏠</div>
+                        : <div style={{ fontSize: 36, opacity: 0.15 }}>🏠</div>
                       }
-                      {/* Step badge */}
                       {p.step && p.step !== "TRACE" && (
                         <div style={{
                           position: "absolute", bottom: 8, right: 8,
-                          background: "rgba(15,23,42,0.75)", color: "#e2e8f0",
-                          fontSize: 10, fontWeight: 700, padding: "3px 8px",
-                          borderRadius: 20, backdropFilter: "blur(4px)",
+                          background: "rgba(15,23,42,0.70)", color: "#e2e8f0",
+                          fontSize: 10, fontWeight: 600, padding: "3px 8px",
+                          borderRadius: 20, backdropFilter: "blur(6px)",
+                          letterSpacing: "0.03em",
                         }}>
                           {STEP_TITLE[p.step] ?? p.step}
                         </div>
@@ -2907,7 +2919,7 @@ export default function Page() {
                     {/* Info row */}
                     <div
                       style={{ padding: "10px 12px 12px", display: "flex", alignItems: "center", gap: 8 }}
-                      onClick={(e) => e.stopPropagation()} /* don't open on inner click */
+                      onClick={(e) => e.stopPropagation()}
                     >
                       {renamingId === p.id ? (
                         <input
@@ -2921,8 +2933,8 @@ export default function Page() {
                           }}
                           style={{
                             flex: 1, padding: "4px 8px", borderRadius: 6,
-                            border: "1.5px solid rgba(37,99,235,0.45)",
-                            fontSize: 13, fontWeight: 600, outline: "none",
+                            border: "1.5px solid rgba(37,99,235,0.40)",
+                            fontSize: 13, fontWeight: 500, outline: "none",
                             background: "#f8fafc",
                           }}
                           onClick={(e) => e.stopPropagation()}
@@ -2930,7 +2942,7 @@ export default function Page() {
                       ) : (
                         <div
                           style={{
-                            flex: 1, fontSize: 13, fontWeight: 700, color: "#0f172a",
+                            flex: 1, fontSize: 13, fontWeight: 600, color: "#1e293b",
                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                             cursor: "text", padding: "4px 2px",
                           }}
@@ -2949,15 +2961,16 @@ export default function Page() {
                           }
                         }}
                         title="Delete project"
+                        className="rv-btn-small"
                         style={{
-                          width: 30, height: 30, borderRadius: 8, border: "none",
-                          background: "transparent", color: "#94a3b8",
-                          cursor: "pointer", fontSize: 16, display: "flex",
+                          width: 28, height: 28, borderRadius: 7, border: "none",
+                          background: "transparent", color: "#cbd5e1",
+                          cursor: "pointer", fontSize: 14, display: "flex",
                           alignItems: "center", justifyContent: "center", flexShrink: 0,
-                          transition: "background 0.12s, color 0.12s",
+                          padding: 0,
                         }}
-                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.09)"; (e.currentTarget as HTMLButtonElement).style.color = "#ef4444"; }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "#94a3b8"; }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.08)"; (e.currentTarget as HTMLButtonElement).style.color = "#ef4444"; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "#cbd5e1"; }}
                       >
                         ✕
                       </button>
@@ -3025,50 +3038,54 @@ export default function Page() {
       {/* ── TOP BAR (PROJECT editor only) ── */}
       {screen !== "CUSTOMER_VIEW" && !isCustomerView && (
         <header style={{
-          display: "flex", alignItems: "center", gap: 12,
-          height: 56, flexShrink: 0,
+          display: "flex", alignItems: "center", gap: 10,
+          height: 52, flexShrink: 0,
           background: "#ffffff",
-          borderBottom: "1px solid rgba(15,23,42,0.08)",
-          boxShadow: "0 1px 3px rgba(15,23,42,0.05)",
-          padding: "0 20px", zIndex: 10,
+          borderBottom: "1px solid rgba(15,23,42,0.06)",
+          boxShadow: "0 1px 3px rgba(15,23,42,0.04)",
+          padding: "0 18px", zIndex: 10,
         }}>
           <button onClick={() => setScreen("MENU")}
-            style={{ ...topBarBtn, padding: "6px 10px", color: "#64748b", flexShrink: 0 }}>
+            className="rv-topbar-btn"
+            style={{ ...topBarBtn, padding: "5px 10px", color: "#64748b", flexShrink: 0 }}>
             ← Menu
           </button>
-          <Image src="/roofviz-logo.png" alt="RoofViz" width={110} height={32} priority style={{ flexShrink: 0 }} />
+          <Image src="/roofviz-logo.png" alt="RoofViz" width={100} height={29} priority style={{ flexShrink: 0, opacity: 0.9 }} />
           {active && (
             <input
               value={active.name}
               onChange={(e) => patchActive((p) => ({ ...p, name: e.target.value }))}
               placeholder="Project name"
               style={{
-                flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700, color: "#0f172a",
+                flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: "#0f172a",
                 background: "transparent", border: "none",
-                borderBottom: "1.5px solid rgba(15,23,42,0.10)",
-                padding: "4px 6px", outline: "none",
+                padding: "4px 8px", outline: "none",
+                letterSpacing: "0.01em",
               }}
             />
           )}
           {active && (
-            <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
               {!presentationMode && (
                 <button
+                  className="rv-topbar-btn"
                   style={{ ...topBarBtn,
-                    background: active.showGuidesDuringInstall ? "rgba(37,99,235,0.07)" : "#ffffff",
+                    background: active.showGuidesDuringInstall ? "rgba(37,99,235,0.06)" : "#ffffff",
                     color: active.showGuidesDuringInstall ? "#2563eb" : "#64748b",
-                    borderColor: active.showGuidesDuringInstall ? "rgba(37,99,235,0.25)" : "rgba(15,23,42,0.12)" }}
+                    borderColor: active.showGuidesDuringInstall ? "rgba(37,99,235,0.22)" : "rgba(15,23,42,0.10)" }}
                   onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}
                 >
                   {active.showGuidesDuringInstall ? "⊙ Guides On" : "⊙ Guides"}
                 </button>
               )}
               <button
+                className="rv-topbar-btn"
                 style={{ ...topBarBtn,
                   background: presentationMode ? "linear-gradient(135deg,#7c3aed,#6d28d9)" : "#ffffff",
                   color: presentationMode ? "#ffffff" : "#64748b",
-                  border: presentationMode ? "none" : "1.5px solid rgba(15,23,42,0.12)",
-                  fontWeight: 700,
+                  border: presentationMode ? "none" : "1.5px solid rgba(15,23,42,0.10)",
+                  fontWeight: 600,
+                  boxShadow: presentationMode ? "0 2px 6px rgba(109,40,217,0.28)" : "none",
                 }}
                 onClick={() => {
                   const next = !presentationMode;
@@ -3083,9 +3100,11 @@ export default function Page() {
               </button>
               {presentationMode && (
                 <button
+                  className="rv-topbar-btn"
                   style={{ ...topBarBtn,
                     background: "linear-gradient(135deg,#0ea5e9,#0284c7)",
-                    color: "#ffffff", border: "none", fontWeight: 700,
+                    color: "#ffffff", border: "none", fontWeight: 600,
+                    boxShadow: "0 2px 6px rgba(2,132,199,0.28)",
                   }}
                   onClick={enterCustomerView}
                 >
@@ -3093,12 +3112,14 @@ export default function Page() {
                 </button>
               )}
               <button
+                className="rv-topbar-btn"
                 style={{ ...topBarBtn,
                   background: liveStep === "EXPORT" ? "linear-gradient(135deg,#16a34a,#15803d)" : "#f8fafc",
                   color: liveStep === "EXPORT" ? "#ffffff" : "#94a3b8",
-                  border: liveStep === "EXPORT" ? "none" : "1.5px solid rgba(15,23,42,0.10)",
-                  fontWeight: 700,
+                  border: liveStep === "EXPORT" ? "none" : "1.5px solid rgba(15,23,42,0.09)",
+                  fontWeight: liveStep === "EXPORT" ? 600 : 500,
                   cursor: liveStep === "EXPORT" ? "pointer" : "default",
+                  boxShadow: liveStep === "EXPORT" ? "0 2px 6px rgba(22,163,74,0.28)" : "none",
                 }}
                 disabled={liveStep !== "EXPORT"}
                 onClick={liveStep === "EXPORT" ? exportPdfTwoPages : undefined}
@@ -3116,7 +3137,7 @@ export default function Page() {
           ? { display: "contents" }
           : isCustomerView
         ? { display: "flex", flexDirection: "row", flex: 1, overflow: "hidden", minHeight: 0 }
-        : { display: "grid", gridTemplateColumns: `${presentationMode ? 240 : 360}px 1fr`, flex: 1, overflow: "hidden", minHeight: 0 }
+        : { display: "grid", gridTemplateColumns: `${presentationMode ? "0" : "360"}px 1fr`, flex: 1, overflow: "hidden", minHeight: 0 }
       }>
 
       {/* ── CUSTOMER RIGHT SIDEBAR ── */}
@@ -3256,15 +3277,14 @@ export default function Page() {
       {/* ── LEFT PANEL ── */}
       <aside style={{
         background: "#f8fafc",
-        borderRight: "1px solid rgba(15,23,42,0.08)",
-        // Collapse via width:0 (not display:none) so canvas stays in a valid
-        // flex/grid cell and the ResizeObserver keeps firing correctly.
+        borderRight: presentationMode ? "none" : "1px solid rgba(15,23,42,0.06)",
         display: screen === "CUSTOMER_VIEW" ? "none" : "flex",
         flexDirection: "column",
         overflow: "hidden",
-        width: isCustomerView ? 0 : undefined,
-        flexShrink: isCustomerView ? 0 : undefined,
+        width: (isCustomerView || presentationMode) ? 0 : undefined,
+        flexShrink: (isCustomerView || presentationMode) ? 0 : undefined,
         minWidth: 0,
+        transition: "width 0.3s ease",
       }}>
 
         {/* ── PROJECT EDITOR PANEL ── */}
@@ -3273,26 +3293,26 @@ export default function Page() {
         {/* Sticky header — step progress only */}
         <div style={{
           background: "#ffffff",
-          borderBottom: "1px solid rgba(15,23,42,0.08)",
-          padding: "12px 18px 10px",
+          borderBottom: "1px solid rgba(15,23,42,0.06)",
+          padding: "10px 16px 9px",
           flexShrink: 0,
         }}>
           {active && (
             <>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#334155" }}>
-                  Step {stepIndex(liveStep) + 1} of {STEPS.length}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "#475569", letterSpacing: "0.02em" }}>
+                  Step {stepIndex(liveStep) + 1} / {STEPS.length}
                 </span>
-                <span style={{ fontSize: 10, color: "#94a3b8" }}>
+                <span style={{ fontSize: 10, color: "#94a3b8", maxWidth: 160, textAlign: "right" as const, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
                   {STEP_TITLE[liveStep] ?? liveStep}
                 </span>
               </div>
-              <div style={{ height: 4, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
+              <div style={{ height: 3, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
                 <div style={{
                   height: "100%",
                   width: `${((stepIndex(liveStep) + 1) / STEPS.length) * 100}%`,
                   background: "linear-gradient(90deg, #2563eb, #60a5fa)",
-                  borderRadius: 99, transition: "width 0.35s ease",
+                  borderRadius: 99, transition: "width 0.4s ease",
                 }} />
               </div>
 
@@ -3302,17 +3322,19 @@ export default function Page() {
                 const idx = srcs.indexOf(active.src);
                 const total = srcs.length;
                 return (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 9, gap: 6 }}>
                     <button
                       onClick={() => switchToPhoto(srcs[(idx - 1 + total) % total])}
-                      style={{ padding: "4px 10px", borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.12)", background: "#fff", color: "#334155", flexShrink: 0 }}
+                      className="rv-btn-small"
+                      style={{ padding: "4px 10px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.10)", background: "#fff", color: "#334155", flexShrink: 0 }}
                     >‹</button>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: "#475569", textAlign: "center" as const }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: "#64748b", textAlign: "center" as const }}>
                       Photo {idx + 1} / {total}
                     </span>
                     <button
                       onClick={() => switchToPhoto(srcs[(idx + 1) % total])}
-                      style={{ padding: "4px 10px", borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.12)", background: "#fff", color: "#334155", flexShrink: 0 }}
+                      className="rv-btn-small"
+                      style={{ padding: "4px 10px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.10)", background: "#fff", color: "#334155", flexShrink: 0 }}
                     >›</button>
                   </div>
                 );
@@ -3322,17 +3344,19 @@ export default function Page() {
         </div>
 
         {/* Scrollable body */}
-        <div style={{ flex: 1, overflow: "auto", padding: "16px" }}>
+        <div style={{ flex: 1, overflow: "auto", padding: "14px" }}>
 
           {/* ── Edit / Settings tab switcher ── */}
           {active && liveStep !== "START" && !presentationMode && (
-            <div style={{ display: "flex", gap: 3, padding: "0 0 10px", flexShrink: 0 }}>
+            <div style={{ display: "flex", gap: 2, padding: "8px 0 10px", flexShrink: 0 }}>
               {(["edit", "settings"] as const).map((tab) => (
                 <button key={tab} onClick={() => setUiTab(tab)}
+                  className="rv-tab-btn"
                   style={{ ...tabBtnBase,
                     background: uiTab === tab ? "#ffffff" : "transparent",
                     color: uiTab === tab ? "#1e293b" : "#94a3b8",
-                    boxShadow: uiTab === tab ? "0 1px 3px rgba(15,23,42,0.10)" : "none",
+                    boxShadow: uiTab === tab ? "0 1px 3px rgba(15,23,42,0.08)" : "none",
+                    fontWeight: uiTab === tab ? 600 : 500,
                   }}>
                   {tab === "edit" ? "Edit" : "⚙ Settings"}
                 </button>
@@ -3477,6 +3501,7 @@ export default function Page() {
                       return (
                         <div
                           key={step}
+                          className="rv-step-row"
                           onClick={() => isCompleted ? jumpToStep(step) : undefined}
                           style={{
                             display: "flex",
@@ -3512,8 +3537,8 @@ export default function Page() {
                           {/* Step name */}
                           <span style={{
                             fontSize: 12,
-                            fontWeight: isCurrent ? 700 : isCompleted ? 600 : 500,
-                            color: isCurrent ? "#1d4ed8" : isCompleted ? "#0f172a" : "#64748b",
+                            fontWeight: isCurrent ? 600 : isCompleted ? 500 : 400,
+                            color: isCurrent ? "#1d4ed8" : isCompleted ? "#334155" : "#94a3b8",
                             flex: 1,
                           }}>
                             {STEP_SHORT[step]}
@@ -3524,7 +3549,7 @@ export default function Page() {
                   </div>
 
                   {/* Current step detail */}
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 6, paddingTop: 8, borderTop: "1px solid rgba(15,23,42,0.06)" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b", marginBottom: 5, paddingTop: 8, borderTop: "1px solid rgba(15,23,42,0.05)" }}>
                     {STEP_TITLE[liveStep]}
                   </div>
                   {STEP_HINT[liveStep] && (
@@ -3668,7 +3693,7 @@ export default function Page() {
                 <div style={sectionCard}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div style={sectionLabel}>Roofs</div>
-                    <button style={smallBtn} onClick={addRoof}>+ Add Roof</button>
+                    <button className="rv-btn-small" style={smallBtn} onClick={addRoof}>+ Add Roof</button>
                   </div>
 
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
@@ -4492,7 +4517,7 @@ export default function Page() {
 
       {/* ── CANVAS ── */}
       <main ref={containerRef} style={{
-        background: screen === "CUSTOMER_VIEW" ? "#e8edf2" : "#0c1524",
+        background: screen === "CUSTOMER_VIEW" ? "#e8edf2" : presentationMode ? "#0f172a" : "#1e293b",
         backgroundImage: screen === "CUSTOMER_VIEW" ? "none" : "radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)",
         backgroundSize: "28px 28px",
         position: "relative",
@@ -5067,6 +5092,75 @@ export default function Page() {
           </Layer>
         </Stage>
         </div>{/* end CSS-scale wrapper */}
+
+              {/* Floating presentation controls */}
+              {presentationMode && !isCustomerView && (
+                <div className="rv-float-ctrl" style={{
+                  position: "absolute", bottom: 28, left: "50%",
+                  transform: "translateX(-50%)",
+                  display: "flex", alignItems: "center", gap: 8,
+                  background: "rgba(15,23,42,0.82)",
+                  backdropFilter: "blur(12px)",
+                  borderRadius: 14,
+                  padding: "8px 12px",
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.28), 0 0 0 1px rgba(255,255,255,0.06)",
+                  zIndex: 50,
+                }}>
+                  <span style={{ fontSize: 11, fontWeight: 500, color: "rgba(255,255,255,0.50)", paddingRight: 4, letterSpacing: "0.03em" }}>
+                    {STEP_TITLE[liveStep]?.replace(/^Step \d+ — /, "") ?? liveStep}
+                  </span>
+                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.12)" }} />
+                  <button
+                    onClick={goBack}
+                    disabled={stepIndex(liveStep) === 0}
+                    style={{
+                      padding: "5px 14px", borderRadius: 8, fontSize: 12, fontWeight: 500,
+                      cursor: stepIndex(liveStep) === 0 ? "default" : "pointer",
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      background: "rgba(255,255,255,0.07)",
+                      color: stepIndex(liveStep) === 0 ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.80)",
+                      transition: "background 0.15s",
+                    }}
+                  >← Back</button>
+                  <button
+                    onClick={goNext}
+                    disabled={!canGoNext()}
+                    style={{
+                      padding: "5px 16px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                      cursor: canGoNext() ? "pointer" : "default",
+                      border: "none",
+                      background: canGoNext() ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : "rgba(255,255,255,0.07)",
+                      color: canGoNext() ? "#ffffff" : "rgba(255,255,255,0.25)",
+                      boxShadow: canGoNext() ? "0 2px 6px rgba(37,99,235,0.40)" : "none",
+                      transition: "background 0.15s, box-shadow 0.15s",
+                    }}
+                  >Next →</button>
+                  {(active?.photoSrcs?.length ?? 0) > 1 && (() => {
+                    const srcs = active!.photoSrcs;
+                    const idx = srcs.indexOf(active!.src);
+                    const total = srcs.length;
+                    return (
+                      <>
+                        <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.12)" }} />
+                        <button
+                          onClick={() => switchToPhoto(srcs[(idx - 1 + total) % total])}
+                          style={{ padding: "4px 10px", borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)" }}
+                        >‹</button>
+                        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", fontWeight: 500 }}>{idx+1}/{total}</span>
+                        <button
+                          onClick={() => switchToPhoto(srcs[(idx + 1) % total])}
+                          style={{ padding: "4px 10px", borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)" }}
+                        >›</button>
+                      </>
+                    );
+                  })()}
+                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.12)" }} />
+                  <button
+                    onClick={() => { setPresentationMode(false); setUiTab("edit"); }}
+                    style={{ padding: "4px 10px", borderRadius: 7, fontSize: 11, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,100,100,0.25)", background: "rgba(255,80,80,0.10)", color: "rgba(255,160,160,0.85)" }}
+                  >✕ Exit</button>
+                </div>
+              )}
       </main>
       </div>
     </div>
