@@ -4830,26 +4830,17 @@ export default function Page() {
                           {activeRoof.lines.length > 0 && (
                             <div style={{ display: "grid", gap: 4 }}>
                               <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>Lines drawn</div>
-                              {(["EAVE","RAKE","VALLEY","RIDGE","HIP"] as LineKind[])
-                                .filter(kind => activeRoof.lines.some(l => l.kind === kind))
-                                .map(kind => (
-                                  <div key={kind} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                                    {/* Kind section header */}
-                                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
-                                      color: kindColor(kind), padding: "3px 2px 1px", textTransform: "uppercase" }}>
-                                      {kind === "RIDGE" ? "Main Ridge" : kind}
-                                    </div>
-                                    {activeRoof.lines
-                                      .filter(l => l.kind === kind)
-                                      .map((line, i) => (
+                              {activeRoof.lines.map((line, globalIdx) => (
                                         <div key={line.id} style={{ display: "flex", alignItems: "center", gap: 6,
                                           background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
-                                          <span style={{ width: 8, height: 8, borderRadius: "50%",
-                                            background: kindColor(line.kind), flexShrink: 0, display: "inline-block" }} />
-                                          <span style={{ fontSize: 11, color: "#475569", fontWeight: 600 }}>
-                                            {kind === "RIDGE"
-                                              ? `Main Ridge${line.segmentCount && line.segmentCount > 1 ? ` (${line.segmentCount} segs)` : ""}`
-                                              : `${kind} ${i + 1}`}
+                                          <span style={{
+                                            width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
+                                            background: kindColor(line.kind),
+                                            display: "flex", alignItems: "center", justifyContent: "center",
+                                            fontSize: 11, fontWeight: 800, color: "#fff",
+                                          }}>{globalIdx + 1}</span>
+                                          <span style={{ fontSize: 11, color: "#475569", fontWeight: 600, flexShrink: 0 }}>
+                                            {line.kind}
                                           </span>
                                           {line.aiLabeled && (
                                             <span style={{ fontSize: 9, background: "rgba(16,185,129,0.1)", color: "#059669",
@@ -4897,9 +4888,6 @@ export default function Page() {
                                           >×</button>
                                         </div>
                                       ))}
-                                  </div>
-                                ))
-                              }
                             </div>
                           )}
 
@@ -5550,6 +5538,28 @@ export default function Page() {
                     </React.Fragment>
                   ));
                 })}
+
+                {/* Line number labels on canvas — TRACE step only */}
+                {!presentationMode && active && active.step === "TRACE" && active.roofs.flatMap((r) =>
+                  r.lines.map((line, globalIdx) => {
+                    if (line.points.length < 4) return null;
+                    const xs = line.points.filter((_, i) => i % 2 === 0);
+                    const ys = line.points.filter((_, i) => i % 2 === 1);
+                    const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+                    const my = ys.reduce((a, b) => a + b, 0) / ys.length;
+                    const label = String(globalIdx + 1);
+                    const col = kindColor(line.kind);
+                    const R = 11;
+                    return (
+                      <React.Fragment key={`lnum-${r.id}-${line.id}`}>
+                        <Circle x={mx} y={my} radius={R + 1} fill="rgba(0,0,0,0.45)" listening={false} />
+                        <Circle x={mx} y={my} radius={R} fill={col} listening={false} />
+                        <Text x={mx - R} y={my - 7} width={R * 2} text={label}
+                          fontSize={11} fontStyle="bold" fill="#fff" align="center" listening={false} />
+                      </React.Fragment>
+                    );
+                  })
+                )}
 
                 {/* Roof outlines — hidden in presentation mode */}
                 {!presentationMode && active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.map((r) =>
