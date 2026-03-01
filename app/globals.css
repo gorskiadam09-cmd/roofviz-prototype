@@ -17,6 +17,8 @@ body {
   color: var(--foreground);
   font-family: system-ui, -apple-system, sans-serif;
   margin: 0;
+  /* Prevent pull-to-refresh / scroll bounce on mobile */
+  overscroll-behavior: none;
 }
 
 /* ── Animations ─────────────────────────────────────── */

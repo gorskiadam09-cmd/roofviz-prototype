@@ -1524,17 +1524,13 @@ export default function Page() {
   const [w, setW] = useState(1100);
   const [h, setH] = useState(700);
   const [stageKey, setStageKey] = useState(0);
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    if (!containerRef.current) return;
-    const el = containerRef.current;
-    const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect();
-      setW(Math.max(1, Math.floor(r.width)));
-      setH(Math.max(1, Math.floor(r.height)));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
+    const check = () => setIsMobile(window.innerWidth <= 640);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
   }, []);
 
   const [photos, setPhotos] = useState<PhotoProject[]>([]);
@@ -1619,6 +1615,56 @@ export default function Page() {
     if (!active) return null;
     return active.roofs.find((r) => r.id === active.activeRoofId) || null;
   }, [active]);
+
+  // ResizeObserver — re-registers when screen changes so it attaches after MENU→PROJECT transition
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const el = containerRef.current;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      setW(Math.max(1, Math.floor(r.width)));
+      setH(Math.max(1, Math.floor(r.height)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
+
+  // Pinch-to-zoom on mobile canvas
+  const pinchRef = useRef<{ dist: number; scale: number } | null>(null);
+  const currentScaleRef = useRef(1);
+  useEffect(() => { currentScaleRef.current = active?.stageScale ?? 1; }, [active?.stageScale]);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const t1 = e.touches[0], t2 = e.touches[1];
+        pinchRef.current = {
+          dist: Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY),
+          scale: currentScaleRef.current,
+        };
+      }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || !pinchRef.current) return;
+      e.preventDefault();
+      const t1 = e.touches[0], t2 = e.touches[1];
+      const newDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const newScale = clamp(pinchRef.current.scale * newDist / pinchRef.current.dist, 0.3, 5);
+      patchActive(p => ({ ...p, stageScale: newScale }));
+    };
+    const onTouchEnd = () => { pinchRef.current = null; };
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd);
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
 
   const [tool, setTool] = useState<Tool>("NONE");
   const [draftLine, setDraftLine] = useState<Polyline | null>(null);
@@ -3753,13 +3799,13 @@ export default function Page() {
           zIndex: 10,
         }}>
           {/* Row 1 — main bar */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, height: 56, padding: "0 18px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 10, height: isMobile ? 48 : 56, padding: isMobile ? "0 10px" : "0 18px" }}>
           <button onClick={() => setScreen("MENU")}
             className="rv-topbar-btn"
             style={{ ...topBarBtn, padding: "5px 10px", color: "#64748b", flexShrink: 0 }}>
-            ← Menu
+            {isMobile ? "←" : "← Menu"}
           </button>
-          <LogoAnimated onClick={() => setScreen("MENU")} width={200} height={58} showCheck={false} style={{ flexShrink: 0 }} />
+          <LogoAnimated onClick={() => setScreen("MENU")} width={isMobile ? 110 : 200} height={isMobile ? 32 : 58} showCheck={false} style={{ flexShrink: 0 }} />
           {active && (
             <input
               value={active.name}
@@ -3775,7 +3821,7 @@ export default function Page() {
           )}
           {active && (
             <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
-              {!presentationMode && (
+              {!presentationMode && !isMobile && (
                 <button
                   className="rv-topbar-btn"
                   style={{ ...topBarBtn,
@@ -3787,7 +3833,7 @@ export default function Page() {
                   {active.showGuidesDuringInstall ? "⊙ Guides On" : "⊙ Guides"}
                 </button>
               )}
-              {active.src && !presentationMode && (
+              {active.src && !presentationMode && !isMobile && (
                 <button className="rv-topbar-btn" style={{
                   ...topBarBtn,
                   background: baMode ? "rgba(234,88,12,0.07)" : "#ffffff",
@@ -3817,7 +3863,7 @@ export default function Page() {
                   }
                 }}
               >
-                {presentationMode ? "✦ Presenting" : "✦ Present"}
+                {presentationMode ? (isMobile ? "✦" : "✦ Presenting") : (isMobile ? "✦" : "✦ Present")}
               </button>
               {presentationMode && (
                 <button
@@ -4108,15 +4154,17 @@ export default function Page() {
           {drawerOpen && !presentationMode && (
             <motion.aside
               key="drawer"
-              initial={{ x: 310, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 310, opacity: 0 }}
+              initial={isMobile ? { y: 500, opacity: 0 } : { x: 310, opacity: 0 }}
+              animate={isMobile ? { y: 0, opacity: 1 } : { x: 0, opacity: 1 }}
+              exit={isMobile ? { y: 500, opacity: 0 } : { x: 310, opacity: 0 }}
               transition={{ type: "tween", duration: 0.20, ease: "easeOut" }}
               style={{
-                position: "absolute", right: 12, top: 12, bottom: 12,
-                width: 300, zIndex: 20,
+                position: "absolute", zIndex: 20,
+                ...(isMobile
+                  ? { left: 0, right: 0, bottom: 0, top: "auto", maxHeight: "72vh", borderRadius: "16px 16px 0 0", width: "100%" }
+                  : { right: 12, top: 12, bottom: 12, width: 300, borderRadius: 16 }
+                ),
                 background: "#ffffff",
-                borderRadius: 16,
                 boxShadow: "0 8px 40px rgba(15,23,42,0.16), 0 0 0 1px rgba(15,23,42,0.06)",
                 display: "flex", flexDirection: "column",
                 overflow: "hidden",
@@ -5504,14 +5552,16 @@ export default function Page() {
         <button
           onClick={() => setDrawerOpen(true)}
           style={{
-            position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)",
-            zIndex: 20, background: "#ffffff", border: "none", cursor: "pointer",
-            width: 28, height: 56, borderRadius: "10px 0 0 10px",
-            boxShadow: "-2px 0 10px rgba(15,23,42,0.10), 0 0 0 1px rgba(15,23,42,0.06)",
+            position: "absolute", zIndex: 20,
+            background: "#ffffff", border: "none", cursor: "pointer",
+            ...(isMobile
+              ? { bottom: 0, left: "50%", transform: "translateX(-50%)", width: 56, height: 28, borderRadius: "10px 10px 0 0", boxShadow: "0 -2px 10px rgba(15,23,42,0.10), 0 0 0 1px rgba(15,23,42,0.06)" }
+              : { right: 0, top: "50%", transform: "translateY(-50%)", width: 28, height: 56, borderRadius: "10px 0 0 10px", boxShadow: "-2px 0 10px rgba(15,23,42,0.10), 0 0 0 1px rgba(15,23,42,0.06)" }
+            ),
             display: "flex", alignItems: "center", justifyContent: "center",
             color: "#64748b", fontSize: 14,
           }}
-        >‹</button>
+        >{isMobile ? "▲" : "‹"}</button>
       )}
 
       {/* ── CANVAS ── */}
@@ -6276,7 +6326,7 @@ export default function Page() {
               {/* Floating presentation controls */}
               {presentationMode && !isCustomerView && (
                 <div className="rv-float-ctrl" style={{
-                  position: "absolute", bottom: 28, left: "50%",
+                  position: "absolute", bottom: "calc(28px + env(safe-area-inset-bottom, 0px))", left: "50%",
                   transform: "translateX(-50%)",
                   display: "flex", alignItems: "center", gap: 8,
                   background: "rgba(15,23,42,0.82)",
