@@ -324,7 +324,7 @@ const STEP_TIP: Partial<Record<Step, string>> = {
   TRACE:        "Click to place outline points. Click the first point again to close the shape.",
   TEAROFF:      "The decking texture appears once your outline is closed.",
   GUTTER_APRON: "Gutter apron sits beneath ice & water at the eave — installed first.",
-  ICE_WATER:    "Apply at least 24\" up from the eave and 36\" into each valley.",
+  ICE_WATER:    "Apply at least 6 feet up from the eave and 36\" into each valley.",
   SYNTHETIC:    "Laps 2\" at each course. Runs horizontally across the full field.",
   DRIP_EDGE:    "Installed on rake edges after underlayment, before cap shingles.",
   VALLEY_METAL: "Set a color in Settings to upgrade from galvanized to W-valley metal.",
