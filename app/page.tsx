@@ -3744,7 +3744,7 @@ export default function Page() {
   return (
     <div style={
       screen === "CUSTOMER_VIEW"
-        ? { display: "flex", flexDirection: "row", height: "100dvh", overflow: "hidden" }
+        ? { display: "flex", flexDirection: isMobile ? "column" : "row", height: "100dvh", overflow: "hidden" }
         : isCustomerView
         ? { position: "fixed", inset: 0, zIndex: 9999, display: "flex", flexDirection: "column", background: "#0c1524" }
         : { display: "flex", flexDirection: "column", height: "100vh", background: "#f8fafc" }
@@ -3955,7 +3955,7 @@ export default function Page() {
       }>
 
       {/* ── CUSTOMER RIGHT SIDEBAR ── */}
-      {screen === "CUSTOMER_VIEW" && customerViewData && (
+      {screen === "CUSTOMER_VIEW" && customerViewData && !isMobile && (
         <div style={{
           order: 2,
           width: 176,
@@ -4055,95 +4055,144 @@ export default function Page() {
             </div>
           )}
 
-          {/* Shingle selection — always visible so customers can explore colors */}
-          {(
-            <div style={{ borderTop: "1px solid #f1f5f9", padding: "10px 14px 12px", flexShrink: 0 }}>
-              <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Shingle Selection</div>
-
-              {/* Manufacturer */}
-              <div style={{ marginBottom: 6 }}>
-                <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Manufacturer</div>
-                <select
-                  value={customerShingleSelection.manufacturerId}
-                  onChange={(e) => {
-                    const mId = e.target.value;
-                    const mfr = SHINGLE_CATALOG[mId as keyof typeof SHINGLE_CATALOG];
-                    const firstLineId = Object.keys(mfr?.lines ?? {})[0] ?? "";
-                    const firstLine = (mfr?.lines as Record<string, { colors: Record<string, unknown> }>)?.[firstLineId];
-                    const firstColorId = Object.keys(firstLine?.colors ?? {})[0] ?? "";
-                    setCustomerShingleSelection({ manufacturerId: mId, lineId: firstLineId, colorId: firstColorId });
-                  }}
-                  style={{ width: "100%", fontSize: 11, padding: "5px 7px", borderRadius: 7, border: "1px solid rgba(15,23,42,0.15)", background: "#fff", color: "#1e293b" }}
-                >
-                  {Object.entries(SHINGLE_CATALOG).map(([id, mfr]) => (
-                    <option key={id} value={id}>{mfr.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Product Line */}
-              {(() => {
-                const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
-                if (!mfr) return null;
-                return (
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Product Line</div>
-                    <select
-                      value={customerShingleSelection.lineId}
-                      onChange={(e) => {
-                        const lId = e.target.value;
-                        const line = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[lId];
-                        const firstColorId = Object.keys(line?.colors ?? {})[0] ?? "";
-                        setCustomerShingleSelection(prev => ({ ...prev, lineId: lId, colorId: firstColorId }));
-                      }}
-                      style={{ width: "100%", fontSize: 11, padding: "5px 7px", borderRadius: 7, border: "1px solid rgba(15,23,42,0.15)", background: "#fff", color: "#1e293b" }}
-                    >
-                      {Object.entries(mfr.lines).map(([lId, line]) => (
-                        <option key={lId} value={lId}>{(line as { name: string }).name}</option>
-                      ))}
-                    </select>
-                  </div>
-                );
-              })()}
-
-              {/* Color swatches */}
-              {(() => {
-                const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
-                const line = mfr && (mfr.lines as Record<string, { name: string; colors: Record<string, { name: string; rgb: [number,number,number] }> }>)[customerShingleSelection.lineId];
-                if (!line) return null;
-                const selectedColor = line.colors[customerShingleSelection.colorId];
-                return (
-                  <>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
-                      {Object.entries(line.colors).map(([cId, color]) => {
-                        const [cr, cg, cb] = color.rgb;
-                        const isSel = cId === customerShingleSelection.colorId;
-                        return (
-                          <div
-                            key={cId}
-                            onClick={() => setCustomerShingleSelection(prev => ({ ...prev, colorId: cId }))}
-                            title={color.name}
-                            style={{
-                              width: 26, height: 26, borderRadius: "50%",
-                              background: `rgb(${cr},${cg},${cb})`,
-                              cursor: "pointer",
-                              border: isSel ? "2.5px solid #ea580c" : "2px solid rgba(15,23,42,0.12)",
-                              boxShadow: isSel ? "0 0 0 2px rgba(234,88,12,0.3)" : "none",
-                              transition: "box-shadow 0.15s",
-                              flexShrink: 0,
-                            }}
-                          />
-                        );
-                      })}
-                    </div>
-                    {selectedColor && (
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>{selectedColor.name}</div>
-                    )}
-                  </>
-                );
-              })()}
+          {/* Shingle selection */}
+          <div style={{ borderTop: "1px solid #f1f5f9", padding: "10px 14px 12px", flexShrink: 0 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Shingle Selection</div>
+            <div style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Manufacturer</div>
+              <select
+                value={customerShingleSelection.manufacturerId}
+                onChange={(e) => {
+                  const mId = e.target.value;
+                  const mfr = SHINGLE_CATALOG[mId as keyof typeof SHINGLE_CATALOG];
+                  const firstLineId = Object.keys(mfr?.lines ?? {})[0] ?? "";
+                  const firstLine = (mfr?.lines as Record<string, { colors: Record<string, unknown> }>)?.[firstLineId];
+                  const firstColorId = Object.keys(firstLine?.colors ?? {})[0] ?? "";
+                  setCustomerShingleSelection({ manufacturerId: mId, lineId: firstLineId, colorId: firstColorId });
+                }}
+                style={{ width: "100%", fontSize: 11, padding: "5px 7px", borderRadius: 7, border: "1px solid rgba(15,23,42,0.15)", background: "#fff", color: "#1e293b" }}
+              >
+                {Object.entries(SHINGLE_CATALOG).map(([id, mfr]) => (
+                  <option key={id} value={id}>{mfr.name}</option>
+                ))}
+              </select>
             </div>
-          )}
+            {(() => {
+              const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
+              if (!mfr) return null;
+              return (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Product Line</div>
+                  <select
+                    value={customerShingleSelection.lineId}
+                    onChange={(e) => {
+                      const lId = e.target.value;
+                      const line = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[lId];
+                      const firstColorId = Object.keys(line?.colors ?? {})[0] ?? "";
+                      setCustomerShingleSelection(prev => ({ ...prev, lineId: lId, colorId: firstColorId }));
+                    }}
+                    style={{ width: "100%", fontSize: 11, padding: "5px 7px", borderRadius: 7, border: "1px solid rgba(15,23,42,0.15)", background: "#fff", color: "#1e293b" }}
+                  >
+                    {Object.entries(mfr.lines).map(([lId, line]) => (
+                      <option key={lId} value={lId}>{(line as { name: string }).name}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })()}
+            {(() => {
+              const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
+              const line = mfr && (mfr.lines as Record<string, { name: string; colors: Record<string, { name: string; rgb: [number,number,number] }> }>)[customerShingleSelection.lineId];
+              if (!line) return null;
+              const selectedColor = line.colors[customerShingleSelection.colorId];
+              return (
+                <>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                    {Object.entries(line.colors).map(([cId, color]) => {
+                      const [cr, cg, cb] = color.rgb;
+                      const isSel = cId === customerShingleSelection.colorId;
+                      return (
+                        <div key={cId} onClick={() => setCustomerShingleSelection(prev => ({ ...prev, colorId: cId }))} title={color.name} style={{ width: 26, height: 26, borderRadius: "50%", background: `rgb(${cr},${cg},${cb})`, cursor: "pointer", border: isSel ? "2.5px solid #ea580c" : "2px solid rgba(15,23,42,0.12)", boxShadow: isSel ? "0 0 0 2px rgba(234,88,12,0.3)" : "none", transition: "box-shadow 0.15s", flexShrink: 0 }} />
+                      );
+                    })}
+                  </div>
+                  {selectedColor && <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>{selectedColor.name}</div>}
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* ── MOBILE CUSTOMER VIEW BOTTOM BAR ── */}
+      {screen === "CUSTOMER_VIEW" && customerViewData && isMobile && (
+        <div style={{
+          order: 2, width: "100%", flexShrink: 0,
+          background: "#ffffff", borderTop: "1.5px solid #e2e8f0",
+          paddingBottom: "env(safe-area-inset-bottom, 0px)",
+        }}>
+          {/* Horizontal step chips */}
+          <div style={{ display: "flex", overflowX: "auto", padding: "8px 12px 4px", gap: 5, scrollbarWidth: "none" as any }}>
+            {customerNavSteps.map((s, i) => {
+              const isPast = i < customerStepIdx;
+              const isCurrent = i === customerStepIdx;
+              return (
+                <button key={s} onClick={() => setCustomerStep(s)} style={{
+                  flexShrink: 0, padding: "4px 11px", borderRadius: 99, fontSize: 11,
+                  fontWeight: isCurrent ? 700 : 500,
+                  border: isCurrent ? "1.5px solid rgba(234,88,12,0.40)" : "1.5px solid transparent",
+                  background: isCurrent ? "rgba(234,88,12,0.10)" : isPast ? "rgba(22,163,74,0.07)" : "transparent",
+                  color: isCurrent ? "#c2410c" : isPast ? "#16a34a" : "#94a3b8",
+                  cursor: "pointer",
+                }}>
+                  {isPast ? "✓ " : ""}{STEP_SHORT[s] ?? s}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Prev / Next + optional photo switcher */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 12px 8px" }}>
+            <button
+              onClick={() => customerStepIdx > 0 && setCustomerStep(customerNavSteps[customerStepIdx - 1])}
+              disabled={customerStepIdx <= 0}
+              style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 13, fontWeight: 600, color: "#475569", cursor: customerStepIdx > 0 ? "pointer" : "default", opacity: customerStepIdx > 0 ? 1 : 0.35 }}
+            >← Prev</button>
+            {customerViewData.photos.length > 1 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                <button onClick={() => setCustomerPhotoIdx(Math.max(0, customerPhotoIdx - 1))} disabled={customerPhotoIdx === 0} style={{ padding: "6px 10px", borderRadius: 7, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 13, fontWeight: 600, cursor: customerPhotoIdx > 0 ? "pointer" : "default", opacity: customerPhotoIdx > 0 ? 1 : 0.3, color: "#475569" }}>‹</button>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "#475569", whiteSpace: "nowrap" as const }}>{customerPhotoIdx + 1}/{customerViewData.photos.length}</span>
+                <button onClick={() => setCustomerPhotoIdx(Math.min(customerViewData.photos.length - 1, customerPhotoIdx + 1))} disabled={customerPhotoIdx >= customerViewData.photos.length - 1} style={{ padding: "6px 10px", borderRadius: 7, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 13, fontWeight: 600, cursor: customerPhotoIdx < customerViewData.photos.length - 1 ? "pointer" : "default", opacity: customerPhotoIdx < customerViewData.photos.length - 1 ? 1 : 0.3, color: "#475569" }}>›</button>
+              </div>
+            )}
+            <button
+              onClick={() => customerStepIdx < customerNavSteps.length - 1 && setCustomerStep(customerNavSteps[customerStepIdx + 1])}
+              disabled={customerStepIdx >= customerNavSteps.length - 1}
+              style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", background: customerStepIdx < customerNavSteps.length - 1 ? "linear-gradient(135deg,#ea580c,#c2410c)" : "#e2e8f0", fontSize: 13, fontWeight: 700, color: customerStepIdx < customerNavSteps.length - 1 ? "#fff" : "#94a3b8", cursor: customerStepIdx < customerNavSteps.length - 1 ? "pointer" : "default", opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.5 }}
+            >Next →</button>
+          </div>
+
+          {/* Compact shingle swatch row */}
+          {(() => {
+            const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
+            const line = mfr && (mfr.lines as Record<string, { name: string; colors: Record<string, { name: string; rgb: [number,number,number] }> }>)[customerShingleSelection.lineId];
+            if (!line) return null;
+            const selectedColor = line.colors[customerShingleSelection.colorId];
+            return (
+              <div style={{ borderTop: "1px solid #f1f5f9", padding: "6px 12px 8px", display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", overflowX: "auto", gap: 6, flex: 1, scrollbarWidth: "none" as any }}>
+                  {Object.entries(line.colors).map(([cId, color]) => {
+                    const [cr, cg, cb] = color.rgb;
+                    const isSel = cId === customerShingleSelection.colorId;
+                    return (
+                      <div key={cId} onClick={() => setCustomerShingleSelection(prev => ({ ...prev, colorId: cId }))} title={color.name} style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0, background: `rgb(${cr},${cg},${cb})`, cursor: "pointer", border: isSel ? "2.5px solid #ea580c" : "2px solid rgba(15,23,42,0.12)", boxShadow: isSel ? "0 0 0 2px rgba(234,88,12,0.3)" : "none" }} />
+                    );
+                  })}
+                </div>
+                {selectedColor && <span style={{ fontSize: 10, fontWeight: 600, color: "#475569", flexShrink: 0, maxWidth: 70, textAlign: "right" as const, lineHeight: 1.2 }}>{selectedColor.name}</span>}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -5573,7 +5622,7 @@ export default function Page() {
         overflow: "hidden",
         // In customer view: fill all remaining flex space and center the fixed-size Stage
         ...(isCustomerView ? { flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" } : {}),
-        ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0 } : {}),
+        ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0, minHeight: 0 } : {}),
       }}>
         {/* ── Presentation: step title pill ── */}
         {presentationMode && liveStep !== "START" && (
