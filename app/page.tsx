@@ -3129,6 +3129,8 @@ export default function Page() {
         dec: r.dripEdgeColor,
         iwe: r.iceWaterEaveW,
         iwv: r.iceWaterValleyW,
+        iwe_on: r.iceWaterOnEaves ? 1 : 0,
+        iwv_on: r.iceWaterOnValleys ? 1 : 0,
         psw: r.proStartW,
         rvw: r.ridgeVentW,
         cpw: r.capW,
@@ -4053,8 +4055,8 @@ export default function Page() {
             </div>
           )}
 
-          {/* Shingle color swatches — only at SHINGLES+ */}
-          {atLeast(customerStep, "SHINGLES") && (
+          {/* Shingle selection — always visible so customers can explore colors */}
+          {(
             <div style={{ borderTop: "1px solid #f1f5f9", padding: "10px 14px 12px", flexShrink: 0 }}>
               <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Shingle Selection</div>
 
@@ -4146,6 +4148,7 @@ export default function Page() {
       )}
 
       {/* ── FLOATING DRAWER ── */}
+
       {screen !== "CUSTOMER_VIEW" && !isCustomerView && (
         <AnimatePresence>
           {drawerOpen && !presentationMode && (
@@ -4614,6 +4617,35 @@ export default function Page() {
                   {/* Ice & Water brush tools */}
                   {activeRoof && liveStep === "ICE_WATER" && (
                     <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
+                      {/* Placement toggles */}
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 }}>Apply On</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                          {([
+                            ["Eaves", "iceWaterOnEaves"] as const,
+                            ["Valleys", "iceWaterOnValleys"] as const,
+                          ]).map(([label, key]) => {
+                            const on = activeRoof[key] !== false;
+                            return (
+                              <button
+                                key={key}
+                                onClick={() => patchActiveRoof((r) => ({ ...r, [key]: !on }))}
+                                style={{
+                                  ...smallBtn,
+                                  background: on ? "rgba(37,99,235,0.08)" : "#f8fafc",
+                                  color: on ? "#2563eb" : "#94a3b8",
+                                  borderColor: on ? "rgba(37,99,235,0.30)" : "rgba(15,23,42,0.12)",
+                                  fontWeight: 700,
+                                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                                }}
+                              >
+                                <span style={{ fontSize: 13, lineHeight: 1 }}>{on ? "✓" : "○"}</span>
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                       <button
                         style={{
                           ...ghostBtn,
