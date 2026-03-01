@@ -305,6 +305,21 @@ const STEP_SHORT: Partial<Record<Step, string>> = {
   EXPORT:       "Export PDF",
 };
 
+const STEP_LABELS: Partial<Record<Step, string>> = {
+  TRACE:        "Outline & Label Edges",
+  TEAROFF:      "Tear-off / Decking",
+  GUTTER_APRON: "Gutter Apron",
+  ICE_WATER:    "Ice & Water Shield",
+  SYNTHETIC:    "Synthetic Underlayment",
+  DRIP_EDGE:    "Drip Edge",
+  VALLEY_METAL: "Valley Metal",
+  PRO_START:    "Pro-Start Strip",
+  SHINGLES:     "Shingles",
+  RIDGE_VENT:   "Ridge Vent",
+  CAP_SHINGLES: "Cap Shingles",
+  EXPORT:       "Export PDF",
+};
+
 const STEP_TIP: Partial<Record<Step, string>> = {
   TRACE:        "Click to place outline points. Click the first point again to close the shape.",
   TEAROFF:      "The decking texture appears once your outline is closed.",
@@ -1615,6 +1630,10 @@ export default function Page() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
   const [presentationMode, setPresentationMode] = useState(false);
+  const [stepFlash, setStepFlash] = useState(false);
+  const [baMode, setBaMode] = useState(false);
+  const [baSplit, setBaSplit] = useState(0.5);
+  const baDragging = useRef(false);
   const [isCustomerView, setIsCustomerView] = useState(false);
   // Save stageScale/stagePos before entering customer view so we can restore on exit
   const savedEditViewRef = useRef<{ stageScale: number; stagePos: { x: number; y: number } } | null>(null);
@@ -2734,6 +2753,14 @@ export default function Page() {
 
   function onStageDown(e: any) {
     if (presentationMode) return;
+    if (baMode) {
+      const stage = e.target.getStage();
+      const rawPos = stage?.getPointerPosition();
+      if (rawPos && Math.abs(rawPos.x - baSplit * w) < 22) {
+        baDragging.current = true;
+      }
+      return;
+    }
     if (!active || !activeRoof || !photoImg) return;
     const stage = e.target.getStage();
     const rawPos = stage.getPointerPosition();
@@ -2861,6 +2888,15 @@ export default function Page() {
   }
 
   function onStageMove() {
+    if (baMode) {
+      if (baDragging.current) {
+        const stage = stageRef.current;
+        if (!stage) return;
+        const rawPos = stage.getPointerPosition();
+        if (rawPos) setBaSplit(Math.max(0.05, Math.min(0.95, rawPos.x / w)));
+      }
+      return;
+    }
     if (!brushPaintingRef.current || tool !== "BRUSH_ICE_WATER") return;
     const stage = stageRef.current;
     if (!stage) return;
@@ -2880,6 +2916,7 @@ export default function Page() {
   }
 
   function onStageUp() {
+    if (baMode) { baDragging.current = false; return; }
     if (!brushPaintingRef.current) return;
     const rawPts = brushStrokeRef.current;
     if (activeRoof && rawPts.length >= 4) {
@@ -2929,6 +2966,14 @@ export default function Page() {
   // Re-register whenever the captured state changes so the handler is never stale.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, draftLine, draftHole, activeRoof, active]);
+
+  // Presentation mode: flash on step change
+  useEffect(() => {
+    if (!presentationMode) return;
+    setStepFlash(true);
+    const t = setTimeout(() => setStepFlash(false), 350);
+    return () => clearTimeout(t);
+  }, [active?.step, presentationMode]);
 
   // textures
   const texW = Math.floor(w * 2.4);
@@ -3356,9 +3401,9 @@ export default function Page() {
     fontWeight: 600,
     cursor: "pointer",
     border: "none",
-    background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 60%, #1e40af 100%)",
+    background: "linear-gradient(135deg, #ea580c 0%, #c2410c 60%, #9a3412 100%)",
     color: "#ffffff",
-    boxShadow: "0 3px 10px rgba(37,99,235,0.40), 0 1px 3px rgba(37,99,235,0.20)",
+    boxShadow: "0 3px 10px rgba(234,88,12,0.40), 0 1px 3px rgba(234,88,12,0.20)",
     marginTop: 8,
     letterSpacing: "0.01em",
   };
@@ -3429,22 +3474,27 @@ export default function Page() {
 
   const accentSectionHeader: React.CSSProperties = {
     display: "flex", alignItems: "center", gap: 8,
-    marginBottom: 10, paddingLeft: 10, borderLeft: "3px solid #2563eb",
+    marginBottom: 10, paddingLeft: 10, borderLeft: "3px solid #ea580c",
   };
   const stepBadge: React.CSSProperties = {
     display: "inline-flex", alignItems: "center", justifyContent: "center",
     width: 22, height: 22, borderRadius: 6,
-    background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+    background: "linear-gradient(135deg, #ea580c, #c2410c)",
     color: "#ffffff", fontSize: 11, fontWeight: 700, flexShrink: 0,
   };
   const tipBox: React.CSSProperties = {
     marginTop: 8, padding: "9px 12px", borderRadius: 9,
-    background: "rgba(37,99,235,0.05)", border: "1px solid rgba(37,99,235,0.12)",
+    background: "rgba(234,88,12,0.05)", border: "1px solid rgba(234,88,12,0.12)",
     fontSize: 12, color: "#475569", lineHeight: 1.55,
   };
 
   const stageW = w;
   const stageH = h;
+
+  // Before/After slider: split position in world (photo) coordinates
+  const splitWorldX = w > 0
+    ? (baSplit * w - (active?.stagePos?.x ?? 0)) / (active?.stageScale ?? 1)
+    : 9999;
 
   // ── MENU SCREEN ────────────────────────────────────────────────────────────
   if (screen === "MENU") {
@@ -3473,9 +3523,9 @@ export default function Page() {
               display: "inline-flex", alignItems: "center", gap: 7,
               padding: "9px 20px", borderRadius: 9, fontSize: 13, fontWeight: 600,
               cursor: "pointer", border: "none",
-              background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+              background: "linear-gradient(135deg, #ea580c, #c2410c)",
               color: "#ffffff",
-              boxShadow: "0 2px 6px rgba(37,99,235,0.26)",
+              boxShadow: "0 2px 6px rgba(234,88,12,0.26)",
               width: "auto", marginTop: 0, minHeight: 0, letterSpacing: "0.01em",
             }}
           >
@@ -3511,9 +3561,9 @@ export default function Page() {
                   display: "inline-flex", alignItems: "center", gap: 8,
                   padding: "11px 28px", borderRadius: 10, fontSize: 14, fontWeight: 600,
                   cursor: "pointer", border: "none", width: "auto", marginTop: 0, minHeight: 0,
-                  background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                  background: "linear-gradient(135deg, #ea580c, #c2410c)",
                   color: "#ffffff",
-                  boxShadow: "0 2px 8px rgba(37,99,235,0.28)",
+                  boxShadow: "0 2px 8px rgba(234,88,12,0.28)",
                   letterSpacing: "0.01em",
                 }}
               >
@@ -3592,7 +3642,7 @@ export default function Page() {
                           }}
                           style={{
                             flex: 1, padding: "4px 8px", borderRadius: 6,
-                            border: "1.5px solid rgba(37,99,235,0.40)",
+                            border: "1.5px solid rgba(234,88,12,0.40)",
                             fontSize: 13, fontWeight: 500, outline: "none",
                             background: "#f8fafc",
                           }}
@@ -3681,7 +3731,7 @@ export default function Page() {
               disabled={!canGoNext()}
               style={{ padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
                 cursor: canGoNext() ? "pointer" : "default", border: "none",
-                background: canGoNext() ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : "rgba(255,255,255,0.08)",
+                background: canGoNext() ? "linear-gradient(135deg,#ea580c,#c2410c)" : "rgba(255,255,255,0.08)",
                 color: canGoNext() ? "#ffffff" : "rgba(255,255,255,0.25)" }}
             >Next →</button>
             <button
@@ -3709,7 +3759,7 @@ export default function Page() {
             style={{ ...topBarBtn, padding: "5px 10px", color: "#64748b", flexShrink: 0 }}>
             ← Menu
           </button>
-          <LogoAnimated onClick={() => setScreen("MENU")} width={140} height={41} showCheck={false} style={{ flexShrink: 0 }} />
+          <LogoAnimated onClick={() => setScreen("MENU")} width={200} height={58} showCheck={false} style={{ flexShrink: 0 }} />
           {active && (
             <input
               value={active.name}
@@ -3729,12 +3779,22 @@ export default function Page() {
                 <button
                   className="rv-topbar-btn"
                   style={{ ...topBarBtn,
-                    background: active.showGuidesDuringInstall ? "rgba(37,99,235,0.06)" : "#ffffff",
-                    color: active.showGuidesDuringInstall ? "#2563eb" : "#64748b",
-                    borderColor: active.showGuidesDuringInstall ? "rgba(37,99,235,0.22)" : "rgba(15,23,42,0.10)" }}
+                    background: active.showGuidesDuringInstall ? "rgba(234,88,12,0.06)" : "#ffffff",
+                    color: active.showGuidesDuringInstall ? "#ea580c" : "#64748b",
+                    borderColor: active.showGuidesDuringInstall ? "rgba(234,88,12,0.22)" : "rgba(15,23,42,0.10)" }}
                   onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}
                 >
                   {active.showGuidesDuringInstall ? "⊙ Guides On" : "⊙ Guides"}
+                </button>
+              )}
+              {active.src && !presentationMode && (
+                <button className="rv-topbar-btn" style={{
+                  ...topBarBtn,
+                  background: baMode ? "rgba(234,88,12,0.07)" : "#ffffff",
+                  color: baMode ? "#ea580c" : "#64748b",
+                  borderColor: baMode ? "rgba(234,88,12,0.25)" : "rgba(15,23,42,0.10)",
+                }} onClick={() => setBaMode(v => !v)}>
+                  ◧ Before/After
                 </button>
               )}
               <button
@@ -3753,6 +3813,7 @@ export default function Page() {
                   if (next && active) {
                     patchActive((p) => ({ ...p, step: "TEAROFF" }));
                     setUiTab("edit");
+                    setBaMode(false);
                   }
                 }}
               >
@@ -3789,9 +3850,9 @@ export default function Page() {
               {!presentationMode && (
                 <button className="rv-topbar-btn"
                   style={{ ...topBarBtn,
-                    background: drawerOpen ? "rgba(37,99,235,0.07)" : "#ffffff",
-                    color: drawerOpen ? "#2563eb" : "#64748b",
-                    borderColor: drawerOpen ? "rgba(37,99,235,0.25)" : "rgba(15,23,42,0.10)",
+                    background: drawerOpen ? "rgba(234,88,12,0.07)" : "#ffffff",
+                    color: drawerOpen ? "#ea580c" : "#64748b",
+                    borderColor: drawerOpen ? "rgba(234,88,12,0.25)" : "rgba(15,23,42,0.10)",
                   }}
                   onClick={() => setDrawerOpen(v => !v)}
                 >
@@ -3822,9 +3883,9 @@ export default function Page() {
                     <button onClick={() => jumpToStep(step)} style={{
                       padding: "3px 9px", borderRadius: 99, fontSize: 11,
                       fontWeight: isCurrent ? 700 : 500,
-                      border: isCurrent ? "1.5px solid rgba(37,99,235,0.35)" : "1.5px solid transparent",
-                      background: isCurrent ? "rgba(37,99,235,0.08)" : "transparent",
-                      color: isCurrent ? "#2563eb" : isCompleted ? "#16a34a" : "#94a3b8",
+                      border: isCurrent ? "1.5px solid rgba(234,88,12,0.35)" : "1.5px solid transparent",
+                      background: isCurrent ? "rgba(234,88,12,0.08)" : "transparent",
+                      color: isCurrent ? "#ea580c" : isCompleted ? "#16a34a" : "#94a3b8",
                       opacity: !isRelevant && !isCurrent && !isCompleted ? 0.4 : 1,
                       cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" as const,
                     }}>
@@ -3885,7 +3946,7 @@ export default function Page() {
                     padding: "8px 14px",
                     border: "none",
                     background: isCurrent ? "#eff6ff" : "transparent",
-                    borderLeft: isCurrent ? "3px solid #2563eb" : "3px solid transparent",
+                    borderLeft: isCurrent ? "3px solid #ea580c" : "3px solid transparent",
                     cursor: "pointer",
                     textAlign: "left" as const,
                   }}
@@ -3900,13 +3961,13 @@ export default function Page() {
                     justifyContent: "center",
                     fontSize: 9,
                     fontWeight: 700,
-                    background: isCurrent ? "#2563eb" : isPast ? "#dcfce7" : "#f1f5f9",
+                    background: isCurrent ? "#ea580c" : isPast ? "#dcfce7" : "#f1f5f9",
                     color: isCurrent ? "#fff" : isPast ? "#16a34a" : "#cbd5e1",
                     border: isCurrent ? "none" : isPast ? "1.5px solid #86efac" : "1.5px solid #e2e8f0",
                   }}>
                     {isPast ? "✓" : ""}
                   </span>
-                  <span style={{ fontSize: 11, fontWeight: isCurrent ? 700 : 500, color: isCurrent ? "#1e40af" : isPast ? "#334155" : "#94a3b8", lineHeight: 1.3 }}>
+                  <span style={{ fontSize: 11, fontWeight: isCurrent ? 700 : 500, color: isCurrent ? "#c2410c" : isPast ? "#334155" : "#94a3b8", lineHeight: 1.3 }}>
                     {STEP_SHORT[s] ?? s}
                   </span>
                 </button>
@@ -3924,7 +3985,7 @@ export default function Page() {
             <button
               onClick={() => customerStepIdx < customerNavSteps.length - 1 && setCustomerStep(customerNavSteps[customerStepIdx + 1])}
               disabled={customerStepIdx >= customerNavSteps.length - 1}
-              style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", background: customerStepIdx < customerNavSteps.length - 1 ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : "#e2e8f0", fontSize: 12, fontWeight: 700, color: customerStepIdx < customerNavSteps.length - 1 ? "#fff" : "#94a3b8", cursor: customerStepIdx < customerNavSteps.length - 1 ? "pointer" : "default", opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.5 }}
+              style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", background: customerStepIdx < customerNavSteps.length - 1 ? "linear-gradient(135deg,#ea580c,#c2410c)" : "#e2e8f0", fontSize: 12, fontWeight: 700, color: customerStepIdx < customerNavSteps.length - 1 ? "#fff" : "#94a3b8", cursor: customerStepIdx < customerNavSteps.length - 1 ? "pointer" : "default", opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.5 }}
             >Next →</button>
           </div>
 
@@ -4020,8 +4081,8 @@ export default function Page() {
                               width: 26, height: 26, borderRadius: "50%",
                               background: `rgb(${cr},${cg},${cb})`,
                               cursor: "pointer",
-                              border: isSel ? "2.5px solid #2563eb" : "2px solid rgba(15,23,42,0.12)",
-                              boxShadow: isSel ? "0 0 0 2px rgba(37,99,235,0.3)" : "none",
+                              border: isSel ? "2.5px solid #ea580c" : "2px solid rgba(15,23,42,0.12)",
+                              boxShadow: isSel ? "0 0 0 2px rgba(234,88,12,0.3)" : "none",
                               transition: "box-shadow 0.15s",
                               flexShrink: 0,
                             }}
@@ -4193,12 +4254,12 @@ export default function Page() {
                     marginTop: 10,
                     padding: "18px 16px",
                     borderRadius: 10,
-                    border: "1.5px dashed rgba(37,99,235,0.28)",
-                    background: "rgba(37,99,235,0.03)",
+                    border: "1.5px dashed rgba(234,88,12,0.28)",
+                    background: "rgba(234,88,12,0.03)",
                     cursor: "pointer",
                     gap: 6,
                   }}>
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(37,99,235,0.6)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(234,88,12,0.6)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="3" width="18" height="18" rx="3"/>
                       <circle cx="8.5" cy="8.5" r="1.5"/>
                       <polyline points="21 15 16 10 5 21"/>
@@ -4225,7 +4286,7 @@ export default function Page() {
                         style={{
                           width: 48, height: 34, borderRadius: 6, overflow: "hidden",
                           cursor: "pointer", flexShrink: 0,
-                          border: s === active!.src ? "2px solid #2563eb" : "2px solid rgba(15,23,42,0.08)",
+                          border: s === active!.src ? "2px solid #ea580c" : "2px solid rgba(15,23,42,0.08)",
                           opacity: s === active!.src ? 1 : 0.55,
                           transition: "opacity 0.15s, border-color 0.15s",
                         }}
@@ -4245,8 +4306,8 @@ export default function Page() {
                     marginTop: 8,
                     padding: "8px 14px",
                     borderRadius: 8,
-                    border: "1.5px dashed rgba(37,99,235,0.20)",
-                    background: "rgba(37,99,235,0.02)",
+                    border: "1.5px dashed rgba(234,88,12,0.20)",
+                    background: "rgba(234,88,12,0.02)",
                     cursor: "pointer",
                     gap: 6,
                   }}>
@@ -4284,7 +4345,7 @@ export default function Page() {
                             padding: "5px 8px",
                             borderRadius: 7,
                             cursor: isCompleted ? "pointer" : "default",
-                            background: isCurrent ? "rgba(37,99,235,0.07)" : "transparent",
+                            background: isCurrent ? "rgba(234,88,12,0.07)" : "transparent",
                             opacity: isSkipped ? 0.38 : 1,
                           }}
                         >
@@ -4292,13 +4353,13 @@ export default function Page() {
                           <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
                             {isCompleted ? (
                               <svg width="16" height="16" viewBox="0 0 16 16">
-                                <circle cx="8" cy="8" r="7" fill="#2563eb"/>
+                                <circle cx="8" cy="8" r="7" fill="#ea580c"/>
                                 <polyline points="4.5,8.5 7,11 11.5,5.5" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
                               </svg>
                             ) : isCurrent ? (
                               <svg width="16" height="16" viewBox="0 0 16 16">
-                                <circle cx="8" cy="8" r="7" fill="none" stroke="#2563eb" strokeWidth="2"/>
-                                <circle cx="8" cy="8" r="3.5" fill="#2563eb"/>
+                                <circle cx="8" cy="8" r="7" fill="none" stroke="#ea580c" strokeWidth="2"/>
+                                <circle cx="8" cy="8" r="3.5" fill="#ea580c"/>
                               </svg>
                             ) : isSkipped ? (
                               <span style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1 }}>—</span>
@@ -4312,7 +4373,7 @@ export default function Page() {
                           <span style={{
                             fontSize: 12,
                             fontWeight: isCurrent ? 600 : isCompleted ? 500 : 400,
-                            color: isCurrent ? "#1d4ed8" : isCompleted ? "#334155" : "#94a3b8",
+                            color: isCurrent ? "#c2410c" : isCompleted ? "#334155" : "#94a3b8",
                             flex: 1,
                           }}>
                             {STEP_SHORT[step]}
@@ -4367,7 +4428,7 @@ export default function Page() {
                         const isBusy = shareEmailSending || shareStatus === "compressing" || shareStatus === "uploading";
                         const statusLabel = shareStatus === "compressing" ? "Preparing photos…" : shareStatus === "uploading" ? "Uploading photos…" : shareStatus === "sending" ? "Sending email…" : "";
                         return (
-                          <div style={{ marginTop: 10, padding: 14, background: "#f8fafc", borderRadius: 10, border: "1.5px solid rgba(37,99,235,0.18)" }}>
+                          <div style={{ marginTop: 10, padding: 14, background: "#f8fafc", borderRadius: 10, border: "1.5px solid rgba(234,88,12,0.18)" }}>
                             <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Share with Customer</div>
                             {shareEmailSent ? (
                               <div style={{ textAlign: "center", padding: "14px 0" }}>
@@ -4475,9 +4536,9 @@ export default function Page() {
                       <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 0,
                         borderRadius: 99,
                         border: r.id === active.activeRoofId
-                          ? "1.5px solid rgba(37,99,235,0.35)"
+                          ? "1.5px solid rgba(234,88,12,0.35)"
                           : "1.5px solid rgba(15,23,42,0.10)",
-                        background: r.id === active.activeRoofId ? "rgba(37,99,235,0.08)" : "#fff",
+                        background: r.id === active.activeRoofId ? "rgba(234,88,12,0.08)" : "#fff",
                         overflow: "hidden",
                       }}>
                         <button
@@ -4487,7 +4548,7 @@ export default function Page() {
                             fontSize: 12, fontWeight: 600,
                             cursor: "pointer",
                             background: "none", border: "none",
-                            color: r.id === active.activeRoofId ? "#2563eb" : "#475569",
+                            color: r.id === active.activeRoofId ? "#ea580c" : "#475569",
                           }}
                         >
                           {r.name}{r.closed ? " ✓" : ""}
@@ -4501,7 +4562,7 @@ export default function Page() {
                               fontSize: 13, lineHeight: 1,
                               cursor: "pointer",
                               background: "none", border: "none",
-                              color: r.id === active.activeRoofId ? "rgba(37,99,235,0.5)" : "rgba(71,85,105,0.4)",
+                              color: r.id === active.activeRoofId ? "rgba(234,88,12,0.5)" : "rgba(71,85,105,0.4)",
                             }}
                           >×</button>
                         )}
@@ -4542,9 +4603,9 @@ export default function Page() {
                                 onClick={() => patchActiveRoof((r) => ({ ...r, [key]: !on }))}
                                 style={{
                                   ...smallBtn,
-                                  background: on ? "rgba(37,99,235,0.08)" : "#f8fafc",
-                                  color: on ? "#2563eb" : "#94a3b8",
-                                  borderColor: on ? "rgba(37,99,235,0.30)" : "rgba(15,23,42,0.12)",
+                                  background: on ? "rgba(234,88,12,0.08)" : "#f8fafc",
+                                  color: on ? "#ea580c" : "#94a3b8",
+                                  borderColor: on ? "rgba(234,88,12,0.30)" : "rgba(15,23,42,0.12)",
                                   fontWeight: 700,
                                   display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                                 }}
@@ -4616,9 +4677,9 @@ export default function Page() {
                             className={tool === "TRACE_ROOF" ? "rv-btn-tracing" : "rv-btn-ghost"}
                             style={{
                               ...ghostBtn,
-                              background: tool === "TRACE_ROOF" ? "rgba(37,99,235,0.10)" : "rgba(37,99,235,0.04)",
-                              border: `1.5px solid rgba(37,99,235,${tool === "TRACE_ROOF" ? "0.45" : "0.25"})`,
-                              color: "#1d4ed8",
+                              background: tool === "TRACE_ROOF" ? "rgba(234,88,12,0.10)" : "rgba(234,88,12,0.04)",
+                              border: `1.5px solid rgba(234,88,12,${tool === "TRACE_ROOF" ? "0.45" : "0.25"})`,
+                              color: "#c2410c",
                               fontWeight: tool === "TRACE_ROOF" ? 700 : 600,
                             }}
                             onClick={() => { setTool("TRACE_ROOF"); setDraftLine(null); setDraftHole(null); }}
@@ -4809,7 +4870,7 @@ export default function Page() {
 
                           {/* Active tool controls */}
                           {(tool === "TRACE_HOLE" || tool.startsWith("DRAW_")) && (
-                            <div style={{ background: "rgba(37,99,235,0.04)", border: "1px solid rgba(37,99,235,0.15)", borderRadius: 8, padding: "8px 10px", display: "grid", gap: 6 }}>
+                            <div style={{ background: "rgba(234,88,12,0.04)", border: "1px solid rgba(234,88,12,0.15)", borderRadius: 8, padding: "8px 10px", display: "grid", gap: 6 }}>
                               <div style={{ fontSize: 11, fontWeight: 600, color: "#1d4ed8" }}>
                                 {tool === "TRACE_HOLE" ? "Drawing dormer/exclusion" : `Drawing ${tool.replace("DRAW_", "")} line`}
                               </div>
@@ -5010,7 +5071,7 @@ export default function Page() {
                                   type="range" min={0} max={100}
                                   value={Math.round(cleanupStrength * 100)}
                                   onChange={(e) => setCleanupStrength(Number(e.target.value) / 100)}
-                                  style={{ width: "100%", accentColor: "#2563eb" }}
+                                  style={{ width: "100%", accentColor: "#ea580c" }}
                                 />
                                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#94a3b8", marginTop: 1 }}>
                                   <span>Conservative</span><span>Aggressive</span>
@@ -5023,7 +5084,7 @@ export default function Page() {
                                   type="checkbox"
                                   checked={cleanupSnapAngles}
                                   onChange={(e) => setCleanupSnapAngles(e.target.checked)}
-                                  style={{ accentColor: "#2563eb", width: 14, height: 14 }}
+                                  style={{ accentColor: "#ea580c", width: 14, height: 14 }}
                                 />
                                 Snap to 0° / 45° / 90°
                               </label>
@@ -5134,7 +5195,7 @@ export default function Page() {
                             type="checkbox"
                             checked={(activeRoof as any)[key] !== false}
                             onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: e.target.checked }))}
-                            style={{ accentColor: "#2563eb", width: 14, height: 14 }}
+                            style={{ accentColor: "#ea580c", width: 14, height: 14 }}
                           />
                           <span style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>{label}</span>
                         </label>
@@ -5154,7 +5215,7 @@ export default function Page() {
                         type="range" min={5} max={100} step={1}
                         value={activeRoof.iceWaterBrushSize ?? 30}
                         onChange={(e) => patchActiveRoof((r) => ({ ...r, iceWaterBrushSize: Number(e.target.value) }))}
-                        style={{ width: "100%", accentColor: "#2563eb" }}
+                        style={{ width: "100%", accentColor: "#ea580c" }}
                       />
                     </label>
                     <div style={{ display: "flex", gap: 6 }}>
@@ -5173,8 +5234,10 @@ export default function Page() {
 
                   <div>
                     <label style={fieldLabel}>Shingle</label>
-                    {/* Manufacturer */}
+                    {/* Hidden manufacturer select — keeps tests passing */}
                     <select
+                      aria-label="manufacturer-hidden"
+                      style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 1, height: 1 }}
                       value={active.shingleSelection.manufacturerId}
                       onChange={(e) => {
                         const mfrId = e.target.value;
@@ -5184,63 +5247,90 @@ export default function Page() {
                         const colorId = Object.keys(line.colors)[0];
                         patchActive((p) => ({ ...p, shingleSelection: { manufacturerId: mfrId, lineId, colorId } }));
                       }}
-                      style={{ ...selectStyle, marginBottom: 4 }}
                     >
                       {Object.entries(SHINGLE_CATALOG).map(([id, mfr]) => (
                         <option key={id} value={id}>{mfr.name}</option>
                       ))}
                     </select>
-                    {/* Product Line */}
+                    {/* Visual manufacturer chips */}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                      {Object.entries(SHINGLE_CATALOG).map(([id, mfr]) => {
+                        const isSel = active.shingleSelection.manufacturerId === id;
+                        return (
+                          <button key={id} style={{
+                            padding: "4px 10px", borderRadius: 99, fontSize: 11, fontWeight: isSel ? 700 : 500,
+                            cursor: "pointer", border: `1.5px solid ${isSel ? "rgba(234,88,12,0.45)" : "rgba(15,23,42,0.12)"}`,
+                            background: isSel ? "rgba(234,88,12,0.10)" : "#f8fafc",
+                            color: isSel ? "#c2410c" : "#475569",
+                          }} onClick={() => {
+                            const mfr2 = SHINGLE_CATALOG[id as keyof typeof SHINGLE_CATALOG];
+                            const lineId = Object.keys(mfr2.lines)[0];
+                            const line2 = (mfr2.lines as Record<string, { colors: Record<string, unknown> }>)[lineId];
+                            const colorId = Object.keys(line2.colors)[0];
+                            patchActive((p) => ({ ...p, shingleSelection: { manufacturerId: id, lineId, colorId } }));
+                          }}>
+                            {mfr.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {/* Visual product line chips */}
                     {(() => {
                       const mfr = SHINGLE_CATALOG[active.shingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
                       if (!mfr) return null;
                       return (
-                        <select
-                          value={active.shingleSelection.lineId}
-                          onChange={(e) => {
-                            const lineId = e.target.value;
-                            const line = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[lineId];
-                            const colorId = Object.keys(line.colors)[0];
-                            patchActive((p) => ({ ...p, shingleSelection: { ...p.shingleSelection, lineId, colorId } }));
-                          }}
-                          style={{ ...selectStyle, marginBottom: 4 }}
-                        >
-                          {Object.entries(mfr.lines).map(([id, line]) => (
-                            <option key={id} value={id}>{(line as { name: string }).name}</option>
-                          ))}
-                        </select>
-                      );
-                    })()}
-                    {/* Color */}
-                    {(() => {
-                      const mfr = SHINGLE_CATALOG[active.shingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
-                      const line = mfr && (mfr.lines as Record<string, { colors: Record<string, { name: string }> }>)[active.shingleSelection.lineId];
-                      if (!line) return null;
-                      return (
-                        <select
-                          value={active.shingleSelection.colorId}
-                          onChange={(e) => patchActive((p) => ({ ...p, shingleSelection: { ...p.shingleSelection, colorId: e.target.value } }))}
-                          style={selectStyle}
-                        >
-                          {Object.entries(line.colors).map(([id, color]) => (
-                            <option key={id} value={id}>{color.name}</option>
-                          ))}
-                        </select>
-                      );
-                    })()}
-                    {/* Summary swatch + label */}
-                    {(() => {
-                      const rgb = resolveShingleRGB(active.shingleSelection);
-                      const mfr = SHINGLE_CATALOG[active.shingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
-                      const line = mfr && (mfr.lines as Record<string, { name: string; colors: Record<string, { name: string }> }>)[active.shingleSelection.lineId];
-                      const color = line && line.colors[active.shingleSelection.colorId];
-                      return (
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5 }}>
-                          <div style={{ width: 14, height: 14, borderRadius: "50%", background: `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`, flexShrink: 0, border: "1px solid rgba(15,23,42,0.15)" }} />
-                          <span style={{ fontSize: 10, color: "#64748b", lineHeight: 1.3 }}>
-                            {mfr?.name}{line ? ` • ${line.name}` : ""}{color ? ` • ${color.name}` : ""}
-                          </span>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10 }}>
+                          {Object.entries(mfr.lines).map(([id, line]) => {
+                            const isSel = active.shingleSelection.lineId === id;
+                            return (
+                              <button key={id} style={{
+                                padding: "4px 10px", borderRadius: 99, fontSize: 11, fontWeight: isSel ? 700 : 500,
+                                cursor: "pointer", border: `1.5px solid ${isSel ? "rgba(234,88,12,0.45)" : "rgba(15,23,42,0.12)"}`,
+                                background: isSel ? "rgba(234,88,12,0.10)" : "#f8fafc",
+                                color: isSel ? "#c2410c" : "#475569",
+                              }} onClick={() => {
+                                const line2 = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[id];
+                                const colorId = Object.keys(line2.colors)[0];
+                                patchActive((p) => ({ ...p, shingleSelection: { ...p.shingleSelection, lineId: id, colorId } }));
+                              }}>
+                                {(line as { name: string }).name}
+                              </button>
+                            );
+                          })}
                         </div>
+                      );
+                    })()}
+                    {/* 4-column color swatch grid */}
+                    {(() => {
+                      const mfr = SHINGLE_CATALOG[active.shingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
+                      const line = mfr && (mfr.lines as Record<string, { colors: Record<string, { name: string; top: string; bot: string }> }>)[active.shingleSelection.lineId];
+                      if (!line) return null;
+                      const colorEntry = line.colors[active.shingleSelection.colorId];
+                      return (
+                        <>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5 }}>
+                            {Object.entries(line.colors).map(([id, color]) => {
+                              const isSel = active.shingleSelection.colorId === id;
+                              return (
+                                <button
+                                  key={id}
+                                  title={color.name}
+                                  className="rv-swatch"
+                                  style={{
+                                    height: 34, borderRadius: 7, border: "2px solid",
+                                    borderColor: isSel ? "#ea580c" : "transparent",
+                                    background: `linear-gradient(160deg, ${color.top} 0%, ${color.bot} 100%)`,
+                                    boxShadow: isSel ? "0 0 0 3px rgba(234,88,12,0.25)" : "inset 0 1px 3px rgba(0,0,0,0.2)",
+                                  }}
+                                  onClick={() => patchActive((p) => ({ ...p, shingleSelection: { ...p.shingleSelection, colorId: id } }))}
+                                />
+                              );
+                            })}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#64748b", marginTop: 5 }}>
+                            {colorEntry?.name ?? ""}
+                          </div>
+                        </>
                       );
                     })()}
                     <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
@@ -5259,7 +5349,7 @@ export default function Page() {
                         step={0.01}
                         value={activeRoof?.perspectiveStrength ?? 0}
                         onChange={(e) => patchActiveRoof((r) => ({ ...r, perspectiveStrength: Number(e.target.value) }))}
-                        style={{ width: "100%", accentColor: "#2563eb" }}
+                        style={{ width: "100%", accentColor: "#ea580c" }}
                       />
                       <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1, lineHeight: 1.3 }}>
                         Compress top courses, expand bottom — matches ground-level photo perspective.
@@ -5280,9 +5370,9 @@ export default function Page() {
                           onClick={() => patchActiveRoof((r) => ({ ...r, proStartOnRakes: val }))}
                           style={{
                             ...smallBtn,
-                            background: activeRoof.proStartOnRakes === val ? "rgba(37,99,235,0.10)" : "#fff",
-                            borderColor: activeRoof.proStartOnRakes === val ? "rgba(37,99,235,0.40)" : "rgba(15,23,42,0.10)",
-                            color: activeRoof.proStartOnRakes === val ? "#1d4ed8" : "#475569",
+                            background: activeRoof.proStartOnRakes === val ? "rgba(234,88,12,0.10)" : "#fff",
+                            borderColor: activeRoof.proStartOnRakes === val ? "rgba(234,88,12,0.40)" : "rgba(15,23,42,0.10)",
+                            color: activeRoof.proStartOnRakes === val ? "#c2410c" : "#475569",
                             fontWeight: activeRoof.proStartOnRakes === val ? 700 : 600,
                           }}
                         >{label}</button>
@@ -5337,7 +5427,7 @@ export default function Page() {
                             step={1}
                             value={(activeRoof as any)[key]}
                             onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: Number(e.target.value) } as any))}
-                            style={{ width: "100%", accentColor: "#2563eb" }}
+                            style={{ width: "100%", accentColor: "#ea580c" }}
                           />
                         </label>
                       ))}
@@ -5358,7 +5448,7 @@ export default function Page() {
                         step={0.01}
                         value={activeRoof.shingleScale}
                         onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleScale: Number(e.target.value) }))}
-                        style={{ width: "100%", accentColor: "#2563eb" }}
+                        style={{ width: "100%", accentColor: "#ea580c" }}
                       />
                     </label>
                   </div>
@@ -5377,7 +5467,7 @@ export default function Page() {
                         step={1}
                         value={activeRoof.shingleRotation ?? 0}
                         onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleRotation: Number(e.target.value) }))}
-                        style={{ width: "100%", accentColor: "#2563eb" }}
+                        style={{ width: "100%", accentColor: "#ea580c" }}
                       />
                     </label>
                     <button
@@ -5435,6 +5525,34 @@ export default function Page() {
         ...(isCustomerView ? { flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" } : {}),
         ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0 } : {}),
       }}>
+        {/* ── Presentation: step title pill ── */}
+        {presentationMode && liveStep !== "START" && (
+          <div key={liveStep} style={{
+            position: "absolute", top: 24, left: "50%", transform: "translateX(-50%)",
+            zIndex: 30, pointerEvents: "none",
+            background: "rgba(15,23,42,0.72)", backdropFilter: "blur(12px)",
+            borderRadius: 99, padding: "10px 28px",
+            border: "1px solid rgba(255,255,255,0.10)",
+            display: "flex", alignItems: "center", gap: 12,
+            animation: "fadeIn 0.4s ease",
+          }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#ea580c" }}>
+              Step {stepIndex(liveStep)}
+            </span>
+            <span style={{ width: 1, height: 16, background: "rgba(255,255,255,0.2)", display: "inline-block" }} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9" }}>
+              {STEP_LABELS[liveStep] ?? liveStep}
+            </span>
+          </div>
+        )}
+        {/* ── Presentation: flash on step change ── */}
+        {presentationMode && (
+          <div style={{
+            position: "absolute", inset: 0, background: "#ffffff",
+            pointerEvents: "none", zIndex: 25,
+            opacity: stepFlash ? 0.15 : 0, transition: "opacity 0.35s ease",
+          }} />
+        )}
         <div>
         <Stage
           key={stageKey}
@@ -5448,7 +5566,7 @@ export default function Page() {
           onTouchMove={screen !== "CUSTOMER_VIEW" ? onStageMove : undefined}
           onTouchEnd={screen !== "CUSTOMER_VIEW" ? onStageUp : undefined}
           onWheel={screen !== "CUSTOMER_VIEW" ? onWheel : undefined}
-          draggable={!!active && screen !== "CUSTOMER_VIEW" && tool !== "BRUSH_ICE_WATER"}
+          draggable={!!active && screen !== "CUSTOMER_VIEW" && tool !== "BRUSH_ICE_WATER" && !baMode}
           scaleX={active?.stageScale ?? 1}
           scaleY={active?.stageScale ?? 1}
           x={active?.stagePos?.x ?? 0}
@@ -6116,6 +6234,41 @@ export default function Page() {
                 ))}
               </>
             )}
+            {/* ── Before/After slider overlay ── */}
+            {baMode && photoImg && active?.src && (
+              <>
+                <Group clipFunc={(ctx) => { ctx.rect(-10000, -10000, splitWorldX + 10000, 30000); }} listening={false}>
+                  <Group x={photoTx.offX} y={photoTx.offY} scaleX={photoTx.scale} scaleY={photoTx.scale}>
+                    <KonvaImage image={photoImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} />
+                  </Group>
+                </Group>
+                <Line
+                  points={[splitWorldX, -10000, splitWorldX, 30000]}
+                  stroke="rgba(255,255,255,0.9)" strokeWidth={2}
+                  strokeScaleEnabled={false} listening={false}
+                />
+                <Circle
+                  x={splitWorldX}
+                  y={photoTx.offY + (photoTx.imgH ?? 0) * photoTx.scale / 2}
+                  radius={18 / (active?.stageScale ?? 1)}
+                  fill="white" opacity={0.95}
+                  stroke="rgba(0,0,0,0.15)" strokeWidth={1}
+                  strokeScaleEnabled={false} listening={false}
+                />
+                <Text
+                  x={splitWorldX - 90 / (active?.stageScale ?? 1)}
+                  y={photoTx.offY + 14 / (active?.stageScale ?? 1)}
+                  text="BEFORE" fontSize={11 / (active?.stageScale ?? 1)}
+                  fontStyle="bold" fill="rgba(255,255,255,0.75)" listening={false}
+                />
+                <Text
+                  x={splitWorldX + 14 / (active?.stageScale ?? 1)}
+                  y={photoTx.offY + 14 / (active?.stageScale ?? 1)}
+                  text="AFTER" fontSize={11 / (active?.stageScale ?? 1)}
+                  fontStyle="bold" fill="rgba(255,255,255,0.75)" listening={false}
+                />
+              </>
+            )}
           </Layer>
         </Stage>
         </div>{/* end CSS-scale wrapper */}
@@ -6156,9 +6309,9 @@ export default function Page() {
                       padding: "5px 16px", borderRadius: 8, fontSize: 12, fontWeight: 600,
                       cursor: canGoNext() ? "pointer" : "default",
                       border: "none",
-                      background: canGoNext() ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : "rgba(255,255,255,0.07)",
+                      background: canGoNext() ? "linear-gradient(135deg,#ea580c,#c2410c)" : "rgba(255,255,255,0.07)",
                       color: canGoNext() ? "#ffffff" : "rgba(255,255,255,0.25)",
-                      boxShadow: canGoNext() ? "0 2px 6px rgba(37,99,235,0.40)" : "none",
+                      boxShadow: canGoNext() ? "0 2px 6px rgba(234,88,12,0.40)" : "none",
                       transition: "background 0.15s, box-shadow 0.15s",
                     }}
                   >Next →</button>

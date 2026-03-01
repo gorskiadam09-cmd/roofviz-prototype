@@ -36,9 +36,9 @@ body {
 }
 
 @keyframes pulse-ring {
-  0%   { box-shadow: 0 0 0 0 rgba(37,99,235,0.35); }
-  70%  { box-shadow: 0 0 0 10px rgba(37,99,235,0); }
-  100% { box-shadow: 0 0 0 0 rgba(37,99,235,0); }
+  0%   { box-shadow: 0 0 0 0 rgba(234,88,12,0.35); }
+  70%  { box-shadow: 0 0 0 10px rgba(234,88,12,0); }
+  100% { box-shadow: 0 0 0 0 rgba(234,88,12,0); }
 }
 
 @keyframes shimmer {
@@ -59,7 +59,7 @@ body {
 }
 .rv-project-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 12px 32px rgba(15,23,42,0.12), 0 0 0 1.5px rgba(37,99,235,0.14) !important;
+  box-shadow: 0 12px 32px rgba(15,23,42,0.12), 0 0 0 1.5px rgba(234,88,12,0.20) !important;
 }
 
 /* Staggered entrance */
@@ -83,8 +83,8 @@ body {
 }
 .rv-btn-primary:hover:not(:disabled) {
   filter: brightness(1.06);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(37,99,235,0.36) !important;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(234,88,12,0.45) !important;
 }
 .rv-btn-primary:active:not(:disabled) {
   transform: translateY(0);
@@ -102,7 +102,7 @@ body {
 }
 .rv-btn-green:hover:not(:disabled) {
   filter: brightness(1.07);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
   box-shadow: 0 6px 16px rgba(22,163,74,0.36) !important;
 }
 .rv-btn-green:active:not(:disabled) {
@@ -115,9 +115,10 @@ body {
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.12s ease;
 }
 .rv-btn-ghost:hover:not(:disabled) {
-  background: rgba(37,99,235,0.05) !important;
-  border-color: rgba(37,99,235,0.22) !important;
-  color: #2563eb !important;
+  background: rgba(234,88,12,0.05) !important;
+  border-color: rgba(234,88,12,0.22) !important;
+  color: #ea580c !important;
+  transform: translateY(-1px);
 }
 .rv-btn-ghost:disabled {
   opacity: 0.4;
@@ -137,11 +138,12 @@ body {
 /* ── Top bar button ─────────────────────────────────── */
 
 .rv-topbar-btn {
-  transition: background 0.13s ease, border-color 0.13s ease, color 0.13s ease, box-shadow 0.13s ease;
+  transition: background 0.13s ease, border-color 0.13s ease, color 0.13s ease, box-shadow 0.13s ease, transform 0.13s ease;
 }
 .rv-topbar-btn:hover:not(:disabled) {
   background: rgba(15,23,42,0.04) !important;
   border-color: rgba(15,23,42,0.20) !important;
+  transform: translateY(-1px);
 }
 
 /* ── Tab button ─────────────────────────────────────── */
@@ -206,3 +208,19 @@ body {
 
 .rv-logo-btn { transition: opacity 0.15s ease; }
 .rv-logo-btn:hover { opacity: 0.80; }
+
+/* ── Shingle color swatches ─────────────────────────── */
+
+.rv-swatch {
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.rv-swatch:hover {
+  transform: scale(1.10);
+}
+
+/* ── Small button hover lift ───────────────────────── */
+
+.rv-btn-small:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
