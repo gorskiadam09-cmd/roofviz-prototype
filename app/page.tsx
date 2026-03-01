@@ -170,6 +170,7 @@ type PhotoProject = {
 
   shingleColor: ShingleColor;
   shingleSelection: ShingleSelection;
+  textureColorStrength: number;  // 0–100: how strongly to tint the base texture
 
   showGuidesDuringInstall: boolean;
   showEditHandles: boolean;
@@ -355,6 +356,28 @@ function useHtmlImage(src?: string) {
     i.src = src;
   }, [src]);
 
+  return img;
+}
+
+// Loads a shingle texture image; if the specific path 404s, automatically falls
+// back to /shingles/_default/architectural.png, then to undefined (→ procedural).
+function useShingleBaseImage(specificSrc: string): HTMLImageElement | undefined {
+  const [img, setImg] = useState<HTMLImageElement | undefined>(undefined);
+  useEffect(() => {
+    if (!specificSrc || typeof window === "undefined") { setImg(undefined); return; }
+    let cancelled = false;
+    function tryLoad(src: string, fallback?: string) {
+      const image = new window.Image();
+      image.onload = () => { if (!cancelled) setImg(image); };
+      image.onerror = () => {
+        if (!cancelled && fallback) tryLoad(fallback);
+        else if (!cancelled) setImg(undefined);
+      };
+      image.src = src;
+    }
+    tryLoad(specificSrc, "/shingles/_default/architectural.png");
+    return () => { cancelled = true; };
+  }, [specificSrc]);
   return img;
 }
 
@@ -729,6 +752,72 @@ function shingleColorToSelection(c: ShingleColor): ShingleSelection {
     "Black":         "black",
   };
   return { manufacturerId: "generic", lineId: "standard", colorId: colorMap[c] ?? "barkwood" };
+}
+
+// Derives the /public/shingles/ path for a given selection.
+// camelCase colorId → kebab-case;  line name → slugified.
+function shingleTexturePath(sel: ShingleSelection): string {
+  const mfr = SHINGLE_CATALOG[sel.manufacturerId as keyof typeof SHINGLE_CATALOG];
+  const lineObj = mfr?.lines[sel.lineId as keyof typeof mfr.lines] as { name: string } | undefined;
+  const lineSlug = lineObj
+    ? lineObj.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")
+    : sel.lineId;
+  const colorSlug = sel.colorId.replace(/([A-Z])/g, (m) => `-${m.toLowerCase()}`);
+  return `/shingles/${sel.manufacturerId}/${lineSlug}/${colorSlug}.png`;
+}
+
+// Renders a base texture image tinted toward the catalog palette colors.
+// strength 0 = pure texture; 1 = full multiply tint.
+function applyColorTint(
+  img: HTMLImageElement,
+  palette: { top: string; bot: string },
+  strength: number,
+): string {
+  if (typeof document === "undefined") return "";
+  const S = 512;
+  const c = document.createElement("canvas");
+  c.width = S; c.height = S;
+  const ctx = c.getContext("2d")!;
+  // Guard: jsdom test mock may not implement drawImage
+  if (typeof (ctx as CanvasRenderingContext2D & { drawImage?: unknown }).drawImage !== "function") return "";
+  ctx.drawImage(img, 0, 0, S, S);
+  if (strength > 0.01) {
+    const grad = ctx.createLinearGradient(0, 0, 0, S);
+    grad.addColorStop(0, palette.top);
+    grad.addColorStop(1, palette.bot);
+    ctx.globalCompositeOperation = "multiply";
+    ctx.globalAlpha = strength;
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, S, S);
+    // Soft screen pass to recover a hint of highlight
+    ctx.globalCompositeOperation = "screen";
+    ctx.globalAlpha = strength * 0.10;
+    ctx.fillStyle = palette.top;
+    ctx.fillRect(0, 0, S, S);
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  return c.toDataURL("image/jpeg", 0.88);
+}
+
+// Tiny noise canvas generated once — used as a repeating grain overlay on shingles.
+let _shingleNoiseCanvas: HTMLCanvasElement | null = null;
+function getShingleNoiseCanvas(): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  if (_shingleNoiseCanvas) return _shingleNoiseCanvas;
+  const SIZE = 128;
+  const c = document.createElement("canvas");
+  c.width = SIZE; c.height = SIZE;
+  const ctx = c.getContext("2d")!;
+  const id = ctx.createImageData(SIZE, SIZE);
+  for (let i = 0; i < id.data.length; i += 4) {
+    const v = Math.floor(Math.random() * 255);
+    id.data[i] = id.data[i + 1] = id.data[i + 2] = v;
+    id.data[i + 3] = 255;
+  }
+  ctx.putImageData(id, 0, 0);
+  _shingleNoiseCanvas = c;
+  return c;
 }
 
 function makeDeckingTexture(w: number, h: number) {
@@ -1517,6 +1606,7 @@ export default function Page() {
         activeRoofId: photoData.roofs[0]?.id ?? "",
         shingleColor: customerShingleColor,
         shingleSelection: shingleColorToSelection(customerShingleColor),
+        textureColorStrength: 70,
         showGuidesDuringInstall: false,
         showEditHandles: false,
         realisticMode: false,
@@ -1736,6 +1826,7 @@ export default function Page() {
             realisticMode: p.realisticMode ?? false,
             realisticStrength: p.realisticStrength ?? 0.6,
             shingleSelection: p.shingleSelection ?? shingleColorToSelection(p.shingleColor ?? "Barkwood"),
+            textureColorStrength: p.textureColorStrength ?? 70,
           }));
           const savedActiveId = localStorage.getItem("roofviz_v3_active");
           const restoredId = migrated.find((p) => p.id === savedActiveId)?.id ?? migrated[0].id;
@@ -2266,6 +2357,7 @@ export default function Page() {
       activeRoofId: roof1.id,
       shingleColor: "Barkwood",
       shingleSelection: { manufacturerId: "gaf", lineId: "hdz", colorId: "barkwood" },
+      textureColorStrength: 70,
       showGuidesDuringInstall: false,
       showEditHandles: false,
       realisticMode: false,
@@ -2861,11 +2953,28 @@ export default function Page() {
   }, [active?.id, texW, texH]);
   const syntheticImg = useHtmlImage(syntheticSrc);
 
+  // Specific texture path derived from catalog selection (may 404 → hook falls back)
+  const shingleTexSrc = useMemo(() => {
+    if (!active) return "";
+    return shingleTexturePath(active.shingleSelection);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.shingleSelection?.manufacturerId, active?.shingleSelection?.lineId, active?.shingleSelection?.colorId]);
+  const shingleBaseImg = useShingleBaseImage(shingleTexSrc);
+
   const shingleSrc = useMemo(() => {
     if (!active || typeof window === "undefined") return "";
+    if (shingleBaseImg) {
+      // Image loaded: tint toward catalog palette, controlled by textureColorStrength
+      return applyColorTint(
+        shingleBaseImg,
+        resolveShinglePalette(active.shingleSelection),
+        (active.textureColorStrength ?? 70) / 100,
+      );
+    }
+    // No image → fall back to procedural tile
     return makeShingleTexture(texW, texH, resolveShinglePalette(active.shingleSelection));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.id, active?.shingleSelection?.manufacturerId, active?.shingleSelection?.lineId, active?.shingleSelection?.colorId, texW, texH]);
+  }, [active?.id, active?.shingleSelection?.manufacturerId, active?.shingleSelection?.lineId, active?.shingleSelection?.colorId, active?.textureColorStrength, shingleBaseImg, texW, texH]);
   const shinglesImg = useHtmlImage(shingleSrc);
 
   // Photo-derived shingle texture — regenerated only when photo / realism settings change
@@ -5055,6 +5164,24 @@ export default function Page() {
                     <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
                       Colors are approximations. Verify final selections with manufacturer samples.
                     </div>
+                    {/* Texture Color Strength slider */}
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", ...fieldLabel as object, marginBottom: 2 }}>
+                        <span>Color Strength</span>
+                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{active.textureColorStrength ?? 70}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={active.textureColorStrength ?? 70}
+                        onChange={(e) => patchActive((p) => ({ ...p, textureColorStrength: Number(e.target.value) }))}
+                        style={{ width: "100%", accentColor: "#2563eb" }}
+                      />
+                      <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1, lineHeight: 1.3 }}>
+                        How strongly the catalog color tints the texture image.
+                      </div>
+                    </div>
                   </div>
 
                   {/* Pro-Start placement */}
@@ -5627,6 +5754,53 @@ export default function Page() {
                           <Rect x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} fill="rgba(0,0,0,0.06)" />
                         </>
                       )}
+
+                      {/* ── Shingle surface overlays: grain noise, directional light, vignette ──
+                          Always-on when shingles are visible. Subtle — don't affect color accuracy. */}
+                      {atLeast(currentStep, "SHINGLES") && (() => {
+                        const xs = r.outline.filter((_, i) => i % 2 === 0);
+                        const ys = r.outline.filter((_, i) => i % 2 === 1);
+                        if (!xs.length) return null;
+                        const bx = Math.min(...xs), bxMax = Math.max(...xs);
+                        const by = Math.min(...ys), byMax = Math.max(...ys);
+                        const bw = bxMax - bx || 1;
+                        const bh = byMax - by || 1;
+                        const noiseC = getShingleNoiseCanvas();
+                        return (
+                          <Group listening={false}>
+                            {/* Directional light: subtle bright top-left → shadow bottom-right */}
+                            <Rect
+                              x={bx} y={by} width={bw} height={bh}
+                              fillLinearGradientStartPoint={{ x: 0, y: 0 }}
+                              fillLinearGradientEndPoint={{ x: bw * 0.7, y: bh }}
+                              fillLinearGradientColorStops={[0, "rgba(255,255,255,0.07)", 0.45, "rgba(0,0,0,0)", 1, "rgba(0,0,0,0.13)"]}
+                              listening={false}
+                            />
+                            {/* Fine grain noise for tactile texture feel */}
+                            {noiseC && (
+                              <Rect
+                                x={-5000} y={-5000} width={12000} height={12000}
+                                opacity={0.04}
+                                fillPatternImage={noiseC as unknown as HTMLImageElement}
+                                fillPatternRepeat="repeat"
+                                fillPatternScaleX={0.55}
+                                fillPatternScaleY={0.55}
+                                listening={false}
+                              />
+                            )}
+                            {/* Perimeter vignette: darkens edges for depth */}
+                            <Rect
+                              x={bx} y={by} width={bw} height={bh}
+                              fillRadialGradientStartPoint={{ x: bw / 2, y: bh / 2 }}
+                              fillRadialGradientStartRadius={0}
+                              fillRadialGradientEndPoint={{ x: bw / 2, y: bh / 2 }}
+                              fillRadialGradientEndRadius={Math.max(bw, bh) * 0.75}
+                              fillRadialGradientColorStops={[0, "rgba(0,0,0,0)", 0.65, "rgba(0,0,0,0)", 1, "rgba(0,0,0,0.12)"]}
+                              listening={false}
+                            />
+                          </Group>
+                        );
+                      })()}
 
                       {/* ── Realistic lighting pass ──
                           Subtle shadow / highlight strokes along structure lines
