@@ -798,8 +798,15 @@ function shingleTexturePath(sel: ShingleSelection): string {
   return `/shingles/${sel.manufacturerId}/${lineSlug}/${colorSlug}.png`;
 }
 
-// Renders a base texture image tinted toward the catalog palette colors.
-// strength 0 = pure texture; 1 = full multiply tint.
+// Parse a 6-digit hex color → [r, g, b]
+function hexToRgb(hex: string): [number, number, number] {
+  const v = parseInt(hex.replace("#", ""), 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+// Renders a base texture tinted toward the catalog palette via gradient mapping (duotone).
+// Maps each pixel's luminance → bot color (dark areas) to top color (bright areas).
+// strength 0 = original texture; 1 = full duotone.
 function applyColorTint(
   img: HTMLImageElement,
   palette: { top: string; bot: string },
@@ -809,26 +816,43 @@ function applyColorTint(
   const S = 512;
   const c = document.createElement("canvas");
   c.width = S; c.height = S;
-  const ctx = c.getContext("2d")!;
-  // Guard: jsdom test mock may not implement drawImage
-  if (typeof (ctx as CanvasRenderingContext2D & { drawImage?: unknown }).drawImage !== "function") return "";
+  const ctx = c.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D | null;
+  if (!ctx) return "";
+  // Guard: jsdom test mock may not implement drawImage / getImageData
+  if (typeof (ctx as unknown as { drawImage?: unknown }).drawImage !== "function") return "";
   ctx.drawImage(img, 0, 0, S, S);
-  if (strength > 0.01) {
-    const grad = ctx.createLinearGradient(0, 0, 0, S);
-    grad.addColorStop(0, palette.top);
-    grad.addColorStop(1, palette.bot);
-    ctx.globalCompositeOperation = "multiply";
-    ctx.globalAlpha = strength;
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, S, S);
-    // Soft screen pass to recover a hint of highlight
-    ctx.globalCompositeOperation = "screen";
-    ctx.globalAlpha = strength * 0.10;
-    ctx.fillStyle = palette.top;
-    ctx.fillRect(0, 0, S, S);
+  if (strength <= 0.01) return c.toDataURL("image/jpeg", 0.88);
+
+  const imgData = ctx.getImageData(0, 0, S, S);
+  if (!imgData) return c.toDataURL("image/jpeg", 0.88);
+  const data = imgData.data;
+
+  const botRGB = hexToRgb(palette.bot);
+  const topRGB = hexToRgb(palette.top);
+
+  // Pass 1: find luminance range so the full bot→top gradient is always used
+  // regardless of the base texture's absolute brightness.
+  let lumaMin = 1, lumaMax = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const L = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) / 255;
+    if (L < lumaMin) lumaMin = L;
+    if (L > lumaMax) lumaMax = L;
   }
-  ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = "source-over";
+  const lumaRange = lumaMax - lumaMin || 1;
+
+  // Pass 2: gradient-map each pixel, then blend with original at `strength`
+  for (let i = 0; i < data.length; i += 4) {
+    const L = ((data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) / 255 - lumaMin) / lumaRange;
+    // Slight gamma lift so mid-tones read brighter (more vivid, less muddy)
+    const Lg = Math.pow(L, 0.80);
+    const cr = botRGB[0] + (topRGB[0] - botRGB[0]) * Lg;
+    const cg = botRGB[1] + (topRGB[1] - botRGB[1]) * Lg;
+    const cb = botRGB[2] + (topRGB[2] - botRGB[2]) * Lg;
+    data[i]     = Math.round(data[i]     * (1 - strength) + cr * strength);
+    data[i + 1] = Math.round(data[i + 1] * (1 - strength) + cg * strength);
+    data[i + 2] = Math.round(data[i + 2] * (1 - strength) + cb * strength);
+  }
+  ctx.putImageData(imgData, 0, 0);
   return c.toDataURL("image/jpeg", 0.88);
 }
 
@@ -866,13 +890,13 @@ function getCourseShadowCanvas(): HTMLCanvasElement | null {
   // Bottom shadow — butt edge of the course above casts shadow downward
   const shadow = ctx.createLinearGradient(0, H * 0.50, 0, H);
   shadow.addColorStop(0, "rgba(0,0,0,0)");
-  shadow.addColorStop(0.55, "rgba(0,0,0,0.13)");
-  shadow.addColorStop(1, "rgba(0,0,0,0.20)");
+  shadow.addColorStop(0.45, "rgba(0,0,0,0.18)");
+  shadow.addColorStop(1, "rgba(0,0,0,0.38)");
   ctx.fillStyle = shadow;
   ctx.fillRect(0, 0, W, H);
   // Top micro-shadow — bottom edge of nail hem from course below
-  const top = ctx.createLinearGradient(0, 0, 0, H * 0.14);
-  top.addColorStop(0, "rgba(0,0,0,0.07)");
+  const top = ctx.createLinearGradient(0, 0, 0, H * 0.18);
+  top.addColorStop(0, "rgba(0,0,0,0.12)");
   top.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = top;
   ctx.fillRect(0, 0, W, H * 0.14);
