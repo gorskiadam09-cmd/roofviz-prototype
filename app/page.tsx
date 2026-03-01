@@ -148,7 +148,8 @@ type Roof = {
   valleyMetalColor: MetalColor;
 
   shingleScale: number;
-  shingleRotation: number; // degrees, -45..45; 0 = horizontal
+  shingleRotation: number;       // degrees, -45..45; 0 = horizontal
+  perspectiveStrength: number;   // 0.0–0.4 ground-photo perspective warp, default 0
   proStartOnRakes: boolean;
 
   iceWaterOnEaves: boolean;     // default true
@@ -375,7 +376,7 @@ function useShingleBaseImage(specificSrc: string): HTMLImageElement | undefined 
       };
       image.src = src;
     }
-    tryLoad(specificSrc, "/shingles/_default/architectural.png");
+    tryLoad(specificSrc, "/shingles/default/architectural.png");
     return () => { cancelled = true; };
   }, [specificSrc]);
   return img;
@@ -415,6 +416,7 @@ function defaultRoof(name: string): Roof {
     // smaller shingles by default
     shingleScale: 0.20,
     shingleRotation: 0,
+    perspectiveStrength: 0,
     proStartOnRakes: true,
 
     iceWaterOnEaves: true,
@@ -817,6 +819,34 @@ function getShingleNoiseCanvas(): HTMLCanvasElement | null {
   }
   ctx.putImageData(id, 0, 0);
   _shingleNoiseCanvas = c;
+  return c;
+}
+
+// Course-depth shadow canvas — 16×11px tile (height = courseH) drawn once and reused.
+// Soft gradient at bottom of each course simulates the butt-edge shadow/depth.
+let _courseShadowCanvas: HTMLCanvasElement | null = null;
+function getCourseShadowCanvas(): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  if (_courseShadowCanvas) return _courseShadowCanvas;
+  const W = 16, H = 11; // H must match courseH in makeShingleTexture
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  if (!ctx || typeof (ctx as CanvasRenderingContext2D & { createLinearGradient?: unknown }).createLinearGradient !== "function") return null;
+  // Bottom shadow — butt edge of the course above casts shadow downward
+  const shadow = ctx.createLinearGradient(0, H * 0.50, 0, H);
+  shadow.addColorStop(0, "rgba(0,0,0,0)");
+  shadow.addColorStop(0.55, "rgba(0,0,0,0.13)");
+  shadow.addColorStop(1, "rgba(0,0,0,0.20)");
+  ctx.fillStyle = shadow;
+  ctx.fillRect(0, 0, W, H);
+  // Top micro-shadow — bottom edge of nail hem from course below
+  const top = ctx.createLinearGradient(0, 0, 0, H * 0.14);
+  top.addColorStop(0, "rgba(0,0,0,0.07)");
+  top.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = top;
+  ctx.fillRect(0, 0, W, H * 0.14);
+  _courseShadowCanvas = c;
   return c;
 }
 
@@ -1778,6 +1808,7 @@ export default function Page() {
             iceWaterOnValleys: r.iwv_on !== false,
             iceWaterBrush: [],
             iceWaterBrushSize: r.iwbs ?? 30,
+            perspectiveStrength: r.ps ?? 0,
           }));
         }
 
@@ -5182,6 +5213,25 @@ export default function Page() {
                         How strongly the catalog color tints the texture image.
                       </div>
                     </div>
+                    {/* Ground Photo Perspective slider */}
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", ...fieldLabel as object, marginBottom: 2 }}>
+                        <span>Ground Photo Perspective</span>
+                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{((activeRoof?.perspectiveStrength ?? 0) * 100).toFixed(0)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={0.4}
+                        step={0.01}
+                        value={activeRoof?.perspectiveStrength ?? 0}
+                        onChange={(e) => patchActiveRoof((r) => ({ ...r, perspectiveStrength: Number(e.target.value) }))}
+                        style={{ width: "100%", accentColor: "#2563eb" }}
+                      />
+                      <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1, lineHeight: 1.3 }}>
+                        Compress top courses, expand bottom — matches ground-level photo perspective.
+                      </div>
+                    </div>
                   </div>
 
                   {/* Pro-Start placement */}
@@ -5735,28 +5785,97 @@ export default function Page() {
                         </>
                       )}
 
-                      {/* SHINGLES — aligned to eave line via fillPatternOffsetY */}
-                      {atLeast(currentStep, "SHINGLES") && activeShinglesImg && (
-                        <>
-                          <Rect
-                            x={-5000}
-                            y={-5000}
-                            width={12000}
-                            height={12000}
-                            opacity={0.98}
-                            fillPatternImage={activeShinglesImg}
-                            fillPatternRepeat="repeat"
-                            fillPatternScaleX={effectivePatternScale}
-                            fillPatternScaleY={effectivePatternScale}
-                            fillPatternOffsetY={shingleOffsetY}
-                            fillPatternRotation={r.shingleRotation ?? 0}
-                          />
-                          <Rect x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} fill="rgba(0,0,0,0.06)" />
-                        </>
-                      )}
+                      {/* SHINGLES — with optional ground-photo perspective warp + course depth */}
+                      {atLeast(currentStep, "SHINGLES") && activeShinglesImg && (() => {
+                        const perspStr = r.perspectiveStrength ?? 0;
+                        const courseC = getCourseShadowCanvas();
 
-                      {/* ── Shingle surface overlays: grain noise, directional light, vignette ──
-                          Always-on when shingles are visible. Subtle — don't affect color accuracy. */}
+                        if (perspStr <= 0) {
+                          // ── Normal flat render ──────────────────────────────
+                          return (
+                            <>
+                              <Rect
+                                x={-5000} y={-5000} width={12000} height={12000}
+                                opacity={0.98}
+                                fillPatternImage={activeShinglesImg}
+                                fillPatternRepeat="repeat"
+                                fillPatternScaleX={effectivePatternScale}
+                                fillPatternScaleY={effectivePatternScale}
+                                fillPatternOffsetY={shingleOffsetY}
+                                fillPatternRotation={r.shingleRotation ?? 0}
+                              />
+                              {/* Course depth shadow — aligns to same scale as texture */}
+                              {courseC && (
+                                <Rect
+                                  x={-5000} y={-5000} width={12000} height={12000}
+                                  fillPatternImage={courseC as unknown as HTMLImageElement}
+                                  fillPatternRepeat="repeat"
+                                  fillPatternScaleX={effectivePatternScale}
+                                  fillPatternScaleY={effectivePatternScale}
+                                  fillPatternOffsetY={shingleOffsetY}
+                                  fillPatternRotation={r.shingleRotation ?? 0}
+                                  listening={false}
+                                />
+                              )}
+                              <Rect x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} fill="rgba(0,0,0,0.06)" />
+                            </>
+                          );
+                        }
+
+                        // ── Perspective banding (N horizontal strips, each with slightly different scaleY) ──
+                        const xs = r.outline.filter((_, i) => i % 2 === 0);
+                        const ys = r.outline.filter((_, i) => i % 2 === 1);
+                        if (!xs.length) return null;
+                        const bandTop = Math.min(...ys), bandBot = Math.max(...ys);
+                        const totalH = bandBot - bandTop || 1;
+                        const N = 5;
+                        const bandH = totalH / N;
+
+                        return (
+                          <>
+                            {Array.from({ length: N }, (_, i) => {
+                              // t=0 at top (far from camera), t=1 at bottom (near camera)
+                              const t = (i + 0.5) / N;
+                              const bandScaleY = effectivePatternScale * (1 + perspStr * (2 * t - 1));
+                              const bY = bandTop + i * bandH;
+                              return (
+                                <Group
+                                  key={`pb-${r.id}-${i}`}
+                                  clipFunc={(ctx: any) => { ctx.rect(-5000, bY, 12000, bandH + 1); }}
+                                  listening={false}
+                                >
+                                  <Rect
+                                    x={-5000} y={-5000} width={12000} height={12000}
+                                    opacity={0.98}
+                                    fillPatternImage={activeShinglesImg}
+                                    fillPatternRepeat="repeat"
+                                    fillPatternScaleX={effectivePatternScale}
+                                    fillPatternScaleY={bandScaleY}
+                                    fillPatternOffsetY={shingleOffsetY}
+                                    fillPatternRotation={r.shingleRotation ?? 0}
+                                  />
+                                  {courseC && (
+                                    <Rect
+                                      x={-5000} y={-5000} width={12000} height={12000}
+                                      fillPatternImage={courseC as unknown as HTMLImageElement}
+                                      fillPatternRepeat="repeat"
+                                      fillPatternScaleX={effectivePatternScale}
+                                      fillPatternScaleY={bandScaleY}
+                                      fillPatternOffsetY={shingleOffsetY}
+                                      fillPatternRotation={r.shingleRotation ?? 0}
+                                      listening={false}
+                                    />
+                                  )}
+                                </Group>
+                              );
+                            })}
+                            <Rect x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} fill="rgba(0,0,0,0.06)" />
+                          </>
+                        );
+                      })()}
+
+                      {/* ── Shingle surface overlays: directional light, grain noise, vignette ──
+                          Always-on when shingles are visible. */}
                       {atLeast(currentStep, "SHINGLES") && (() => {
                         const xs = r.outline.filter((_, i) => i % 2 === 0);
                         const ys = r.outline.filter((_, i) => i % 2 === 1);
@@ -5768,7 +5887,7 @@ export default function Page() {
                         const noiseC = getShingleNoiseCanvas();
                         return (
                           <Group listening={false}>
-                            {/* Directional light: subtle bright top-left → shadow bottom-right */}
+                            {/* Directional light: highlight top-left, shadow bottom-right */}
                             <Rect
                               x={bx} y={by} width={bw} height={bh}
                               fillLinearGradientStartPoint={{ x: 0, y: 0 }}
@@ -5776,7 +5895,7 @@ export default function Page() {
                               fillLinearGradientColorStops={[0, "rgba(255,255,255,0.07)", 0.45, "rgba(0,0,0,0)", 1, "rgba(0,0,0,0.13)"]}
                               listening={false}
                             />
-                            {/* Fine grain noise for tactile texture feel */}
+                            {/* Fine grain noise */}
                             {noiseC && (
                               <Rect
                                 x={-5000} y={-5000} width={12000} height={12000}
@@ -5788,7 +5907,7 @@ export default function Page() {
                                 listening={false}
                               />
                             )}
-                            {/* Perimeter vignette: darkens edges for depth */}
+                            {/* Perimeter vignette */}
                             <Rect
                               x={bx} y={by} width={bw} height={bh}
                               fillRadialGradientStartPoint={{ x: bw / 2, y: bh / 2 }}
