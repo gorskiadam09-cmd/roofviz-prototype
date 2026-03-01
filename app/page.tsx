@@ -117,6 +117,12 @@ type ShingleColor =
   | "Slate"
   | "Black";
 
+type ShingleSelection = {
+  manufacturerId: string;
+  lineId: string;
+  colorId: string;
+};
+
 type Roof = {
   id: string;
   name: string;
@@ -163,6 +169,7 @@ type PhotoProject = {
   activeRoofId: string;
 
   shingleColor: ShingleColor;
+  shingleSelection: ShingleSelection;
 
   showGuidesDuringInstall: boolean;
   showEditHandles: boolean;
@@ -445,6 +452,228 @@ function shinglePalette(c: ShingleColor) {
   }
 }
 
+// ── Shingle catalog ────────────────────────────────────────────────────────
+// Each color entry: { name, top (highlight hex), bot (shadow hex), rgb [r,g,b] }
+const SHINGLE_CATALOG = {
+  gaf: { name: "GAF", lines: {
+    hdz: { name: "Timberline HDZ", colors: {
+      barkwood:      { name: "Barkwood",        top: "#6f4f34", bot: "#24140e", rgb: [111, 79,  52] as [number,number,number] },
+      charcoal:      { name: "Charcoal",         top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",   top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      pewterGray:    { name: "Pewter Gray",       top: "#7a8087", bot: "#262b31", rgb: [122,128, 135] as [number,number,number] },
+      oysterGray:    { name: "Oyster Gray",       top: "#8d9092", bot: "#33373c", rgb: [141,144, 146] as [number,number,number] },
+      slate:         { name: "Slate",             top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
+      hunter:        { name: "Hunter Green",      top: "#2e4a2e", bot: "#0e190e", rgb: [ 46, 74,  46] as [number,number,number] },
+      hickory:       { name: "Hickory",           top: "#5c3d1e", bot: "#1c0e03", rgb: [ 92, 61,  30] as [number,number,number] },
+      shakewood:     { name: "Shakewood",         top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92,  62] as [number,number,number] },
+      sienna:        { name: "Sienna",            top: "#7d3d1e", bot: "#2e0f04", rgb: [125, 61,  30] as [number,number,number] },
+      royalSlate:    { name: "Royal Slate",       top: "#4a5260", bot: "#16191f", rgb: [ 74, 82,  96] as [number,number,number] },
+      blackWalnut:   { name: "Black Walnut",      top: "#2f3135", bot: "#070809", rgb: [ 47, 49,  53] as [number,number,number] },
+    }},
+    ns: { name: "Timberline NS", colors: {
+      charcoal:      { name: "Charcoal",         top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",   top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      pewterGray:    { name: "Pewter Gray",       top: "#7a8087", bot: "#262b31", rgb: [122,128, 135] as [number,number,number] },
+      barkwood:      { name: "Barkwood",          top: "#6f4f34", bot: "#24140e", rgb: [111, 79,  52] as [number,number,number] },
+      oysterGray:    { name: "Oyster Gray",       top: "#8d9092", bot: "#33373c", rgb: [141,144, 146] as [number,number,number] },
+      shakewood:     { name: "Shakewood",         top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92,  62] as [number,number,number] },
+      blackWalnut:   { name: "Black Walnut",      top: "#2f3135", bot: "#070809", rgb: [ 47, 49,  53] as [number,number,number] },
+      slate:         { name: "Slate",             top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
+    }},
+  }},
+  owens: { name: "Owens Corning", lines: {
+    duration: { name: "Duration", colors: {
+      teak:          { name: "Teak",              top: "#7b5b3a", bot: "#291a0b", rgb: [123, 91,  58] as [number,number,number] },
+      desertTan:     { name: "Desert Tan",        top: "#b09472", bot: "#4a3520", rgb: [176,148, 114] as [number,number,number] },
+      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
+      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
+      chateauGreen:  { name: "Chateau Green",     top: "#3d5233", bot: "#10180d", rgb: [ 61, 82,  51] as [number,number,number] },
+      weathered:     { name: "Weathered",         top: "#7a7260", bot: "#27231b", rgb: [122,114,  96] as [number,number,number] },
+      onyxBlack:     { name: "Onyx Black",        top: "#1e2024", bot: "#060608", rgb: [ 30, 32,  36] as [number,number,number] },
+      quarryGray:    { name: "Quarry Gray",       top: "#858a8e", bot: "#2c3033", rgb: [133,138, 142] as [number,number,number] },
+      harborBlue:    { name: "Harbor Blue",       top: "#4a5b6e", bot: "#161c22", rgb: [ 74, 91, 110] as [number,number,number] },
+      shakewood:     { name: "Shakewood",         top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92,  62] as [number,number,number] },
+    }},
+    oakridge: { name: "Oakridge", colors: {
+      teak:          { name: "Teak",              top: "#7b5b3a", bot: "#291a0b", rgb: [123, 91,  58] as [number,number,number] },
+      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
+      onyxBlack:     { name: "Onyx Black",        top: "#1e2024", bot: "#060608", rgb: [ 30, 32,  36] as [number,number,number] },
+      quarryGray:    { name: "Quarry Gray",       top: "#858a8e", bot: "#2c3033", rgb: [133,138, 142] as [number,number,number] },
+      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
+      desertTan:     { name: "Desert Tan",        top: "#b09472", bot: "#4a3520", rgb: [176,148, 114] as [number,number,number] },
+      weathered:     { name: "Weathered",         top: "#7a7260", bot: "#27231b", rgb: [122,114,  96] as [number,number,number] },
+      rusticJade:    { name: "Rustic Jade",       top: "#2e4a35", bot: "#0c1710", rgb: [ 46, 74,  53] as [number,number,number] },
+    }},
+  }},
+  certainteed: { name: "CertainTeed", lines: {
+    landmark: { name: "Landmark", colors: {
+      moireBlack:    { name: "Moire Black",       top: "#232528", bot: "#070809", rgb: [ 35, 37,  40] as [number,number,number] },
+      heatherBlend:  { name: "Heather Blend",     top: "#6a5060", bot: "#22191f", rgb: [106, 80,  96] as [number,number,number] },
+      colonialSlate: { name: "Colonial Slate",    top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
+      driftwood:     { name: "Driftwood",         top: "#7c7060", bot: "#2a2518", rgb: [124,112,  96] as [number,number,number] },
+      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
+      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
+      shadowGray:    { name: "Shadow Gray",       top: "#56616a", bot: "#1c2126", rgb: [ 86, 97, 106] as [number,number,number] },
+      swiftwater:    { name: "Swiftwater",        top: "#4a5a6a", bot: "#161c22", rgb: [ 74, 90, 106] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      autumnBlend:   { name: "Autumn Blend",      top: "#7a4c2a", bot: "#2a1508", rgb: [122, 76,  42] as [number,number,number] },
+    }},
+    presidential: { name: "Presidential Solaris", colors: {
+      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      colonialSlate: { name: "Colonial Slate",    top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
+      moireBlack:    { name: "Moire Black",       top: "#232528", bot: "#070809", rgb: [ 35, 37,  40] as [number,number,number] },
+      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
+      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
+      swiftwater:    { name: "Swiftwater",        top: "#4a5a6a", bot: "#161c22", rgb: [ 74, 90, 106] as [number,number,number] },
+      heatherBlend:  { name: "Heather Blend",     top: "#6a5060", bot: "#22191f", rgb: [106, 80,  96] as [number,number,number] },
+    }},
+  }},
+  tamko: { name: "TAMKO", lines: {
+    heritage: { name: "Heritage", colors: {
+      rusticBlack:   { name: "Rustic Black",      top: "#232426", bot: "#070708", rgb: [ 35, 36,  38] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
+      glacierGray:   { name: "Glacier Gray",      top: "#909498", bot: "#2f3236", rgb: [144,148, 152] as [number,number,number] },
+      sandDune:      { name: "Sand Dune",         top: "#b0946a", bot: "#453416", rgb: [176,148, 106] as [number,number,number] },
+      naturalTimber: { name: "Natural Timber",    top: "#7a5c34", bot: "#2a1c0a", rgb: [122, 92,  52] as [number,number,number] },
+      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      rusticSlate:   { name: "Rustic Slate",      top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
+      rusticRedwood: { name: "Rustic Redwood",    top: "#7a3a2a", bot: "#2a100a", rgb: [122, 58,  42] as [number,number,number] },
+    }},
+    heritagePremium: { name: "Heritage Premium", colors: {
+      rusticBlack:   { name: "Rustic Black",      top: "#232426", bot: "#070708", rgb: [ 35, 36,  38] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      glacierGray:   { name: "Glacier Gray",      top: "#909498", bot: "#2f3236", rgb: [144,148, 152] as [number,number,number] },
+      naturalTimber: { name: "Natural Timber",    top: "#7a5c34", bot: "#2a1c0a", rgb: [122, 92,  52] as [number,number,number] },
+      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      rusticSlate:   { name: "Rustic Slate",      top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
+    }},
+  }},
+  iko: { name: "IKO", lines: {
+    dynasty: { name: "Dynasty", colors: {
+      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      cambridgeGray: { name: "Cambridge Gray",    top: "#7a8290", bot: "#262d33", rgb: [122,130, 144] as [number,number,number] },
+      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
+      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
+      colonialGrey:  { name: "Colonial Grey",     top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
+      morningMist:   { name: "Morning Mist",      top: "#9a9fa4", bot: "#353b3f", rgb: [154,159, 164] as [number,number,number] },
+      terraCotta:    { name: "Terra Cotta",       top: "#8a4a30", bot: "#301510", rgb: [138, 74,  48] as [number,number,number] },
+      midnightBlack: { name: "Midnight Black",    top: "#1a1c20", bot: "#050606", rgb: [ 26, 28,  32] as [number,number,number] },
+      harvestWheat:  { name: "Harvest Wheat",     top: "#a08050", bot: "#3a2c14", rgb: [160,128,  80] as [number,number,number] },
+      havanaBrown:   { name: "Havana Brown",      top: "#6a4020", bot: "#221208", rgb: [106, 64,  32] as [number,number,number] },
+    }},
+    cambridge: { name: "Cambridge", colors: {
+      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
+      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
+      colonialGrey:  { name: "Colonial Grey",     top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
+      morningMist:   { name: "Morning Mist",      top: "#9a9fa4", bot: "#353b3f", rgb: [154,159, 164] as [number,number,number] },
+      midnightBlack: { name: "Midnight Black",    top: "#1a1c20", bot: "#050606", rgb: [ 26, 28,  32] as [number,number,number] },
+    }},
+  }},
+  atlas: { name: "Atlas", lines: {
+    pinnacle: { name: "Pinnacle Pristine", colors: {
+      antiqueBlack:  { name: "Antique Black",     top: "#242628", bot: "#070809", rgb: [ 36, 38,  40] as [number,number,number] },
+      canyon:        { name: "Canyon",            top: "#7a5030", bot: "#2a1808", rgb: [122, 80,  48] as [number,number,number] },
+      weathered:     { name: "Weathered",         top: "#7a7260", bot: "#27231b", rgb: [122,114,  96] as [number,number,number] },
+      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
+      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
+      silverBirch:   { name: "Silver Birch",      top: "#9a9ea2", bot: "#363a3e", rgb: [154,158, 162] as [number,number,number] },
+      mountainSlate: { name: "Mountain Slate",    top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
+      brownstone:    { name: "Brownstone",        top: "#5a4030", bot: "#1c1008", rgb: [ 90, 64,  48] as [number,number,number] },
+    }},
+    stormMaster: { name: "StormMaster", colors: {
+      antiqueBlack:  { name: "Antique Black",     top: "#242628", bot: "#070809", rgb: [ 36, 38,  40] as [number,number,number] },
+      canyon:        { name: "Canyon",            top: "#7a5030", bot: "#2a1808", rgb: [122, 80,  48] as [number,number,number] },
+      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
+      mountainSlate: { name: "Mountain Slate",    top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
+      brownstone:    { name: "Brownstone",        top: "#5a4030", bot: "#1c1008", rgb: [ 90, 64,  48] as [number,number,number] },
+      silverBirch:   { name: "Silver Birch",      top: "#9a9ea2", bot: "#363a3e", rgb: [154,158, 162] as [number,number,number] },
+    }},
+  }},
+  malarkey: { name: "Malarkey", lines: {
+    vista: { name: "Vista", colors: {
+      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      autumnBlend:   { name: "Autumn Blend",      top: "#7a4c2a", bot: "#2a1508", rgb: [122, 76,  42] as [number,number,number] },
+      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
+      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      mountainAsh:   { name: "Mountain Ash",      top: "#7a5c34", bot: "#2a1c0a", rgb: [122, 92,  52] as [number,number,number] },
+      blackjack:     { name: "Blackjack",         top: "#232528", bot: "#070809", rgb: [ 35, 37,  40] as [number,number,number] },
+      pacificBlue:   { name: "Pacific Blue",      top: "#3a5060", bot: "#101820", rgb: [ 58, 80,  96] as [number,number,number] },
+    }},
+    legacy: { name: "Legacy", colors: {
+      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      blackjack:     { name: "Blackjack",         top: "#232528", bot: "#070809", rgb: [ 35, 37,  40] as [number,number,number] },
+      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
+      mountainAsh:   { name: "Mountain Ash",      top: "#7a5c34", bot: "#2a1c0a", rgb: [122, 92,  52] as [number,number,number] },
+    }},
+  }},
+  pabco: { name: "PABCO", lines: {
+    premier: { name: "Premier", colors: {
+      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      colonialGray:  { name: "Colonial Gray",     top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
+      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
+      sierra:        { name: "Sierra",            top: "#8a5830", bot: "#2e1c08", rgb: [138, 88,  48] as [number,number,number] },
+      shadowGray:    { name: "Shadow Gray",       top: "#56616a", bot: "#1c2126", rgb: [ 86, 97, 106] as [number,number,number] },
+      midnightBlack: { name: "Midnight Black",    top: "#1a1c20", bot: "#050606", rgb: [ 26, 28,  32] as [number,number,number] },
+      harvestGold:   { name: "Harvest Gold",      top: "#9a7840", bot: "#34260e", rgb: [154,120,  64] as [number,number,number] },
+      teak:          { name: "Teak",              top: "#7b5b3a", bot: "#291a0b", rgb: [123, 91,  58] as [number,number,number] },
+    }},
+    galaxy: { name: "Galaxy", colors: {
+      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
+      shadowGray:    { name: "Shadow Gray",       top: "#56616a", bot: "#1c2126", rgb: [ 86, 97, 106] as [number,number,number] },
+      midnightBlack: { name: "Midnight Black",    top: "#1a1c20", bot: "#050606", rgb: [ 26, 28,  32] as [number,number,number] },
+      sierra:        { name: "Sierra",            top: "#8a5830", bot: "#2e1c08", rgb: [138, 88,  48] as [number,number,number] },
+    }},
+  }},
+  generic: { name: "Generic", lines: {
+    standard: { name: "Standard", colors: {
+      barkwood:      { name: "Barkwood",          top: "#6f4f34", bot: "#24140e", rgb: [111, 79,  52] as [number,number,number] },
+      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
+      pewterGray:    { name: "Pewter Gray",       top: "#7a8087", bot: "#262b31", rgb: [122,128, 135] as [number,number,number] },
+      oysterGray:    { name: "Oyster Gray",       top: "#8d9092", bot: "#33373c", rgb: [141,144, 146] as [number,number,number] },
+      slate:         { name: "Slate",             top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
+      black:         { name: "Black",             top: "#2f3135", bot: "#070809", rgb: [ 47, 49,  53] as [number,number,number] },
+    }},
+  }},
+} as const;
+
+function resolveShinglePalette(sel: ShingleSelection): { top: string; bot: string } {
+  const mfr = SHINGLE_CATALOG[sel.manufacturerId as keyof typeof SHINGLE_CATALOG];
+  const line = mfr?.lines[sel.lineId as keyof typeof mfr.lines] as { colors: Record<string, { top: string; bot: string }> } | undefined;
+  const color = line?.colors[sel.colorId];
+  if (color?.top && color?.bot) return { top: color.top, bot: color.bot };
+  return { top: "#6f4f34", bot: "#24140e" }; // fallback: barkwood
+}
+
+function resolveShingleRGB(sel: ShingleSelection): [number, number, number] {
+  const mfr = SHINGLE_CATALOG[sel.manufacturerId as keyof typeof SHINGLE_CATALOG];
+  const line = mfr?.lines[sel.lineId as keyof typeof mfr.lines] as { colors: Record<string, { rgb: [number,number,number] }> } | undefined;
+  const color = line?.colors[sel.colorId];
+  if (color?.rgb) return color.rgb;
+  return [111, 79, 52]; // fallback: barkwood
+}
+
+function shingleColorToSelection(c: ShingleColor): ShingleSelection {
+  const colorMap: Record<ShingleColor, string> = {
+    "Barkwood":      "barkwood",
+    "Charcoal":      "charcoal",
+    "WeatheredWood": "weatheredWood",
+    "PewterGray":    "pewterGray",
+    "OysterGray":    "oysterGray",
+    "Slate":         "slate",
+    "Black":         "black",
+  };
+  return { manufacturerId: "generic", lineId: "standard", colorId: colorMap[c] ?? "barkwood" };
+}
+
 function makeDeckingTexture(w: number, h: number) {
   const c = document.createElement("canvas");
   c.width = Math.max(1200, Math.floor(w));
@@ -525,14 +754,14 @@ function makeSyntheticTexture(w: number, h: number) {
   return c.toDataURL("image/png");
 }
 
-function makeShingleTexture(_w: number, _h: number, color: ShingleColor) {
+function makeShingleTexture(_w: number, _h: number, palette: { top: string; bot: string }) {
   // Flat-color base so the tile seams never show as color bands on large roofs.
   const W = 2400, H = 2400;
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
   const ctx = c.getContext("2d")!;
 
-  const pal = shinglePalette(color);
+  const pal = palette;
 
   // Uniform base — no gradient so the repeating tile is invisible.
   ctx.fillStyle = pal.top;
@@ -1230,6 +1459,7 @@ export default function Page() {
         roofs: photoData.roofs,
         activeRoofId: photoData.roofs[0]?.id ?? "",
         shingleColor: customerShingleColor,
+        shingleSelection: shingleColorToSelection(customerShingleColor),
         showGuidesDuringInstall: false,
         showEditHandles: false,
         realisticMode: false,
@@ -1448,6 +1678,7 @@ export default function Page() {
             photoStates: p.photoStates ?? {},
             realisticMode: p.realisticMode ?? false,
             realisticStrength: p.realisticStrength ?? 0.6,
+            shingleSelection: p.shingleSelection ?? shingleColorToSelection(p.shingleColor ?? "Barkwood"),
           }));
           const savedActiveId = localStorage.getItem("roofviz_v3_active");
           const restoredId = migrated.find((p) => p.id === savedActiveId)?.id ?? migrated[0].id;
@@ -1977,6 +2208,7 @@ export default function Page() {
       roofs: [roof1],
       activeRoofId: roof1.id,
       shingleColor: "Barkwood",
+      shingleSelection: { manufacturerId: "gaf", lineId: "hdz", colorId: "barkwood" },
       showGuidesDuringInstall: false,
       showEditHandles: false,
       realisticMode: false,
@@ -2574,8 +2806,9 @@ export default function Page() {
 
   const shingleSrc = useMemo(() => {
     if (!active || typeof window === "undefined") return "";
-    return makeShingleTexture(texW, texH, active.shingleColor);
-  }, [active?.id, active?.shingleColor, texW, texH]);
+    return makeShingleTexture(texW, texH, resolveShinglePalette(active.shingleSelection));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.shingleSelection?.manufacturerId, active?.shingleSelection?.lineId, active?.shingleSelection?.colorId, texW, texH]);
   const shinglesImg = useHtmlImage(shingleSrc);
 
   // Photo-derived shingle texture — regenerated only when photo / realism settings change
@@ -4691,16 +4924,80 @@ export default function Page() {
                   </div>
 
                   <div>
-                    <label style={fieldLabel}>Shingle Color</label>
+                    <label style={fieldLabel}>Shingle</label>
+                    {/* Manufacturer */}
                     <select
-                      value={active.shingleColor}
-                      onChange={(e) => patchActive((p) => ({ ...p, shingleColor: e.target.value as ShingleColor }))}
-                      style={selectStyle}
+                      value={active.shingleSelection.manufacturerId}
+                      onChange={(e) => {
+                        const mfrId = e.target.value;
+                        const mfr = SHINGLE_CATALOG[mfrId as keyof typeof SHINGLE_CATALOG];
+                        const lineId = Object.keys(mfr.lines)[0];
+                        const line = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[lineId];
+                        const colorId = Object.keys(line.colors)[0];
+                        patchActive((p) => ({ ...p, shingleSelection: { manufacturerId: mfrId, lineId, colorId } }));
+                      }}
+                      style={{ ...selectStyle, marginBottom: 4 }}
                     >
-                      {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => (
-                        <option key={c} value={c}>{c}</option>
+                      {Object.entries(SHINGLE_CATALOG).map(([id, mfr]) => (
+                        <option key={id} value={id}>{mfr.name}</option>
                       ))}
                     </select>
+                    {/* Product Line */}
+                    {(() => {
+                      const mfr = SHINGLE_CATALOG[active.shingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
+                      if (!mfr) return null;
+                      return (
+                        <select
+                          value={active.shingleSelection.lineId}
+                          onChange={(e) => {
+                            const lineId = e.target.value;
+                            const line = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[lineId];
+                            const colorId = Object.keys(line.colors)[0];
+                            patchActive((p) => ({ ...p, shingleSelection: { ...p.shingleSelection, lineId, colorId } }));
+                          }}
+                          style={{ ...selectStyle, marginBottom: 4 }}
+                        >
+                          {Object.entries(mfr.lines).map(([id, line]) => (
+                            <option key={id} value={id}>{(line as { name: string }).name}</option>
+                          ))}
+                        </select>
+                      );
+                    })()}
+                    {/* Color */}
+                    {(() => {
+                      const mfr = SHINGLE_CATALOG[active.shingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
+                      const line = mfr && (mfr.lines as Record<string, { colors: Record<string, { name: string }> }>)[active.shingleSelection.lineId];
+                      if (!line) return null;
+                      return (
+                        <select
+                          value={active.shingleSelection.colorId}
+                          onChange={(e) => patchActive((p) => ({ ...p, shingleSelection: { ...p.shingleSelection, colorId: e.target.value } }))}
+                          style={selectStyle}
+                        >
+                          {Object.entries(line.colors).map(([id, color]) => (
+                            <option key={id} value={id}>{color.name}</option>
+                          ))}
+                        </select>
+                      );
+                    })()}
+                    {/* Summary swatch + label */}
+                    {(() => {
+                      const rgb = resolveShingleRGB(active.shingleSelection);
+                      const mfr = SHINGLE_CATALOG[active.shingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
+                      const line = mfr && (mfr.lines as Record<string, { name: string; colors: Record<string, { name: string }> }>)[active.shingleSelection.lineId];
+                      const color = line && line.colors[active.shingleSelection.colorId];
+                      return (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5 }}>
+                          <div style={{ width: 14, height: 14, borderRadius: "50%", background: `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`, flexShrink: 0, border: "1px solid rgba(15,23,42,0.15)" }} />
+                          <span style={{ fontSize: 10, color: "#64748b", lineHeight: 1.3 }}>
+                            {mfr?.name}{line ? ` • ${line.name}` : ""}{color ? ` • ${color.name}` : ""}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                    <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
+                      Colors are approximations. Verify final selections with manufacturer samples.
+                    </div>
                   </div>
 
                   {/* Pro-Start placement */}
@@ -5347,7 +5644,7 @@ export default function Page() {
 
                       {/* Ridge fold — crease tinted to match shingle color so it blends naturally */}
                       {atLeast(currentStep, "SHINGLES") && !atLeast(currentStep, "CAP_SHINGLES") && (() => {
-                        const [rr, rg, rb] = shingleRGB(active.shingleColor);
+                        const [rr, rg, rb] = resolveShingleRGB(active.shingleSelection);
                         return ridges.map((l) => (
                           <Group key={`ridgefold-${r.id}-${l.id}`}>
                             <Line points={l.points} stroke="rgba(0,0,0,0.22)"                    strokeWidth={5}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />

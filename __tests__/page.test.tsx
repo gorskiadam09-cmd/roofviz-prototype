@@ -370,7 +370,7 @@ describe("Page — roof management", () => {
 describe("Page — advanced options panel", () => {
   it("opens when toggled", async () => {
     await openAdvanced();
-    expect(screen.getByText("Shingle Color")).toBeInTheDocument();
+    expect(screen.getByText("Shingle")).toBeInTheDocument();
     expect(screen.getByText("Metal Colors")).toBeInTheDocument();
     expect(screen.getByText("Product Widths")).toBeInTheDocument();
   });
@@ -379,27 +379,29 @@ describe("Page — advanced options panel", () => {
     const user = await openAdvanced();
     // Switching to Edit tab hides the Settings panel content
     await user.click(screen.getByRole("button", { name: /^edit$/i }));
-    expect(screen.queryByText("Shingle Color")).not.toBeInTheDocument();
+    expect(screen.queryByText("Shingle")).not.toBeInTheDocument();
   });
 
-  it("shingle color dropdown has all 7 options", async () => {
+  it("shingle manufacturer dropdown has all 9 manufacturers", async () => {
     await openAdvanced();
-    const select = screen.getByDisplayValue("Barkwood") as HTMLSelectElement;
-    expect(select.options).toHaveLength(7);
+    const select = screen.getByDisplayValue("GAF") as HTMLSelectElement;
+    expect(select.options).toHaveLength(9);
   });
 
-  it("shingle color dropdown contains expected values", async () => {
+  it("shingle manufacturer dropdown contains expected values", async () => {
     await openAdvanced();
-    const select = screen.getByDisplayValue("Barkwood") as HTMLSelectElement;
+    const select = screen.getByDisplayValue("GAF") as HTMLSelectElement;
     const values = Array.from(select.options).map((o) => o.value);
     expect(values).toEqual([
-      "Barkwood",
-      "Charcoal",
-      "WeatheredWood",
-      "PewterGray",
-      "OysterGray",
-      "Slate",
-      "Black",
+      "gaf",
+      "owens",
+      "certainteed",
+      "tamko",
+      "iko",
+      "atlas",
+      "malarkey",
+      "pabco",
+      "generic",
     ]);
   });
 
