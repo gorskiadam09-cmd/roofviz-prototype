@@ -1691,7 +1691,7 @@ export default function Page() {
         activeRoofId: photoData.roofs[0]?.id ?? "",
         shingleColor: customerShingleColor,
         shingleSelection: customerShingleSelection,
-        textureColorStrength: 50,
+        textureColorStrength: 100,
         showGuidesDuringInstall: false,
         showEditHandles: false,
         realisticMode: false,
@@ -1918,7 +1918,7 @@ export default function Page() {
             realisticMode: p.realisticMode ?? false,
             realisticStrength: p.realisticStrength ?? 0.6,
             shingleSelection: p.shingleSelection ?? shingleColorToSelection(p.shingleColor ?? "Barkwood"),
-            textureColorStrength: p.textureColorStrength ?? 50,
+            textureColorStrength: p.textureColorStrength ?? 100,
           }));
           const savedActiveId = localStorage.getItem("roofviz_v3_active");
           const restoredId = migrated.find((p) => p.id === savedActiveId)?.id ?? migrated[0].id;
@@ -2449,7 +2449,7 @@ export default function Page() {
       activeRoofId: roof1.id,
       shingleColor: "Barkwood",
       shingleSelection: { manufacturerId: "gaf", lineId: "hdz", colorId: "barkwood" },
-      textureColorStrength: 50,
+      textureColorStrength: 100,
       showGuidesDuringInstall: false,
       showEditHandles: false,
       realisticMode: false,
@@ -3060,7 +3060,7 @@ export default function Page() {
       return applyColorTint(
         shingleBaseImg,
         resolveShinglePalette(active.shingleSelection),
-        (active.textureColorStrength ?? 50) / 100,
+        (active.textureColorStrength ?? 100) / 100,
       );
     }
     // No image → fall back to procedural tile
@@ -5320,13 +5320,13 @@ export default function Page() {
                     <div style={{ marginTop: 10 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", ...fieldLabel as object, marginBottom: 2 }}>
                         <span>Color Strength</span>
-                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{active.textureColorStrength ?? 50}%</span>
+                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{active.textureColorStrength ?? 100}%</span>
                       </div>
                       <input
                         type="range"
                         min={0}
                         max={100}
-                        value={active.textureColorStrength ?? 50}
+                        value={active.textureColorStrength ?? 100}
                         onChange={(e) => patchActive((p) => ({ ...p, textureColorStrength: Number(e.target.value) }))}
                         style={{ width: "100%", accentColor: "#2563eb" }}
                       />
