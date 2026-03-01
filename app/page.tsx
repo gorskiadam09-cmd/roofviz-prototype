@@ -469,6 +469,7 @@ const SHINGLE_CATALOG = {
       sienna:        { name: "Sienna",            top: "#7d3d1e", bot: "#2e0f04", rgb: [125, 61,  30] as [number,number,number] },
       royalSlate:    { name: "Royal Slate",       top: "#4a5260", bot: "#16191f", rgb: [ 74, 82,  96] as [number,number,number] },
       blackWalnut:   { name: "Black Walnut",      top: "#2f3135", bot: "#070809", rgb: [ 47, 49,  53] as [number,number,number] },
+      missionBrown:  { name: "Mission Brown",     top: "#5a3318", bot: "#1c0d04", rgb: [ 90, 51,  24] as [number,number,number] },
     }},
     ns: { name: "Timberline NS", colors: {
       charcoal:      { name: "Charcoal",         top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
@@ -479,6 +480,7 @@ const SHINGLE_CATALOG = {
       shakewood:     { name: "Shakewood",         top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92,  62] as [number,number,number] },
       blackWalnut:   { name: "Black Walnut",      top: "#2f3135", bot: "#070809", rgb: [ 47, 49,  53] as [number,number,number] },
       slate:         { name: "Slate",             top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
+      missionBrown:  { name: "Mission Brown",     top: "#5a3318", bot: "#1c0d04", rgb: [ 90, 51,  24] as [number,number,number] },
     }},
   }},
   owens: { name: "Owens Corning", lines: {
