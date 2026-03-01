@@ -3056,11 +3056,11 @@ export default function Page() {
   const shingleSrc = useMemo(() => {
     if (!active || typeof window === "undefined") return "";
     if (shingleBaseImg) {
-      // Image loaded: tint toward catalog palette, controlled by textureColorStrength
+      // Image loaded: tint toward catalog palette at full strength (always 100%)
       return applyColorTint(
         shingleBaseImg,
         resolveShinglePalette(active.shingleSelection),
-        (active.textureColorStrength ?? 100) / 100,
+        1.0,
       );
     }
     // No image → fall back to procedural tile
@@ -3287,8 +3287,9 @@ export default function Page() {
           if (p.id !== activePhotoId) return p;
           const st = fullStates[src];
           if (!st) return { ...p, src, roofs: [], activeRoofId: "", stageScale: 1, stagePos: { x: 0, y: 0 } };
+          // Always reset zoom to fit-to-screen so PDF never captures a zoomed-in view
           return { ...p, src, roofs: st.roofs, activeRoofId: st.activeRoofId,
-                   stageScale: st.stageScale, stagePos: st.stagePos };
+                   stageScale: 1, stagePos: { x: 0, y: 0 } };
         }));
         setTimeout(resolve, 200);
       });
@@ -5347,24 +5348,6 @@ export default function Page() {
                     })()}
                     <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
                       Colors are approximations. Verify final selections with manufacturer samples.
-                    </div>
-                    {/* Texture Color Strength slider */}
-                    <div style={{ marginTop: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", ...fieldLabel as object, marginBottom: 2 }}>
-                        <span>Color Strength</span>
-                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{active.textureColorStrength ?? 100}%</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        value={active.textureColorStrength ?? 100}
-                        onChange={(e) => patchActive((p) => ({ ...p, textureColorStrength: Number(e.target.value) }))}
-                        style={{ width: "100%", accentColor: "#2563eb" }}
-                      />
-                      <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1, lineHeight: 1.3 }}>
-                        How strongly the catalog color tints the texture image.
-                      </div>
                     </div>
                     {/* Ground Photo Perspective slider */}
                     <div style={{ marginTop: 10 }}>
