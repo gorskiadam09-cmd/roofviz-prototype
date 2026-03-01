@@ -136,8 +136,8 @@ type Roof = {
   // your standard sizing defaults (per-roof adjustable)
   gutterApronW: number; // 8
   dripEdgeW: number; // 8
-  iceWaterEaveW: number; // 40
-  iceWaterValleyW: number; // 20
+  iceWaterEaveW: number; // 72
+  iceWaterValleyW: number; // 36
   valleyMetalW: number; // 10
   proStartW: number; // 12
   ridgeVentW: number; // 12
@@ -414,8 +414,8 @@ function defaultRoof(name: string): Roof {
     // standards
     gutterApronW: 3,
     dripEdgeW: 3,
-    iceWaterEaveW: 40,
-    iceWaterValleyW: 20,
+    iceWaterEaveW: 72,
+    iceWaterValleyW: 36,
     valleyMetalW: 10,
     proStartW: 12,
     ridgeVentW: 4,
@@ -1765,8 +1765,8 @@ export default function Page() {
             gutterApronColor: r.gac ?? "Aluminum",
             dripEdgeW: r.dew ?? 8,
             dripEdgeColor: r.dec ?? "Aluminum",
-            iceWaterEaveW: r.iwe ?? 40,
-            iceWaterValleyW: r.iwv ?? 20,
+            iceWaterEaveW: r.iwe ?? 72,
+            iceWaterValleyW: r.iwv ?? 36,
             proStartW: r.psw ?? 12,
             ridgeVentW: r.rvw ?? 12,
             capW: r.cpw ?? 8,
@@ -5408,8 +5408,8 @@ export default function Page() {
                       {([
                         ["Gutter apron", "gutterApronW", 4, 24],
                         ["Drip edge", "dripEdgeW", 4, 24],
-                        ["Ice & water (eaves)", "iceWaterEaveW", 10, 90],
-                        ["Ice & water (valleys)", "iceWaterValleyW", 6, 70],
+                        ["Ice & water (eaves)", "iceWaterEaveW", 10, 120],
+                        ["Ice & water (valleys)", "iceWaterValleyW", 6, 72],
                         ["Valley metal", "valleyMetalW", 4, 35],
                         ["Pro-start", "proStartW", 6, 45],
                         ["Ridge vent", "ridgeVentW", 6, 45],
