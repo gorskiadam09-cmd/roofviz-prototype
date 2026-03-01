@@ -507,6 +507,36 @@ const SHINGLE_CATALOG = {
       slate:         { name: "Slate",             top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
       missionBrown:  { name: "Mission Brown",     top: "#5a3318", bot: "#1c0d04", rgb: [ 90, 51,  24] as [number,number,number] },
     }},
+    uhdz: { name: "Timberline UHDZ", colors: {
+      antiqueSlate:  { name: "Antique Slate",    top: "#606878", bot: "#1e2028", rgb: [ 96,104,120] as [number,number,number] },
+      barkwood:      { name: "Barkwood",         top: "#6f4f34", bot: "#24140e", rgb: [111, 79, 52] as [number,number,number] },
+      birchwood:     { name: "Birchwood",        top: "#9a8870", bot: "#342e22", rgb: [154,136,112] as [number,number,number] },
+      biscayneBlue:  { name: "Biscayne Blue",    top: "#4a5e72", bot: "#161e28", rgb: [ 74, 94,114] as [number,number,number] },
+      charcoal:      { name: "Charcoal",         top: "#4b4e55", bot: "#151619", rgb: [ 75, 78, 85] as [number,number,number] },
+      copperCanyon:  { name: "Copper Canyon",    top: "#8a4a28", bot: "#2e1808", rgb: [138, 74, 40] as [number,number,number] },
+      foxHollowGray: { name: "Fox Hollow Gray",  top: "#828074", bot: "#2a2820", rgb: [130,128,116] as [number,number,number] },
+      goldenAmber:   { name: "Golden Amber",     top: "#9a6828", bot: "#342208", rgb: [154,104, 40] as [number,number,number] },
+      hickory:       { name: "Hickory",          top: "#5c3d1e", bot: "#1c0e03", rgb: [ 92, 61, 30] as [number,number,number] },
+      hunterGreen:   { name: "Hunter Green",     top: "#2e4a2e", bot: "#0e190e", rgb: [ 46, 74, 46] as [number,number,number] },
+      missionBrown:  { name: "Mission Brown",    top: "#5a3318", bot: "#1c0d04", rgb: [ 90, 51, 24] as [number,number,number] },
+      oysterGray:    { name: "Oyster Gray",      top: "#8d9092", bot: "#33373c", rgb: [141,144,146] as [number,number,number] },
+      pewterGray:    { name: "Pewter Gray",      top: "#7a8087", bot: "#262b31", rgb: [122,128,135] as [number,number,number] },
+      shakewood:     { name: "Shakewood",        top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92, 62] as [number,number,number] },
+      slate:         { name: "Slate",            top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106,121] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",   top: "#6a6256", bot: "#231f1a", rgb: [106, 98, 86] as [number,number,number] },
+    }},
+    asii: { name: "Armor Shield II", colors: {
+      barkwood:      { name: "Barkwood",         top: "#6f4f34", bot: "#24140e", rgb: [111, 79, 52] as [number,number,number] },
+      charcoal:      { name: "Charcoal",         top: "#4b4e55", bot: "#151619", rgb: [ 75, 78, 85] as [number,number,number] },
+      foxHollowGray: { name: "Fox Hollow Gray",  top: "#828074", bot: "#2a2820", rgb: [130,128,116] as [number,number,number] },
+      missionBrown:  { name: "Mission Brown",    top: "#5a3318", bot: "#1c0d04", rgb: [ 90, 51, 24] as [number,number,number] },
+      oysterGray:    { name: "Oyster Gray",      top: "#8d9092", bot: "#33373c", rgb: [141,144,146] as [number,number,number] },
+      pewterGray:    { name: "Pewter Gray",      top: "#7a8087", bot: "#262b31", rgb: [122,128,135] as [number,number,number] },
+      royalSlate:    { name: "Royal Slate",      top: "#4a5260", bot: "#16191f", rgb: [ 74, 82, 96] as [number,number,number] },
+      shakewood:     { name: "Shakewood",        top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92, 62] as [number,number,number] },
+      slate:         { name: "Slate",            top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106,121] as [number,number,number] },
+      weatheredWood: { name: "Weathered Wood",   top: "#6a6256", bot: "#231f1a", rgb: [106, 98, 86] as [number,number,number] },
+    }},
   }},
   owens: { name: "Owens Corning", lines: {
     duration: { name: "Duration", colors: {
@@ -1584,6 +1614,7 @@ export default function Page() {
   const [customerPhotoIdx, setCustomerPhotoIdx] = useState(0);
   const [customerStep, setCustomerStep] = useState<Step>("TEAROFF");
   const [customerShingleColor, setCustomerShingleColor] = useState<ShingleColor>("Barkwood");
+  const [customerShingleSelection, setCustomerShingleSelection] = useState<ShingleSelection>({ manufacturerId: "gaf", lineId: "hdz", colorId: "charcoal" });
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
   const [shareEmailSending, setShareEmailSending] = useState(false);
@@ -1635,8 +1666,8 @@ export default function Page() {
         roofs: photoData.roofs,
         activeRoofId: photoData.roofs[0]?.id ?? "",
         shingleColor: customerShingleColor,
-        shingleSelection: shingleColorToSelection(customerShingleColor),
-        textureColorStrength: 70,
+        shingleSelection: customerShingleSelection,
+        textureColorStrength: 50,
         showGuidesDuringInstall: false,
         showEditHandles: false,
         realisticMode: false,
@@ -1649,7 +1680,7 @@ export default function Page() {
       } as PhotoProject & { _customerCanvasW: number; _customerCanvasH: number };
     }
     return photos.find((p) => p.id === activePhotoId) || null;
-  }, [photos, activePhotoId, screen, customerViewData, customerPhotoIdx, customerStep, customerShingleColor, w, h]);
+  }, [photos, activePhotoId, screen, customerViewData, customerPhotoIdx, customerStep, customerShingleColor, customerShingleSelection, w, h]);
   const photoImg = useHtmlImage(active?.src);
 
   const activeRoof = useMemo(() => {
@@ -1835,6 +1866,12 @@ export default function Page() {
         setCustomerViewData({ name, shingleColor, photos });
         setCustomerPhotoIdx(0);
         setCustomerShingleColor(shingleColor);
+        // Decode manufacturer selection from new ms field; fall back to legacy shingleColor mapping
+        const rawMs = raw.ms;
+        const initSel: ShingleSelection = (rawMs?.m && rawMs?.l && rawMs?.c)
+          ? { manufacturerId: rawMs.m, lineId: rawMs.l, colorId: rawMs.c }
+          : shingleColorToSelection(shingleColor);
+        setCustomerShingleSelection(initSel);
         setCustomerStep("TEAROFF");
       } catch {
         // Decode failed — show blank customer view rather than exposing the editor
@@ -1857,7 +1894,7 @@ export default function Page() {
             realisticMode: p.realisticMode ?? false,
             realisticStrength: p.realisticStrength ?? 0.6,
             shingleSelection: p.shingleSelection ?? shingleColorToSelection(p.shingleColor ?? "Barkwood"),
-            textureColorStrength: p.textureColorStrength ?? 70,
+            textureColorStrength: p.textureColorStrength ?? 50,
           }));
           const savedActiveId = localStorage.getItem("roofviz_v3_active");
           const restoredId = migrated.find((p) => p.id === savedActiveId)?.id ?? migrated[0].id;
@@ -2388,7 +2425,7 @@ export default function Page() {
       activeRoofId: roof1.id,
       shingleColor: "Barkwood",
       shingleSelection: { manufacturerId: "gaf", lineId: "hdz", colorId: "barkwood" },
-      textureColorStrength: 70,
+      textureColorStrength: 50,
       showGuidesDuringInstall: false,
       showEditHandles: false,
       realisticMode: false,
@@ -2999,7 +3036,7 @@ export default function Page() {
       return applyColorTint(
         shingleBaseImg,
         resolveShinglePalette(active.shingleSelection),
-        (active.textureColorStrength ?? 70) / 100,
+        (active.textureColorStrength ?? 50) / 100,
       );
     }
     // No image → fall back to procedural tile
@@ -3085,6 +3122,7 @@ export default function Page() {
     const shareData = {
       n: active.name,
       c: active.shingleColor,
+      ms: { m: active.shingleSelection.manufacturerId, l: active.shingleSelection.lineId, c: active.shingleSelection.colorId },
       photos,
     };
 
@@ -3994,31 +4032,90 @@ export default function Page() {
           {/* Shingle color swatches — only at SHINGLES+ */}
           {atLeast(customerStep, "SHINGLES") && (
             <div style={{ borderTop: "1px solid #f1f5f9", padding: "10px 14px 12px", flexShrink: 0 }}>
-              <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 3 }}>Shingle Color</div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b", marginBottom: 8 }}>{customerShingleColor}</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
-                {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => {
-                  const [cr, cg, cb] = shingleRGB(c);
-                  return (
-                    <div
-                      key={c}
-                      onClick={() => setCustomerShingleColor(c)}
-                      title={c}
-                      style={{
-                        width: 30,
-                        height: 30,
-                        borderRadius: "50%",
-                        background: `rgb(${cr},${cg},${cb})`,
-                        cursor: "pointer",
-                        border: c === customerShingleColor ? "2.5px solid #2563eb" : "2px solid rgba(15,23,42,0.12)",
-                        boxShadow: c === customerShingleColor ? "0 0 0 2px rgba(37,99,235,0.3)" : "none",
-                        transition: "box-shadow 0.15s",
-                        flexShrink: 0,
-                      }}
-                    />
-                  );
-                })}
+              <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Shingle Selection</div>
+
+              {/* Manufacturer */}
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Manufacturer</div>
+                <select
+                  value={customerShingleSelection.manufacturerId}
+                  onChange={(e) => {
+                    const mId = e.target.value;
+                    const mfr = SHINGLE_CATALOG[mId as keyof typeof SHINGLE_CATALOG];
+                    const firstLineId = Object.keys(mfr?.lines ?? {})[0] ?? "";
+                    const firstLine = (mfr?.lines as Record<string, { colors: Record<string, unknown> }>)?.[firstLineId];
+                    const firstColorId = Object.keys(firstLine?.colors ?? {})[0] ?? "";
+                    setCustomerShingleSelection({ manufacturerId: mId, lineId: firstLineId, colorId: firstColorId });
+                  }}
+                  style={{ width: "100%", fontSize: 11, padding: "5px 7px", borderRadius: 7, border: "1px solid rgba(15,23,42,0.15)", background: "#fff", color: "#1e293b" }}
+                >
+                  {Object.entries(SHINGLE_CATALOG).map(([id, mfr]) => (
+                    <option key={id} value={id}>{mfr.name}</option>
+                  ))}
+                </select>
               </div>
+
+              {/* Product Line */}
+              {(() => {
+                const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
+                if (!mfr) return null;
+                return (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Product Line</div>
+                    <select
+                      value={customerShingleSelection.lineId}
+                      onChange={(e) => {
+                        const lId = e.target.value;
+                        const line = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[lId];
+                        const firstColorId = Object.keys(line?.colors ?? {})[0] ?? "";
+                        setCustomerShingleSelection(prev => ({ ...prev, lineId: lId, colorId: firstColorId }));
+                      }}
+                      style={{ width: "100%", fontSize: 11, padding: "5px 7px", borderRadius: 7, border: "1px solid rgba(15,23,42,0.15)", background: "#fff", color: "#1e293b" }}
+                    >
+                      {Object.entries(mfr.lines).map(([lId, line]) => (
+                        <option key={lId} value={lId}>{(line as { name: string }).name}</option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
+
+              {/* Color swatches */}
+              {(() => {
+                const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
+                const line = mfr && (mfr.lines as Record<string, { name: string; colors: Record<string, { name: string; rgb: [number,number,number] }> }>)[customerShingleSelection.lineId];
+                if (!line) return null;
+                const selectedColor = line.colors[customerShingleSelection.colorId];
+                return (
+                  <>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                      {Object.entries(line.colors).map(([cId, color]) => {
+                        const [cr, cg, cb] = color.rgb;
+                        const isSel = cId === customerShingleSelection.colorId;
+                        return (
+                          <div
+                            key={cId}
+                            onClick={() => setCustomerShingleSelection(prev => ({ ...prev, colorId: cId }))}
+                            title={color.name}
+                            style={{
+                              width: 26, height: 26, borderRadius: "50%",
+                              background: `rgb(${cr},${cg},${cb})`,
+                              cursor: "pointer",
+                              border: isSel ? "2.5px solid #2563eb" : "2px solid rgba(15,23,42,0.12)",
+                              boxShadow: isSel ? "0 0 0 2px rgba(37,99,235,0.3)" : "none",
+                              transition: "box-shadow 0.15s",
+                              flexShrink: 0,
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                    {selectedColor && (
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>{selectedColor.name}</div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -5199,13 +5296,13 @@ export default function Page() {
                     <div style={{ marginTop: 10 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", ...fieldLabel as object, marginBottom: 2 }}>
                         <span>Color Strength</span>
-                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{active.textureColorStrength ?? 70}%</span>
+                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{active.textureColorStrength ?? 50}%</span>
                       </div>
                       <input
                         type="range"
                         min={0}
                         max={100}
-                        value={active.textureColorStrength ?? 70}
+                        value={active.textureColorStrength ?? 50}
                         onChange={(e) => patchActive((p) => ({ ...p, textureColorStrength: Number(e.target.value) }))}
                         style={{ width: "100%", accentColor: "#2563eb" }}
                       />
