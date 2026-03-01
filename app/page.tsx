@@ -1539,7 +1539,7 @@ export default function Page() {
   const [customerViewData, setCustomerViewData] = useState<{
     name: string;
     shingleColor: ShingleColor;
-    photos: Array<{ src: string; roofs: Roof[]; canvasW: number; canvasH: number }>;
+    photos: Array<{ src: string; roofs: Roof[]; canvasW: number; canvasH: number; stageScale?: number; stagePos?: { x: number; y: number } }>;
   } | null>(null);
   const [customerPhotoIdx, setCustomerPhotoIdx] = useState(0);
   const [customerStep, setCustomerStep] = useState<Step>("TEAROFF");
@@ -1560,33 +1560,10 @@ export default function Page() {
     if (screen === "CUSTOMER_VIEW" && customerViewData) {
       const photoData = customerViewData.photos[customerPhotoIdx] ?? customerViewData.photos[0];
       if (!photoData) return null;
-      const cw = photoData.canvasW || 0;
-      const ch = photoData.canvasH || 0;
 
-      // Fit the stage to the roof polygon bounding box so the roof fills the view.
-      const allPts = photoData.roofs.flatMap((r) => r.closed ? r.outline : []);
-      const ptXs = allPts.filter((_, i) => i % 2 === 0);
-      const ptYs = allPts.filter((_, i) => i % 2 === 1);
-      let fitScale = 1, fitX = 0, fitY = 0;
-
-      if (ptXs.length >= 2 && w > 0 && h > 0) {
-        const minX = Math.min(...ptXs), maxX = Math.max(...ptXs);
-        const minY = Math.min(...ptYs), maxY = Math.max(...ptYs);
-        const bboxW = maxX - minX || 1;
-        const bboxH = maxY - minY || 1;
-        const pad = 0.14;
-        fitScale = Math.min(
-          (w * (1 - 2 * pad)) / bboxW,
-          (h * (1 - 2 * pad)) / bboxH,
-        );
-        fitX = w / 2 - ((minX + maxX) / 2) * fitScale;
-        fitY = h / 2 - ((minY + maxY) / 2) * fitScale;
-      } else if (cw > 0 && ch > 0 && w > 0 && h > 0) {
-        fitScale = Math.min(w / cw, h / ch) * 0.90;
-        fitX = (w - cw * fitScale) / 2;
-        fitY = (h - ch * fitScale) / 2;
-      }
-
+      // Use the saved stage transform from the share URL so the customer sees
+      // exactly what the sales rep had. Fall back to scale=1 / pos={0,0} which
+      // lets photoTx naturally fill the photo to the customer's canvas.
       return {
         id: "customer-view",
         name: customerViewData.name,
@@ -1600,15 +1577,13 @@ export default function Page() {
         textureColorStrength: 100,
         showGuidesDuringInstall: false,
         showEditHandles: false,
-        stageScale: fitScale,
-        stagePos: { x: fitX, y: fitY },
+        stageScale: photoData.stageScale ?? 1,
+        stagePos: { x: photoData.stagePos?.x ?? 0, y: photoData.stagePos?.y ?? 0 },
         photoStates: {},
-        _customerCanvasW: cw,
-        _customerCanvasH: ch,
-      } as PhotoProject & { _customerCanvasW: number; _customerCanvasH: number };
+      } as PhotoProject;
     }
     return photos.find((p) => p.id === activePhotoId) || null;
-  }, [photos, activePhotoId, screen, customerViewData, customerPhotoIdx, customerStep, customerShingleColor, customerShingleSelection, w, h]);
+  }, [photos, activePhotoId, screen, customerViewData, customerPhotoIdx, customerStep, customerShingleColor, customerShingleSelection]);
   const photoImg = useHtmlImage(active?.src);
 
   const activeRoof = useMemo(() => {
@@ -1827,13 +1802,15 @@ export default function Page() {
 
         // New multi-photo format: raw.photos array
         // Legacy single-photo format: raw.r + raw.p + raw.cw + raw.ch
-        let photos: Array<{ src: string; roofs: Roof[]; canvasW: number; canvasH: number }>;
+        let photos: Array<{ src: string; roofs: Roof[]; canvasW: number; canvasH: number; stageScale?: number; stagePos?: { x: number; y: number } }>;
         if (Array.isArray(raw.photos) && raw.photos.length > 0) {
           photos = raw.photos.map((ph: any) => ({
             src: ph.p ?? "",
             roofs: decodeRoofs(ph.r ?? []),
             canvasW: ph.cw ?? 0,
             canvasH: ph.ch ?? 0,
+            stageScale: ph.ss ?? undefined,
+            stagePos: ph.spx != null ? { x: ph.spx, y: ph.spy ?? 0 } : undefined,
           }));
         } else {
           // Legacy: single photo
@@ -3121,10 +3098,22 @@ export default function Page() {
       }));
     }
 
+    // Merge live stage state for current photo into allStates
+    const allStageStates: Record<string, { stageScale: number; stagePos: { x: number; y: number } }> = {};
+    for (const [src, ps] of Object.entries(active.photoStates)) {
+      allStageStates[src] = { stageScale: (ps as { stageScale: number; stagePos: { x: number; y: number } }).stageScale ?? 1, stagePos: (ps as { stageScale: number; stagePos: { x: number; y: number } }).stagePos ?? { x: 0, y: 0 } };
+    }
+    if (active.src) {
+      allStageStates[active.src] = { stageScale: active.stageScale ?? 1, stagePos: active.stagePos ?? { x: 0, y: 0 } };
+    }
+
     const photos = (active.photoSrcs ?? []).map((src) => ({
       p: urlMap.get(src) ?? "",
       cw: w,
       ch: h,
+      ss: allStageStates[src]?.stageScale ?? 1,
+      spx: Math.round(allStageStates[src]?.stagePos?.x ?? 0),
+      spy: Math.round(allStageStates[src]?.stagePos?.y ?? 0),
       r: encodeRoofs(allStates[src]?.roofs ?? []),
     }));
 
