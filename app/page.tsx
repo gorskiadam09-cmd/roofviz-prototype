@@ -185,6 +185,15 @@ type PhotoProject = {
     stageScale: number;
     stagePos: { x: number; y: number };
   }>;
+
+  thumbnail?: string; // base64 canvas snapshot captured at CAP_SHINGLES
+};
+
+type CompanyProfile = {
+  name: string;
+  phone: string;
+  repName: string;
+  logo: string; // base64 data URL
 };
 
 type ExportView = "LIVE" | "PDF_SHINGLES" | "PDF_UNDERLAY";
@@ -1656,6 +1665,8 @@ export default function Page() {
   const [baSplit, setBaSplit] = useState(0.5);
   const baDragging = useRef(false);
   const [isCustomerView, setIsCustomerView] = useState(false);
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfile>({ name: "", phone: "", repName: "", logo: "" });
+  const [accountOpen, setAccountOpen] = useState(false);
   // Save stageScale/stagePos before entering customer view so we can restore on exit
   const savedEditViewRef = useRef<{ stageScale: number; stagePos: { x: number; y: number } } | null>(null);
 
@@ -1742,6 +1753,12 @@ export default function Page() {
   } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renamingName, setRenamingName] = useState("");
+
+  // Persist company profile whenever it changes.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem("roofviz_company", JSON.stringify(companyProfile)); } catch {}
+  }, [companyProfile]);
 
   // Persist projects to localStorage whenever they change.
   useEffect(() => {
@@ -1839,6 +1856,12 @@ export default function Page() {
       setScreen("CUSTOMER_VIEW");
       return;
     }
+
+    // Load company profile
+    try {
+      const cp = localStorage.getItem("roofviz_company");
+      if (cp) setCompanyProfile(JSON.parse(cp));
+    } catch {}
 
     // Load saved projects and auto-navigate back to active project
     try {
@@ -2998,6 +3021,20 @@ export default function Page() {
     return () => clearTimeout(t);
   }, [active?.step, presentationMode]);
 
+  // Capture a rendered thumbnail when the project reaches CAP_SHINGLES
+  useEffect(() => {
+    if (active?.step !== "CAP_SHINGLES" || !stageRef.current || !active.src) return;
+    if (screen === "CUSTOMER_VIEW") return;
+    const t = setTimeout(() => {
+      try {
+        const dataUrl = stageRef.current?.toDataURL({ pixelRatio: 0.6 });
+        if (dataUrl) patchActive((p) => ({ ...p, thumbnail: dataUrl }));
+      } catch { /* canvas may not be ready */ }
+    }, 600);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.step, active?.src]);
+
   // textures
   const texW = Math.floor(w * 2.4);
   const texH = Math.floor(h * 2.4);
@@ -3359,6 +3396,7 @@ export default function Page() {
     }
 
     function writePage(title: string, subtitle: string, snaps: string[], items: typeof page1Items) {
+      // Project name + subtitle
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(16);
       pdf.setTextColor(15, 23, 42);
@@ -3367,13 +3405,58 @@ export default function Page() {
       pdf.setFontSize(10);
       pdf.setTextColor(100, 116, 139);
       pdf.text(subtitle, imgX, 46);
-      if (logoDataUrl) pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
+
+      // Company branding block (top-right corner)
+      const cpName = companyProfile.name.trim();
+      const cpRep  = companyProfile.repName.trim();
+      const cpPhone= companyProfile.phone.trim();
+      if (companyProfile.logo) {
+        // Company logo top-right
+        const cLogoW = 130, cLogoH = Math.round(cLogoH_ratio(cLogoW));
+        function cLogoH_ratio(w: number) { return w * 0.4; } // approx 2.5:1 ratio — adjust if needed
+        pdf.addImage(companyProfile.logo, "PNG", pageW - imgX - cLogoW, 10, cLogoW, cLogoH);
+        // Company info below logo
+        const infoY = 10 + cLogoH + 5;
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(8);
+        pdf.setTextColor(100, 116, 139);
+        if (cpName)  pdf.text(cpName,  pageW - imgX - cLogoW, infoY);
+        if (cpRep)   pdf.text(cpRep,   pageW - imgX - cLogoW, infoY + 11);
+        if (cpPhone) pdf.text(cpPhone, pageW - imgX - cLogoW, infoY + 22);
+      } else if (cpName || cpRep || cpPhone) {
+        // No logo: text-only company block
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(10);
+        pdf.setTextColor(15, 23, 42);
+        let infoY = 18;
+        if (cpName)  { pdf.text(cpName,  pageW - imgX - 140, infoY); infoY += 14; }
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(9);
+        pdf.setTextColor(100, 116, 139);
+        if (cpRep)   { pdf.text(cpRep,   pageW - imgX - 140, infoY); infoY += 12; }
+        if (cpPhone) { pdf.text(cpPhone, pageW - imgX - 140, infoY); }
+      } else if (logoDataUrl) {
+        // Fallback: RoofViz logo if no company branding set
+        pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
+      }
+
       addGrid(snaps);
       drawLegend(items);
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(7.5);
       pdf.setTextColor(148, 163, 184);
       pdf.text("MATERIAL KEY", imgX, legendY - 4);
+
+      // Footer with RoofViz attribution + company info
+      const footerY = pageH - 8;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7);
+      pdf.setTextColor(148, 163, 184);
+      pdf.text("Generated with RoofViz", imgX, footerY);
+      if (cpName || cpPhone) {
+        const footerRight = [cpName, cpPhone].filter(Boolean).join("  ·  ");
+        pdf.text(footerRight, pageW - imgX, footerY, { align: "right" });
+      }
     }
 
     writePage("Finished Roof", "Page 1 of 2  ·  Finished Roof", shingleSnaps, page1Items);
@@ -3649,23 +3732,35 @@ export default function Page() {
                     {/* Thumbnail */}
                     <div style={{
                       height: 148,
-                      background: p.src ? "none" : "linear-gradient(135deg, #f1f5f9, #e2e8f0)",
+                      background: p.thumbnail || p.src ? "none" : "linear-gradient(135deg, #0f172a, #1e3a5f)",
                       display: "flex", alignItems: "center", justifyContent: "center",
                       overflow: "hidden", position: "relative",
                     }}>
-                      {p.src
-                        ? <img src={p.src} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                        : <div style={{ fontSize: 36, opacity: 0.15 }}>🏠</div>
-                      }
-                      {p.step && p.step !== "TRACE" && (
+                      {(p.thumbnail || p.src) ? (
+                        <>
+                          <img src={p.thumbnail ?? p.src} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                          {p.thumbnail && (
+                            <div style={{
+                              position: "absolute", top: 8, left: 8,
+                              background: "rgba(22,163,74,0.88)", color: "#ffffff",
+                              fontSize: 9, fontWeight: 700, padding: "2px 7px",
+                              borderRadius: 20, backdropFilter: "blur(4px)",
+                              letterSpacing: "0.06em", textTransform: "uppercase",
+                            }}>Rendered</div>
+                          )}
+                        </>
+                      ) : (
+                        <div style={{ fontSize: 36, opacity: 0.18, color: "#ffffff" }}>🏠</div>
+                      )}
+                      {p.step && p.step !== "TRACE" && p.step !== "START" && (
                         <div style={{
                           position: "absolute", bottom: 8, right: 8,
-                          background: "rgba(15,23,42,0.70)", color: "#e2e8f0",
+                          background: "rgba(15,23,42,0.72)", color: "#e2e8f0",
                           fontSize: 10, fontWeight: 600, padding: "3px 8px",
                           borderRadius: 20, backdropFilter: "blur(6px)",
                           letterSpacing: "0.03em",
                         }}>
-                          {STEP_TITLE[p.step] ?? p.step}
+                          {STEP_SHORT[p.step] ?? STEP_TITLE[p.step] ?? p.step}
                         </div>
                       )}
                     </div>
@@ -5597,6 +5692,97 @@ export default function Page() {
 
             </div>
           )}
+
+          {/* ── Account / Company Branding ── */}
+          <div style={{ borderTop: "1px solid rgba(15,23,42,0.07)", marginTop: 4 }}>
+            <button
+              onClick={() => setAccountOpen(v => !v)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "13px 18px", background: "none", border: "none", cursor: "pointer",
+                fontSize: 12, fontWeight: 700, color: "#64748b",
+                letterSpacing: "0.06em", textTransform: "uppercase",
+              }}
+            >
+              <span>⚙ Company Profile</span>
+              <span style={{ fontSize: 10, opacity: 0.6 }}>{accountOpen ? "▲" : "▼"}</span>
+            </button>
+            {accountOpen && (
+              <div style={{ padding: "0 18px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+                {/* Company name */}
+                <label style={{ display: "block" }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4, fontWeight: 600 }}>Company Name</div>
+                  <input
+                    type="text"
+                    placeholder="e.g. Smith Roofing LLC"
+                    value={companyProfile.name}
+                    onChange={e => setCompanyProfile(p => ({ ...p, name: e.target.value }))}
+                    style={{ display: "block", width: "100%", padding: "8px 11px", borderRadius: 8, border: "1.5px solid rgba(15,23,42,0.12)", fontSize: 12, fontWeight: 500, background: "#fff", color: "#0f172a", boxSizing: "border-box", outline: "none" }}
+                  />
+                </label>
+                {/* Rep name */}
+                <label style={{ display: "block" }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4, fontWeight: 600 }}>Rep Name</div>
+                  <input
+                    type="text"
+                    placeholder="e.g. John Smith"
+                    value={companyProfile.repName}
+                    onChange={e => setCompanyProfile(p => ({ ...p, repName: e.target.value }))}
+                    style={{ display: "block", width: "100%", padding: "8px 11px", borderRadius: 8, border: "1.5px solid rgba(15,23,42,0.12)", fontSize: 12, fontWeight: 500, background: "#fff", color: "#0f172a", boxSizing: "border-box", outline: "none" }}
+                  />
+                </label>
+                {/* Phone */}
+                <label style={{ display: "block" }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4, fontWeight: 600 }}>Phone</div>
+                  <input
+                    type="text"
+                    placeholder="e.g. (555) 123-4567"
+                    value={companyProfile.phone}
+                    onChange={e => setCompanyProfile(p => ({ ...p, phone: e.target.value }))}
+                    style={{ display: "block", width: "100%", padding: "8px 11px", borderRadius: 8, border: "1.5px solid rgba(15,23,42,0.12)", fontSize: 12, fontWeight: 500, background: "#fff", color: "#0f172a", boxSizing: "border-box", outline: "none" }}
+                  />
+                </label>
+                {/* Logo upload */}
+                <div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6, fontWeight: 600 }}>Company Logo</div>
+                  {companyProfile.logo ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <img src={companyProfile.logo} alt="logo" style={{ height: 36, maxWidth: 120, objectFit: "contain", borderRadius: 6, border: "1px solid rgba(15,23,42,0.10)", background: "#f8fafc", padding: 4 }} />
+                      <button
+                        onClick={() => setCompanyProfile(p => ({ ...p, logo: "" }))}
+                        style={{ fontSize: 11, color: "#ef4444", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}
+                      >Remove</button>
+                    </div>
+                  ) : (
+                    <label style={{
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                      padding: "9px 14px", borderRadius: 8,
+                      border: "1.5px dashed rgba(15,23,42,0.16)", cursor: "pointer",
+                      background: "rgba(15,23,42,0.02)", fontSize: 12, color: "#64748b", fontWeight: 500,
+                    }}>
+                      <span>↑ Upload Logo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: "none" }}
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const reader = new FileReader();
+                          reader.onload = () => setCompanyProfile(p => ({ ...p, logo: reader.result as string }));
+                          reader.readAsDataURL(file);
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+                {/* Info */}
+                <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.5, paddingTop: 2 }}>
+                  Your company name, rep name, and phone appear in PDF proposals. Logo appears in the PDF header.
+                </div>
+              </div>
+            )}
+          </div>
               </div>
             </motion.aside>
           )}
