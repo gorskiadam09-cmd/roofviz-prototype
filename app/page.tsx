@@ -335,6 +335,17 @@ const STEP_LABELS: Partial<Record<Step, string>> = {
   EXPORT:       "Send Proposal",
 };
 
+// ── 5-chapter presentation structure ──────────────────────────────────────
+type PresentationChapter = { id: string; label: string; shortLabel: string; steps: Step[] };
+
+const PRESENTATION_CHAPTERS: PresentationChapter[] = [
+  { id: "foundation",  label: "The Foundation",        shortLabel: "Foundation",     steps: ["TEAROFF", "GUTTER_APRON"] },
+  { id: "protection",  label: "Protection Layers",     shortLabel: "Protection",     steps: ["ICE_WATER", "SYNTHETIC", "DRIP_EDGE"] },
+  { id: "valley",      label: "Valley & Ridge System", shortLabel: "Valley & Ridge", steps: ["VALLEY_METAL", "PRO_START"] },
+  { id: "roof",        label: "Your New Roof",         shortLabel: "Your Roof",      steps: ["SHINGLES", "RIDGE_VENT", "CAP_SHINGLES"] },
+  { id: "final",       label: "Final Look",            shortLabel: "Final Look",     steps: [] },
+];
+
 const STEP_TIP: Partial<Record<Step, string>> = {
   TRACE:        "Click to map the roof outline. Click the first point again to close the shape.",
   TEAROFF:      "This shows the deck exposed — the clean slate your new protection system installs on.",
@@ -1666,6 +1677,7 @@ export default function Page() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
   const [presentationMode, setPresentationMode] = useState(false);
+  const [finalLookMode, setFinalLookMode] = useState(false);
   const [stepFlash, setStepFlash] = useState(false);
   const [baMode, setBaMode] = useState(false);
   const [baSplit, setBaSplit] = useState(0.5);
@@ -3054,6 +3066,42 @@ export default function Page() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.step, active?.src]);
 
+  // Auto-detect roof when a new photo loads on the TRACE step with no outline yet.
+  // On success: accept the result and advance to TEAROFF ("Upload → AI → Present" flow).
+  const autoDetectTriggeredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!photoImg || !active || active.step !== "TRACE") return;
+    if (activeRoof?.closed || (activeRoof?.outline?.length ?? 0) > 0) return;
+    if (photoImg.src === autoDetectTriggeredFor.current) return;
+    if (photoImg.naturalWidth === 0) return; // not fully loaded
+    autoDetectTriggeredFor.current = photoImg.src;
+    const t = setTimeout(() => {
+      try {
+        const result = autoDetectRoof(photoImg, w, h);
+        if (result?.outline?.length >= 6) {
+          // Auto-accept: patch the roof and advance to TEAROFF in one update
+          setPhotos(prev => prev.map(p => {
+            if (p.id !== activePhotoId) return p;
+            const roofs = p.roofs.map(r => {
+              if (r.id !== p.activeRoofId) return r;
+              return {
+                ...r,
+                outline: stageToImgPts(result.outline, photoTx),
+                closed: true,
+                lines: result.lines.map(l => ({ ...l, id: uid(), points: stageToImgPts(l.points, photoTx) })),
+              };
+            });
+            return { ...p, roofs, step: "TEAROFF" as Step };
+          }));
+          setTool("NONE");
+          showToast("Roof detected — ready to present!");
+        }
+      } catch { /* fail silently — user can trace manually */ }
+    }, 600);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photoImg?.src]);
+
   // textures
   const texW = Math.floor(w * 2.4);
   const texH = Math.floor(h * 2.4);
@@ -3126,6 +3174,15 @@ export default function Page() {
   }, [active]);
   const presentationStepNum = presentationNavSteps.indexOf(liveStep) + 1;
   const presentationTotalSteps = presentationNavSteps.length;
+
+  // Which of the 5 chapters is currently active?
+  const currentChapterIdx = useMemo(() => {
+    if (finalLookMode) return 4;
+    for (let i = PRESENTATION_CHAPTERS.length - 2; i >= 0; i--) {
+      if ((PRESENTATION_CHAPTERS[i].steps as readonly string[]).includes(liveStep)) return i;
+    }
+    return 0;
+  }, [finalLookMode, liveStep]);
 
   // Generate a shareable read-only URL encoding the current project structure.
   // photoUrl is the Vercel Blob URL of the compressed uploaded photo.
@@ -4030,6 +4087,7 @@ export default function Page() {
                       document.documentElement.requestFullscreen().catch(() => {});
                     }
                   } else {
+                    setFinalLookMode(false);
                     if (document.fullscreenElement && document.exitFullscreen) {
                       document.exitFullscreen().catch(() => {});
                     }
@@ -5916,8 +5974,8 @@ export default function Page() {
         ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0, minHeight: 0 } : {}),
       }}>
         {/* ── Presentation: cinematic step title ── */}
-        {presentationMode && liveStep !== "START" && presentationStepNum > 0 && (
-          <div key={liveStep} className="rv-fade-in" style={{
+        {presentationMode && (liveStep !== "START" && presentationStepNum > 0 || finalLookMode) && (
+          <div key={finalLookMode ? "final" : liveStep} className="rv-fade-in" style={{
             position: "absolute", top: 20, left: "50%", transform: "translateX(-50%)",
             zIndex: 30, pointerEvents: "none", whiteSpace: "nowrap",
             display: "flex", flexDirection: "column", alignItems: "center", gap: 0,
@@ -5930,11 +5988,11 @@ export default function Page() {
               boxShadow: "0 4px 24px rgba(0,0,0,0.40)",
             }}>
               <span style={{ fontSize: 10, fontWeight: 800, color: "#ea580c", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                {presentationStepNum} / {presentationTotalSteps}
+                {finalLookMode ? "✦" : `Chapter ${currentChapterIdx + 1} / ${PRESENTATION_CHAPTERS.length}`}
               </span>
               <span style={{ width: 1, height: 11, background: "rgba(255,255,255,0.15)", display: "inline-block" }} />
               <span style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9", letterSpacing: "0.01em" }}>
-                {STEP_LABELS[liveStep] ?? liveStep}
+                {finalLookMode ? "Final Look" : (PRESENTATION_CHAPTERS[currentChapterIdx]?.label ?? (STEP_LABELS[liveStep] ?? liveStep))}
               </span>
             </div>
           </div>
@@ -6676,24 +6734,36 @@ export default function Page() {
                   padding: `20px 28px max(20px, env(safe-area-inset-bottom))`,
                   display: "flex", flexDirection: "column", alignItems: "center", gap: 14,
                 }}>
-                  {/* Progress dots */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    {presentationNavSteps.map((s) => {
-                      const isCur = s === liveStep;
-                      const isPast = stepIndex(s) < stepIndex(liveStep);
+                  {/* 5-Chapter progress pills */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {PRESENTATION_CHAPTERS.map((ch, i) => {
+                      const isActive = i === currentChapterIdx;
+                      const isPast = i < currentChapterIdx;
                       return (
                         <button
-                          key={s}
-                          onClick={() => jumpToStep(s)}
-                          title={STEP_LABELS[s] ?? s}
-                          style={{
-                            width: isCur ? 22 : 6, height: 6, borderRadius: 99, border: "none",
-                            cursor: "pointer", padding: 0, flexShrink: 0,
-                            background: isPast ? "#16a34a" : isCur ? "#ea580c" : "rgba(255,255,255,0.18)",
-                            transition: "width 0.3s ease, background 0.3s ease",
-                            boxShadow: isCur ? "0 0 8px rgba(234,88,12,0.60)" : "none",
+                          key={ch.id}
+                          onClick={() => {
+                            if (ch.steps.length === 0) { setFinalLookMode(true); return; }
+                            // Jump to first step of the chapter that's relevant
+                            const rel = active ? relevantSteps(active.roofs) : new Set<Step>();
+                            const target = ch.steps.find(s => rel.has(s));
+                            if (target) { setFinalLookMode(false); jumpToStep(target); }
                           }}
-                        />
+                          title={ch.label}
+                          style={{
+                            height: 24, borderRadius: 99, border: "none", cursor: "pointer",
+                            padding: isActive ? "0 14px" : "0 8px",
+                            fontSize: 10, fontWeight: 700, letterSpacing: "0.05em",
+                            flexShrink: 0,
+                            background: isPast ? "rgba(22,163,74,0.55)" : isActive ? "#ea580c" : "rgba(255,255,255,0.09)",
+                            color: (isPast || isActive) ? "#ffffff" : "rgba(255,255,255,0.35)",
+                            transition: "all 0.3s ease",
+                            boxShadow: isActive ? "0 0 10px rgba(234,88,12,0.55)" : "none",
+                            minWidth: isActive ? 80 : 24,
+                            textTransform: "uppercase",
+                            overflow: "hidden", whiteSpace: "nowrap",
+                          }}
+                        >{isActive || !isMobile ? ch.shortLabel : ""}</button>
                       );
                     })}
                   </div>
@@ -6701,17 +6771,21 @@ export default function Page() {
                   <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", maxWidth: 520 }}>
                     {/* Back */}
                     <button
-                      onClick={goBack}
-                      disabled={presentationStepNum <= 1}
+                      onClick={() => {
+                        if (finalLookMode) { setFinalLookMode(false); return; }
+                        goBack();
+                      }}
+                      disabled={!finalLookMode && presentationStepNum <= 1}
                       style={{
                         padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600,
                         border: "1px solid rgba(255,255,255,0.12)",
-                        background: "rgba(255,255,255,0.07)", color: presentationStepNum <= 1 ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.82)",
-                        cursor: presentationStepNum <= 1 ? "default" : "pointer",
+                        background: "rgba(255,255,255,0.07)",
+                        color: (!finalLookMode && presentationStepNum <= 1) ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.82)",
+                        cursor: (!finalLookMode && presentationStepNum <= 1) ? "default" : "pointer",
                         transition: "background 0.15s, color 0.15s", flexShrink: 0,
                       }}
                     >← Back</button>
-                    {/* Center: photo switcher or spacer */}
+                    {/* Center: photo switcher or Before/After */}
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                       {(active?.photoSrcs?.length ?? 0) > 1 ? (() => {
                         const srcs = active!.photoSrcs;
@@ -6741,10 +6815,35 @@ export default function Page() {
                         >◧ BEFORE / AFTER</button>
                       )}
                     </div>
-                    {/* Next / Exit */}
-                    {canGoNext() ? (
+                    {/* Next / Final Look / Exit */}
+                    {finalLookMode ? (
                       <button
-                        onClick={goNext}
+                        onClick={() => {
+                          setFinalLookMode(false); setPresentationMode(false); setUiTab("edit");
+                          if (document.fullscreenElement && document.exitFullscreen) {
+                            document.exitFullscreen().catch(() => {});
+                          }
+                        }}
+                        style={{
+                          padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600,
+                          border: "1px solid rgba(255,255,255,0.12)", cursor: "pointer", flexShrink: 0,
+                          background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.70)",
+                        }}
+                      >✕ Exit</button>
+                    ) : canGoNext() ? (
+                      <button
+                        onClick={() => {
+                          // When at the last step before EXPORT, enter Final Look instead
+                          const rel = active ? relevantSteps(active.roofs) : new Set<Step>();
+                          let nextIdx = stepIndex(active?.step ?? "START") + 1;
+                          while (nextIdx < STEPS.length && !rel.has(STEPS[nextIdx])) nextIdx++;
+                          if (nextIdx >= STEPS.length || STEPS[nextIdx] === "EXPORT") {
+                            setFinalLookMode(true);
+                            setStepFlash(true); setTimeout(() => setStepFlash(false), 80);
+                          } else {
+                            goNext();
+                          }
+                        }}
                         style={{
                           padding: "10px 26px", borderRadius: 10, fontSize: 13, fontWeight: 700,
                           border: "none", cursor: "pointer", flexShrink: 0,
