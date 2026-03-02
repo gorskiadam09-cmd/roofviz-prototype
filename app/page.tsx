@@ -196,6 +196,12 @@ type CompanyProfile = {
   logo: string; // base64 data URL
 };
 
+type AppStats = {
+  presentationsStarted: number;
+  pdfsExported: number;
+  linksShared: number;
+};
+
 type ExportView = "LIVE" | "PDF_SHINGLES" | "PDF_UNDERLAY";
 
 function uid() {
@@ -1666,6 +1672,7 @@ export default function Page() {
   const baDragging = useRef(false);
   const [isCustomerView, setIsCustomerView] = useState(false);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile>({ name: "", phone: "", repName: "", logo: "" });
+  const [appStats, setAppStats] = useState<AppStats>({ presentationsStarted: 0, pdfsExported: 0, linksShared: 0 });
   const [accountOpen, setAccountOpen] = useState(false);
   // Save stageScale/stagePos before entering customer view so we can restore on exit
   const savedEditViewRef = useRef<{ stageScale: number; stagePos: { x: number; y: number } } | null>(null);
@@ -1759,6 +1766,12 @@ export default function Page() {
     if (typeof window === "undefined") return;
     try { localStorage.setItem("roofviz_company", JSON.stringify(companyProfile)); } catch {}
   }, [companyProfile]);
+
+  // Persist activity stats whenever they change.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem("roofviz_stats", JSON.stringify(appStats)); } catch {}
+  }, [appStats]);
 
   // Persist projects to localStorage whenever they change.
   useEffect(() => {
@@ -1861,6 +1874,12 @@ export default function Page() {
     try {
       const cp = localStorage.getItem("roofviz_company");
       if (cp) setCompanyProfile(JSON.parse(cp));
+    } catch {}
+
+    // Load activity stats
+    try {
+      const st = localStorage.getItem("roofviz_stats");
+      if (st) setAppStats(JSON.parse(st));
     } catch {}
 
     // Load saved projects and auto-navigate back to active project
@@ -3464,6 +3483,7 @@ export default function Page() {
     writePage("Underlayments", "Page 2 of 2  ·  Underlayments & Metals", underlaySnaps, page2Items);
 
     pdf.save(`${projectName.replaceAll(" ", "_")}_RoofViz.pdf`);
+    setAppStats(s => ({ ...s, pdfsExported: s.pdfsExported + 1 }));
   }
 
   // ── Design tokens ──────────────────────────────────────────────────────────
@@ -3471,7 +3491,7 @@ export default function Page() {
     background: "#ffffff",
     borderRadius: 14,
     padding: "16px 18px",
-    boxShadow: "0 2px 8px rgba(15,23,42,0.07), 0 0 0 1px rgba(15,23,42,0.05)",
+    boxShadow: "0 2px 10px rgba(15,23,42,0.09), 0 0 0 1px rgba(15,23,42,0.05)",
     marginBottom: 10,
   };
 
@@ -3667,42 +3687,72 @@ export default function Page() {
           {photos.length === 0 ? (
             /* Empty state */
             <div className="rv-fade-in" style={{
-              textAlign: "center", padding: "80px 24px 88px",
-              background: "#ffffff", borderRadius: 20,
-              boxShadow: "0 1px 4px rgba(15,23,42,0.05), 0 0 0 1px rgba(15,23,42,0.04)",
+              borderRadius: 20, overflow: "hidden",
+              boxShadow: "0 4px 24px rgba(15,23,42,0.12), 0 0 0 1px rgba(15,23,42,0.06)",
             }}>
+              {/* Dark hero banner */}
               <div style={{
-                width: 64, height: 64, borderRadius: 16, background: "linear-gradient(135deg,#eff6ff,#dbeafe)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                margin: "0 auto 20px", fontSize: 28,
-              }}>🏠</div>
-              <h2 style={{ fontSize: 20, fontWeight: 600, color: "#0f172a", margin: "0 0 8px" }}>
-                No presentations yet
-              </h2>
-              <p style={{ fontSize: 14, color: "#64748b", margin: "0 0 28px", lineHeight: 1.65, maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}>
-                Start a new presentation to show homeowners exactly what their new roof will look like — layer by layer.
-              </p>
-              <button
-                onClick={startProject}
-                className="rv-btn-primary"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 8,
-                  padding: "11px 28px", borderRadius: 10, fontSize: 14, fontWeight: 600,
-                  cursor: "pointer", border: "none", width: "auto", marginTop: 0, minHeight: 0,
-                  background: "linear-gradient(135deg, #ea580c, #c2410c)",
-                  color: "#ffffff",
-                  boxShadow: "0 2px 8px rgba(234,88,12,0.28)",
-                  letterSpacing: "0.01em",
-                }}
-              >
-                <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 400 }}>+</span> Start New Presentation
-              </button>
+                background: "linear-gradient(135deg, #0f172a 0%, #1e3a5f 55%, #7c2d12 100%)",
+                padding: "52px 40px 48px", textAlign: "center", position: "relative", overflow: "hidden",
+              }}>
+                {/* Subtle texture overlay */}
+                <div style={{
+                  position: "absolute", inset: 0, opacity: 0.07,
+                  backgroundImage: "radial-gradient(circle at 20% 30%, #ea580c 0%, transparent 40%), radial-gradient(circle at 80% 70%, #3b82f6 0%, transparent 40%)",
+                }} />
+                <div style={{ position: "relative", zIndex: 1 }}>
+                  <div style={{
+                    width: 68, height: 68, borderRadius: 18,
+                    background: "linear-gradient(135deg,rgba(234,88,12,0.18),rgba(234,88,12,0.08))",
+                    border: "1px solid rgba(234,88,12,0.25)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    margin: "0 auto 20px", fontSize: 30,
+                  }}>🏠</div>
+                  <h2 style={{ fontSize: 22, fontWeight: 700, color: "#f8fafc", margin: "0 0 10px", letterSpacing: "-0.01em" }}>
+                    No presentations yet
+                  </h2>
+                  <p style={{ fontSize: 14, color: "rgba(248,250,252,0.65)", margin: "0 0 28px", lineHeight: 1.7, maxWidth: 360, marginLeft: "auto", marginRight: "auto" }}>
+                    Upload a roof photo and walk homeowners through every layer of their new roof — ice shield, underlayment, shingles, and more.
+                  </p>
+                  <button
+                    onClick={startProject}
+                    className="rv-btn-primary"
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 8,
+                      padding: "12px 32px", borderRadius: 10, fontSize: 14, fontWeight: 600,
+                      cursor: "pointer", border: "none", width: "auto", marginTop: 0, minHeight: 0,
+                      background: "linear-gradient(135deg, #ea580c, #c2410c)",
+                      color: "#ffffff",
+                      boxShadow: "0 4px 16px rgba(234,88,12,0.40)",
+                      letterSpacing: "0.01em",
+                    }}
+                  >
+                    <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 400 }}>+</span> Start New Presentation
+                  </button>
+                </div>
+              </div>
+              {/* Bottom feature strip */}
+              <div style={{
+                background: "#ffffff", padding: "20px 32px",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 32, flexWrap: "wrap",
+              }}>
+                {[
+                  { icon: "📸", text: "Upload any roof photo" },
+                  { icon: "✏️", text: "Trace the outline in seconds" },
+                  { icon: "🎨", text: "See every layer come to life" },
+                  { icon: "📤", text: "Send a branded proposal" },
+                ].map(({ icon, text }) => (
+                  <div key={text} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "#64748b", fontWeight: 500 }}>
+                    <span style={{ fontSize: 16 }}>{icon}</span>{text}
+                  </div>
+                ))}
+              </div>
             </div>
           ) : (
             <>
               <div style={{
                 display: "flex", alignItems: "center", justifyContent: "space-between",
-                marginBottom: 24,
+                marginBottom: 24, flexWrap: "wrap", gap: 12,
               }}>
                 <div>
                   <h1 style={{ fontSize: 18, fontWeight: 600, color: "#0f172a", margin: 0 }}>Presentations</h1>
@@ -3710,6 +3760,26 @@ export default function Page() {
                     {photos.length} presentation{photos.length !== 1 ? "s" : ""}
                   </div>
                 </div>
+                {(appStats.presentationsStarted > 0 || appStats.pdfsExported > 0 || appStats.linksShared > 0) && (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {[
+                      { icon: "✦", label: "Presented", value: appStats.presentationsStarted },
+                      { icon: "⬇", label: "PDFs", value: appStats.pdfsExported },
+                      { icon: "↗", label: "Links", value: appStats.linksShared },
+                    ].filter(x => x.value > 0).map(({ icon, label, value }) => (
+                      <div key={label} style={{
+                        display: "flex", alignItems: "center", gap: 5,
+                        background: "#ffffff", borderRadius: 99, padding: "5px 12px",
+                        boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.05)",
+                        fontSize: 12, color: "#475569", fontWeight: 600,
+                      }}>
+                        <span style={{ color: "#ea580c", fontSize: 11 }}>{icon}</span>
+                        <span style={{ color: "#0f172a", fontWeight: 700 }}>{value}</span>
+                        <span style={{ color: "#94a3b8", fontWeight: 500 }}>{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div style={{
                 display: "grid",
@@ -3724,7 +3794,7 @@ export default function Page() {
                       background: "#ffffff",
                       borderRadius: 16,
                       overflow: "hidden",
-                      boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.04)",
+                      boxShadow: "0 2px 12px rgba(15,23,42,0.08), 0 0 0 1px rgba(15,23,42,0.05)",
                       cursor: "pointer",
                     }}
                     onClick={() => openProject(p.id)}
@@ -3954,6 +4024,7 @@ export default function Page() {
                     patchActive((p) => ({ ...p, step: "TEAROFF" }));
                     setUiTab("edit");
                     setBaMode(false);
+                    setAppStats(s => ({ ...s, presentationsStarted: s.presentationsStarted + 1 }));
                     // Request fullscreen for cinematic experience
                     if (document.documentElement.requestFullscreen) {
                       document.documentElement.requestFullscreen().catch(() => {});
@@ -4315,8 +4386,10 @@ export default function Page() {
                   ? { left: 0, right: 0, bottom: 0, top: "auto", maxHeight: "72vh", borderRadius: "16px 16px 0 0", width: "100%" }
                   : { right: 12, top: 12, bottom: 12, width: 300, borderRadius: 16 }
                 ),
-                background: "#ffffff",
-                boxShadow: "0 8px 40px rgba(15,23,42,0.16), 0 0 0 1px rgba(15,23,42,0.06)",
+                background: "rgba(255,255,255,0.97)",
+                backdropFilter: "blur(16px)",
+                WebkitBackdropFilter: "blur(16px)",
+                boxShadow: "0 8px 40px rgba(15,23,42,0.18), 0 0 0 1px rgba(15,23,42,0.07)",
                 display: "flex", flexDirection: "column",
                 overflow: "hidden",
               }}
@@ -4702,6 +4775,7 @@ export default function Page() {
                                     try {
                                       await navigator.clipboard.writeText(shareUrl);
                                       setShareStatus("copied");
+                                      setAppStats(s => ({ ...s, linksShared: s.linksShared + 1 }));
                                       setTimeout(() => setShareStatus(""), 2500);
                                     } catch {
                                       setShareErrorMsg("Clipboard unavailable — link: " + shareUrl.slice(0, 80));
@@ -5709,6 +5783,22 @@ export default function Page() {
             </button>
             {accountOpen && (
               <div style={{ padding: "0 18px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+                {/* Activity stats */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 4 }}>
+                  {[
+                    { label: "Presentations", value: appStats.presentationsStarted },
+                    { label: "PDFs Exported", value: appStats.pdfsExported },
+                    { label: "Links Shared", value: appStats.linksShared },
+                  ].map(({ label, value }) => (
+                    <div key={label} style={{
+                      background: "rgba(15,23,42,0.03)", borderRadius: 10, padding: "8px 6px",
+                      textAlign: "center", border: "1px solid rgba(15,23,42,0.07)",
+                    }}>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: "#ea580c", lineHeight: 1 }}>{value}</div>
+                      <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 600, marginTop: 3, letterSpacing: "0.03em", textTransform: "uppercase" }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
                 {/* Company name */}
                 <label style={{ display: "block" }}>
                   <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4, fontWeight: 600 }}>Company Name</div>
