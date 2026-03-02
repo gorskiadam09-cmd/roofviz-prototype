@@ -231,11 +231,11 @@ describe("shinglePalette()", () => {
 // Adjust the import path to match your project layout:
 import Page from "../app/page";
 
-// Helper — renders and clicks "Create First Project" (empty-state button on MENU screen)
+// Helper — renders and clicks "Start New Presentation" (empty-state button on MENU screen)
 async function startProject() {
   const user = userEvent.setup();
   render(<Page />);
-  await user.click(screen.getByRole("button", { name: /Create First Project/i }));
+  await user.click(screen.getByRole("button", { name: /Start New Presentation/i }));
   return user;
 }
 
@@ -249,20 +249,20 @@ async function openAdvanced() {
 describe("Page — initial MENU screen", () => {
   it("shows the empty state heading when no projects exist", () => {
     render(<Page />);
-    expect(screen.getByText("No projects yet")).toBeInTheDocument();
+    expect(screen.getByText("No presentations yet")).toBeInTheDocument();
   });
 
-  it("shows the Create First Project button on empty state", () => {
+  it("shows the Start New Presentation button on empty state", () => {
     render(<Page />);
     expect(
-      screen.getByRole("button", { name: /Create First Project/i })
+      screen.getByRole("button", { name: /Start New Presentation/i })
     ).toBeInTheDocument();
   });
 
-  it("shows the New Project button in the header", () => {
+  it("shows the New Roof button in the header", () => {
     render(<Page />);
     expect(
-      screen.getByRole("button", { name: /New Project/i })
+      screen.getByRole("button", { name: /New Roof/i })
     ).toBeInTheDocument();
   });
 
@@ -283,7 +283,7 @@ describe("Page — after starting project", () => {
   it("advances to the TRACE step", async () => {
     await startProject();
     expect(
-      screen.getAllByText(/Step 1 — Outline roofs/i).length
+      screen.getAllByText(/Step 1 — Map Your Roof/i).length
     ).toBeGreaterThan(0);
   });
 

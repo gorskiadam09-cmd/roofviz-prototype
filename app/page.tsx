@@ -71,18 +71,18 @@ const STEPS: Step[] = [
 
 const STEP_TITLE: Record<Step, string> = {
   START: "Start a project",
-  TRACE: "Step 1 — Outline roofs + draw lines",
-  TEAROFF: "Step 2 — Existing roof tear-off (decking exposed)",
-  GUTTER_APRON: "Step 3 — Gutter apron (eaves)",
-  ICE_WATER: "Step 4 — Ice & water (eaves + valleys)",
-  SYNTHETIC: "Step 5 — Synthetic underlayment (field)",
-  DRIP_EDGE: "Step 6 — Drip edge (rakes)",
-  VALLEY_METAL: "Step 7 — Valley metal (valleys)",
-  PRO_START: "Step 8 — Pro-start starter strip (eaves + rakes)",
-  SHINGLES: "Step 9 — Shingles",
-  RIDGE_VENT: "Step 10 — Ridge vent (ridges)",
-  CAP_SHINGLES: "Step 11 — Cap shingles (same as shingles)",
-  EXPORT: "Finish — Export PDF",
+  TRACE: "Step 1 — Map Your Roof",
+  TEAROFF: "Step 2 — What We're Replacing",
+  GUTTER_APRON: "Step 3 — Foundation Protection",
+  ICE_WATER: "Step 4 — Ice & Water Shield",
+  SYNTHETIC: "Step 5 — Full-Deck Waterproof Barrier",
+  DRIP_EDGE: "Step 6 — Perimeter Defense",
+  VALLEY_METAL: "Step 7 — Valley Armor",
+  PRO_START: "Step 8 — Starter Course",
+  SHINGLES: "Step 9 — Your New Roof",
+  RIDGE_VENT: "Step 10 — Ventilation System",
+  CAP_SHINGLES: "Step 11 — Ridge Cap Finish",
+  EXPORT: "Finish — Send Proposal",
 };
 
 type LineKind = "EAVE" | "RAKE" | "VALLEY" | "RIDGE" | "HIP";
@@ -276,63 +276,63 @@ function shingleRGB(color: ShingleColor): [number, number, number] {
 
 // Per-step contextual hints shown in the panel
 const STEP_HINT: Partial<Record<Step, string>> = {
-  TRACE:        "Outline each roof section, then label its edges (eaves, rakes, valleys, etc.).",
-  TEAROFF:      "Shows the bare decking after the old roof is removed.",
-  GUTTER_APRON: "Metal strips at the eave edges channel water into the gutters.",
-  ICE_WATER:    "Self-adhering membrane at eaves and valleys stops ice dam leaks.",
-  SYNTHETIC:    "Lightweight felt covers the field of the roof as a moisture barrier.",
-  DRIP_EDGE:    "L-shaped metal along the rake edges keeps water off the fascia.",
-  VALLEY_METAL: "Standard open valley uses galvanized metal. Select a color in Advanced Options to upgrade to W-valley metal — installed over ice & water with shingles woven around it.",
-  PRO_START:    "Adhesive starter strip along eaves and rakes seals the first shingle row.",
-  SHINGLES:     "Architectural shingles are installed over the entire roof field.",
-  RIDGE_VENT:   "Continuous vent strip along the ridge allows attic air to escape.",
-  CAP_SHINGLES: "Pre-cut cap shingles finish the ridge and cover the vent.",
+  TRACE:        "Outline each roof section and label the edges — eaves, rakes, valleys, ridges.",
+  TEAROFF:      "This is the bare decking exposed after removing the old roof — the foundation of your new system.",
+  GUTTER_APRON: "Metal flashing that seals the eave edge and channels water into the gutters — installed first.",
+  ICE_WATER:    "Self-sealing membrane that stops ice dam leaks and protects valleys. Installed 6 feet up from the eave.",
+  SYNTHETIC:    "Breathable, lightweight barrier that covers the full field — the first line of defense against moisture.",
+  DRIP_EDGE:    "Precision-bent metal along the rake edges that keeps water off the fascia and away from the structure.",
+  VALLEY_METAL: "Continuous metal channel that routes water safely off the roof. Upgrade to a colored W-valley in Settings.",
+  PRO_START:    "Adhesive starter strip that creates the sealant bond for the first shingle course at the eave and rake.",
+  SHINGLES:     "Architectural shingles installed over the full field — this is what the homeowner sees every day.",
+  RIDGE_VENT:   "Continuous vent along the ridge that balances attic airflow and extends roof life.",
+  CAP_SHINGLES: "Pre-cut cap shingles finish the ridge with a clean, weathertight seal over the vent.",
   EXPORT:       "Your visualization is complete — export a PDF to share with your customer.",
 };
 
 const STEP_SHORT: Partial<Record<Step, string>> = {
-  TRACE:        "Outline & Label Edges",
-  TEAROFF:      "Tear-off / Decking",
-  GUTTER_APRON: "Gutter Apron (eaves)",
-  ICE_WATER:    "Ice & Water Shield",
-  SYNTHETIC:    "Synthetic Underlayment",
-  DRIP_EDGE:    "Drip Edge (rakes)",
-  VALLEY_METAL: "Valley Metal (valleys)",
-  PRO_START:    "Pro-Start Strip",
-  SHINGLES:     "Shingles",
-  RIDGE_VENT:   "Ridge Vent",
-  CAP_SHINGLES: "Cap Shingles",
-  EXPORT:       "Export PDF",
+  TRACE:        "Map Roof",
+  TEAROFF:      "Tear-Off",
+  GUTTER_APRON: "Foundation",
+  ICE_WATER:    "Ice Shield",
+  SYNTHETIC:    "Waterproof Barrier",
+  DRIP_EDGE:    "Perimeter",
+  VALLEY_METAL: "Valley Armor",
+  PRO_START:    "Starter Course",
+  SHINGLES:     "New Roof",
+  RIDGE_VENT:   "Ventilation",
+  CAP_SHINGLES: "Ridge Finish",
+  EXPORT:       "Send Proposal",
 };
 
 const STEP_LABELS: Partial<Record<Step, string>> = {
-  TRACE:        "Outline & Label Edges",
-  TEAROFF:      "Tear-off / Decking",
-  GUTTER_APRON: "Gutter Apron",
+  TRACE:        "Map Your Roof",
+  TEAROFF:      "What We're Replacing",
+  GUTTER_APRON: "Foundation Protection",
   ICE_WATER:    "Ice & Water Shield",
-  SYNTHETIC:    "Synthetic Underlayment",
-  DRIP_EDGE:    "Drip Edge",
-  VALLEY_METAL: "Valley Metal",
-  PRO_START:    "Pro-Start Strip",
-  SHINGLES:     "Shingles",
-  RIDGE_VENT:   "Ridge Vent",
-  CAP_SHINGLES: "Cap Shingles",
-  EXPORT:       "Export PDF",
+  SYNTHETIC:    "Full-Deck Waterproof Barrier",
+  DRIP_EDGE:    "Perimeter Defense",
+  VALLEY_METAL: "Valley Armor",
+  PRO_START:    "Starter Course",
+  SHINGLES:     "Your New Roof",
+  RIDGE_VENT:   "Ventilation System",
+  CAP_SHINGLES: "Ridge Cap Finish",
+  EXPORT:       "Send Proposal",
 };
 
 const STEP_TIP: Partial<Record<Step, string>> = {
-  TRACE:        "Click to place outline points. Click the first point again to close the shape.",
-  TEAROFF:      "The decking texture appears once your outline is closed.",
-  GUTTER_APRON: "Gutter apron sits beneath ice & water at the eave — installed first.",
-  ICE_WATER:    "Apply at least 6 feet up from the eave and 36\" into each valley.",
-  SYNTHETIC:    "Laps 2\" at each course. Runs horizontally across the full field.",
-  DRIP_EDGE:    "Installed on rake edges after underlayment, before cap shingles.",
-  VALLEY_METAL: "Set a color in Settings to upgrade from galvanized to W-valley metal.",
-  PRO_START:    "Starter strip provides the sealant bond for the first shingle course.",
-  SHINGLES:     "Architectural shingles install bottom-to-top with a 5⅝\" exposure.",
-  RIDGE_VENT:   "Size the vent to match the attic's net free area for proper airflow.",
-  CAP_SHINGLES: "Each cap piece overlaps 5\" and is nailed through the ridge vent.",
-  EXPORT:       "The PDF has two pages: finished shingles + underlayment/metals layer.",
+  TRACE:        "Click to map the roof outline. Click the first point again to close the shape.",
+  TEAROFF:      "This shows the deck exposed — the clean slate your new protection system installs on.",
+  GUTTER_APRON: "Metal flashing at the eave edge, installed before the protection layers go on.",
+  ICE_WATER:    "Self-sealing membrane — 6 feet up from the eave and 36\" into each valley.",
+  SYNTHETIC:    "Breathable barrier covering the full field. Laps 2\" per course.",
+  DRIP_EDGE:    "Metal edge on the rakes — keeps water off the fascia after the barrier is laid.",
+  VALLEY_METAL: "Set a color in Customize to upgrade from galvanized to a finished W-valley.",
+  PRO_START:    "Adhesive starter strip seals the first shingle course at eaves and rakes.",
+  SHINGLES:     "Architectural shingles — installed bottom-to-top with a 5⅝\" exposure.",
+  RIDGE_VENT:   "Continuous vent matched to the attic's net free area for balanced airflow.",
+  CAP_SHINGLES: "Each cap overlaps 5\" and is nailed through the ridge vent below.",
+  EXPORT:       "Two-page proposal: finished roof view + full protection system breakdown.",
 };
 
 // Returns the subset of STEPS that should appear given the lines drawn across all roofs.
@@ -2990,11 +2990,11 @@ export default function Page() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, draftLine, draftHole, activeRoof, active]);
 
-  // Presentation mode: flash on step change
+  // Presentation mode: cinematic cross-fade on step change (fast cut in, slow fade out)
   useEffect(() => {
     if (!presentationMode) return;
     setStepFlash(true);
-    const t = setTimeout(() => setStepFlash(false), 350);
+    const t = setTimeout(() => setStepFlash(false), 80);
     return () => clearTimeout(t);
   }, [active?.step, presentationMode]);
 
@@ -3060,6 +3060,16 @@ export default function Page() {
     return STEPS.filter((s) => rel.has(s));
   }, [customerViewData, customerPhotoIdx]);
   const customerStepIdx = customerNavSteps.indexOf(customerStep);
+
+  // Presentation mode step navigation (excludes setup + export steps)
+  const presentationNavSteps = useMemo(() => {
+    if (!active) return [] as Step[];
+    const rel = relevantSteps(active.roofs);
+    rel.delete("START"); rel.delete("TRACE"); rel.delete("EXPORT");
+    return STEPS.filter((s) => rel.has(s));
+  }, [active]);
+  const presentationStepNum = presentationNavSteps.indexOf(liveStep) + 1;
+  const presentationTotalSteps = presentationNavSteps.length;
 
   // Generate a shareable read-only URL encoding the current project structure.
   // photoUrl is the Vercel Blob URL of the compressed uploaded photo.
@@ -3564,7 +3574,7 @@ export default function Page() {
               width: "auto", marginTop: 0, minHeight: 0, letterSpacing: "0.01em",
             }}
           >
-            <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 400 }}>+</span> New Project
+            <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 400 }}>+</span> New Roof
           </button>
         </header>
 
@@ -3584,10 +3594,10 @@ export default function Page() {
                 margin: "0 auto 20px", fontSize: 28,
               }}>🏠</div>
               <h2 style={{ fontSize: 20, fontWeight: 600, color: "#0f172a", margin: "0 0 8px" }}>
-                No projects yet
+                No presentations yet
               </h2>
               <p style={{ fontSize: 14, color: "#64748b", margin: "0 0 28px", lineHeight: 1.65, maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}>
-                Create your first project to start visualizing a roof installation.
+                Start a new presentation to show homeowners exactly what their new roof will look like — layer by layer.
               </p>
               <button
                 onClick={startProject}
@@ -3602,7 +3612,7 @@ export default function Page() {
                   letterSpacing: "0.01em",
                 }}
               >
-                <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 400 }}>+</span> Create First Project
+                <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 400 }}>+</span> Start New Presentation
               </button>
             </div>
           ) : (
@@ -3612,9 +3622,9 @@ export default function Page() {
                 marginBottom: 24,
               }}>
                 <div>
-                  <h1 style={{ fontSize: 18, fontWeight: 600, color: "#0f172a", margin: 0 }}>Projects</h1>
+                  <h1 style={{ fontSize: 18, fontWeight: 600, color: "#0f172a", margin: 0 }}>Presentations</h1>
                   <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-                    {photos.length} project{photos.length !== 1 ? "s" : ""}
+                    {photos.length} presentation{photos.length !== 1 ? "s" : ""}
                   </div>
                 </div>
               </div>
@@ -3849,10 +3859,18 @@ export default function Page() {
                     patchActive((p) => ({ ...p, step: "TEAROFF" }));
                     setUiTab("edit");
                     setBaMode(false);
+                    // Request fullscreen for cinematic experience
+                    if (document.documentElement.requestFullscreen) {
+                      document.documentElement.requestFullscreen().catch(() => {});
+                    }
+                  } else {
+                    if (document.fullscreenElement && document.exitFullscreen) {
+                      document.exitFullscreen().catch(() => {});
+                    }
                   }
                 }}
               >
-                {presentationMode ? (isMobile ? "✦" : "✦ Presenting") : (isMobile ? "✦" : "✦ Present")}
+                {presentationMode ? (isMobile ? "✦" : "✦ Presenting") : (isMobile ? "✦" : "✦ Present to Homeowner")}
               </button>
               {presentationMode && (
                 <button
@@ -5604,41 +5622,54 @@ export default function Page() {
 
       {/* ── CANVAS ── */}
       <main ref={containerRef} style={{
-        background: screen === "CUSTOMER_VIEW" ? "#e8edf2" : presentationMode ? "#0f172a" : "#1e293b",
-        backgroundImage: screen === "CUSTOMER_VIEW" ? "none" : "radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)",
-        backgroundSize: "28px 28px",
+        background: screen === "CUSTOMER_VIEW"
+          ? "#e8edf2"
+          : presentationMode
+            ? "#060c16"
+            : "#1e293b",
+        backgroundImage: screen === "CUSTOMER_VIEW"
+          ? "none"
+          : presentationMode
+            ? "radial-gradient(ellipse at 35% 45%, rgba(30,58,95,0.70) 0%, rgba(6,12,22,0) 65%), radial-gradient(ellipse at 75% 65%, rgba(120,53,15,0.18) 0%, rgba(6,12,22,0) 55%)"
+            : "radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)",
+        backgroundSize: presentationMode ? "auto" : "28px 28px",
         position: "relative",
         overflow: "hidden",
         // In customer view: fill all remaining flex space and center the fixed-size Stage
         ...(isCustomerView ? { flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" } : {}),
         ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0, minHeight: 0 } : {}),
       }}>
-        {/* ── Presentation: step title pill ── */}
-        {presentationMode && liveStep !== "START" && (
-          <div key={liveStep} style={{
-            position: "absolute", top: 24, left: "50%", transform: "translateX(-50%)",
-            zIndex: 30, pointerEvents: "none",
-            background: "rgba(15,23,42,0.72)", backdropFilter: "blur(12px)",
-            borderRadius: 99, padding: "10px 28px",
-            border: "1px solid rgba(255,255,255,0.10)",
-            display: "flex", alignItems: "center", gap: 12,
-            animation: "fadeIn 0.4s ease",
+        {/* ── Presentation: cinematic step title ── */}
+        {presentationMode && liveStep !== "START" && presentationStepNum > 0 && (
+          <div key={liveStep} className="rv-fade-in" style={{
+            position: "absolute", top: 20, left: "50%", transform: "translateX(-50%)",
+            zIndex: 30, pointerEvents: "none", whiteSpace: "nowrap",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 0,
           }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#ea580c" }}>
-              Step {stepIndex(liveStep)}
-            </span>
-            <span style={{ width: 1, height: 16, background: "rgba(255,255,255,0.2)", display: "inline-block" }} />
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9" }}>
-              {STEP_LABELS[liveStep] ?? liveStep}
-            </span>
+            <div style={{
+              background: "rgba(6,12,22,0.78)", backdropFilter: "blur(18px) saturate(1.3)",
+              borderRadius: 99, padding: "9px 24px",
+              border: "1px solid rgba(255,255,255,0.07)",
+              display: "flex", alignItems: "center", gap: 10,
+              boxShadow: "0 4px 24px rgba(0,0,0,0.40)",
+            }}>
+              <span style={{ fontSize: 10, fontWeight: 800, color: "#ea580c", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                {presentationStepNum} / {presentationTotalSteps}
+              </span>
+              <span style={{ width: 1, height: 11, background: "rgba(255,255,255,0.15)", display: "inline-block" }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9", letterSpacing: "0.01em" }}>
+                {STEP_LABELS[liveStep] ?? liveStep}
+              </span>
+            </div>
           </div>
         )}
-        {/* ── Presentation: flash on step change ── */}
+        {/* ── Presentation: cross-fade veil on step change ── */}
         {presentationMode && (
           <div style={{
-            position: "absolute", inset: 0, background: "#ffffff",
+            position: "absolute", inset: 0,
+            background: "linear-gradient(135deg, rgba(6,12,22,0.95), rgba(30,58,95,0.85))",
             pointerEvents: "none", zIndex: 25,
-            opacity: stepFlash ? 0.15 : 0, transition: "opacity 0.35s ease",
+            opacity: stepFlash ? 1 : 0, transition: stepFlash ? "opacity 0.05s ease" : "opacity 0.55s ease",
           }} />
         )}
         <div>
@@ -6361,72 +6392,108 @@ export default function Page() {
         </Stage>
         </div>{/* end CSS-scale wrapper */}
 
-              {/* Floating presentation controls */}
+              {/* ── Cinematic presentation bottom strip ── */}
               {presentationMode && !isCustomerView && (
-                <div className="rv-float-ctrl" style={{
-                  position: "absolute", bottom: "calc(28px + env(safe-area-inset-bottom, 0px))", left: "50%",
-                  transform: "translateX(-50%)",
-                  display: "flex", alignItems: "center", gap: 8,
-                  background: "rgba(15,23,42,0.82)",
-                  backdropFilter: "blur(12px)",
-                  borderRadius: 14,
-                  padding: "8px 12px",
-                  boxShadow: "0 8px 32px rgba(0,0,0,0.28), 0 0 0 1px rgba(255,255,255,0.06)",
-                  zIndex: 50,
+                <div style={{
+                  position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 50,
+                  background: "linear-gradient(to top, rgba(6,12,22,0.96) 0%, rgba(6,12,22,0.70) 60%, transparent 100%)",
+                  padding: `20px 28px max(20px, env(safe-area-inset-bottom))`,
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 14,
                 }}>
-                  <span style={{ fontSize: 11, fontWeight: 500, color: "rgba(255,255,255,0.50)", paddingRight: 4, letterSpacing: "0.03em" }}>
-                    {STEP_TITLE[liveStep]?.replace(/^Step \d+ — /, "") ?? liveStep}
-                  </span>
-                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.12)" }} />
-                  <button
-                    onClick={goBack}
-                    disabled={stepIndex(liveStep) === 0}
-                    style={{
-                      padding: "5px 14px", borderRadius: 8, fontSize: 12, fontWeight: 500,
-                      cursor: stepIndex(liveStep) === 0 ? "default" : "pointer",
-                      border: "1px solid rgba(255,255,255,0.12)",
-                      background: "rgba(255,255,255,0.07)",
-                      color: stepIndex(liveStep) === 0 ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.80)",
-                      transition: "background 0.15s",
-                    }}
-                  >← Back</button>
-                  <button
-                    onClick={goNext}
-                    disabled={!canGoNext()}
-                    style={{
-                      padding: "5px 16px", borderRadius: 8, fontSize: 12, fontWeight: 600,
-                      cursor: canGoNext() ? "pointer" : "default",
-                      border: "none",
-                      background: canGoNext() ? "linear-gradient(135deg,#ea580c,#c2410c)" : "rgba(255,255,255,0.07)",
-                      color: canGoNext() ? "#ffffff" : "rgba(255,255,255,0.25)",
-                      boxShadow: canGoNext() ? "0 2px 6px rgba(234,88,12,0.40)" : "none",
-                      transition: "background 0.15s, box-shadow 0.15s",
-                    }}
-                  >Next →</button>
-                  {(active?.photoSrcs?.length ?? 0) > 1 && (() => {
-                    const srcs = active!.photoSrcs;
-                    const idx = srcs.indexOf(active!.src);
-                    const total = srcs.length;
-                    return (
-                      <>
-                        <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.12)" }} />
+                  {/* Progress dots */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    {presentationNavSteps.map((s) => {
+                      const isCur = s === liveStep;
+                      const isPast = stepIndex(s) < stepIndex(liveStep);
+                      return (
                         <button
-                          onClick={() => switchToPhoto(srcs[(idx - 1 + total) % total])}
-                          style={{ padding: "4px 10px", borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)" }}
-                        >‹</button>
-                        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", fontWeight: 500 }}>{idx+1}/{total}</span>
+                          key={s}
+                          onClick={() => jumpToStep(s)}
+                          title={STEP_LABELS[s] ?? s}
+                          style={{
+                            width: isCur ? 22 : 6, height: 6, borderRadius: 99, border: "none",
+                            cursor: "pointer", padding: 0, flexShrink: 0,
+                            background: isPast ? "#16a34a" : isCur ? "#ea580c" : "rgba(255,255,255,0.18)",
+                            transition: "width 0.3s ease, background 0.3s ease",
+                            boxShadow: isCur ? "0 0 8px rgba(234,88,12,0.60)" : "none",
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                  {/* Controls row */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", maxWidth: 520 }}>
+                    {/* Back */}
+                    <button
+                      onClick={goBack}
+                      disabled={presentationStepNum <= 1}
+                      style={{
+                        padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600,
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        background: "rgba(255,255,255,0.07)", color: presentationStepNum <= 1 ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.82)",
+                        cursor: presentationStepNum <= 1 ? "default" : "pointer",
+                        transition: "background 0.15s, color 0.15s", flexShrink: 0,
+                      }}
+                    >← Back</button>
+                    {/* Center: photo switcher or spacer */}
+                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                      {(active?.photoSrcs?.length ?? 0) > 1 ? (() => {
+                        const srcs = active!.photoSrcs;
+                        const idx = srcs.indexOf(active!.src);
+                        const total = srcs.length;
+                        return (
+                          <>
+                            <button onClick={() => switchToPhoto(srcs[(idx - 1 + total) % total])}
+                              style={{ padding: "6px 12px", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)" }}>‹</button>
+                            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.40)", fontWeight: 600, letterSpacing: "0.05em" }}>PHOTO {idx+1} / {total}</span>
+                            <button onClick={() => switchToPhoto(srcs[(idx + 1) % total])}
+                              style={{ padding: "6px 12px", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)" }}>›</button>
+                          </>
+                        );
+                      })() : (
                         <button
-                          onClick={() => switchToPhoto(srcs[(idx + 1) % total])}
-                          style={{ padding: "4px 10px", borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)" }}
-                        >›</button>
-                      </>
-                    );
-                  })()}
-                  <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.12)" }} />
-                  <button
-                    onClick={() => { setPresentationMode(false); setUiTab("edit"); }}
-                    style={{ padding: "4px 10px", borderRadius: 7, fontSize: 11, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,100,100,0.25)", background: "rgba(255,80,80,0.10)", color: "rgba(255,160,160,0.85)" }}
-                  >✕ Exit</button>
+                          onClick={() => setBaMode(v => !v)}
+                          title="Before / After"
+                          style={{
+                            padding: "6px 14px", borderRadius: 8, fontSize: 11, fontWeight: 600,
+                            border: "1px solid rgba(255,255,255,0.12)",
+                            background: baMode ? "rgba(234,88,12,0.18)" : "rgba(255,255,255,0.06)",
+                            color: baMode ? "#fb923c" : "rgba(255,255,255,0.45)",
+                            cursor: "pointer", letterSpacing: "0.04em",
+                            transition: "background 0.15s, color 0.15s",
+                          }}
+                        >◧ BEFORE / AFTER</button>
+                      )}
+                    </div>
+                    {/* Next / Exit */}
+                    {canGoNext() ? (
+                      <button
+                        onClick={goNext}
+                        style={{
+                          padding: "10px 26px", borderRadius: 10, fontSize: 13, fontWeight: 700,
+                          border: "none", cursor: "pointer", flexShrink: 0,
+                          background: "linear-gradient(135deg, #ea580c 0%, #c2410c 100%)",
+                          color: "#ffffff",
+                          boxShadow: "0 4px 16px rgba(234,88,12,0.50)",
+                          transition: "transform 0.12s ease, box-shadow 0.12s ease",
+                        }}
+                      >Next →</button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setPresentationMode(false); setUiTab("edit");
+                          if (document.fullscreenElement && document.exitFullscreen) {
+                            document.exitFullscreen().catch(() => {});
+                          }
+                        }}
+                        style={{
+                          padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600,
+                          border: "1px solid rgba(255,255,255,0.12)", cursor: "pointer", flexShrink: 0,
+                          background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.70)",
+                        }}
+                      >✕ Exit</button>
+                    )}
+                  </div>
                 </div>
               )}
       </main>
