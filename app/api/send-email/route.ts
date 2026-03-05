@@ -1,7 +1,9 @@
 import { Resend } from "resend";
 import { NextRequest, NextResponse } from "next/server";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+function getResend() {
+  return new Resend(process.env.RESEND_API_KEY);
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -35,7 +37,7 @@ export async function POST(req: NextRequest) {
   console.log("RESEND_FROM_EMAIL:", from);
   console.log("Sending RoofViz share email", { to, shareUrl, projectName });
 
-  const { error } = await resend.emails.send({
+  const { error } = await getResend().emails.send({
     from,
     to,
     subject: `Your ${projectName ?? "Roof"} Visualization`,

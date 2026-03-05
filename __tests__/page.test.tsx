@@ -33,6 +33,29 @@ jest.mock("next/image", () => ({
   ),
 }));
 
+jest.mock("framer-motion", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const R = require("react");
+  return {
+    __esModule: true,
+    motion: {
+      div: R.forwardRef(function MotionDiv(
+        { children, ...props }: any,
+        ref: any
+      ) {
+        // Strip framer-motion-specific props to avoid React warnings
+        const {
+          initial, animate, exit, transition, whileHover, whileTap,
+          variants, layout, layoutId, ...rest
+        } = props;
+        return R.createElement("div", { ...rest, ref }, children);
+      }),
+    },
+    AnimatePresence: ({ children }: { children?: React.ReactNode }) =>
+      children ?? null,
+  };
+});
+
 jest.mock("react-konva", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const R = require("react");

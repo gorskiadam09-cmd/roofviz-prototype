@@ -1,12 +1,8 @@
 "use client";
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { AnimatePresence, motion } from "framer-motion";
-import { cleanupGeometry, strengthToOptions } from "@/app/lib/cleanupGeometry";
-import { cleanAiOutline } from "@/app/lib/aiOutlineCleanup";
-import { detectEdges, autoDetectMode, type LabeledSegment } from "@/app/lib/edgeDetection";
-import { suggestPlanes, type PlaneSuggestion } from "@/app/lib/planeSuggestion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Circle,
   Group,
@@ -21,21 +17,9 @@ import {
 /**
  * RoofViz — Single file (app/page.tsx)
  *
- * FIXES INCLUDED:
- * ✅ Multi-photo upload + photo switcher
- * ✅ Advanced options back (per selected roof) + your standard defaults
- * ✅ Ice & Water shows again (correct step gating + correct draw order)
- * ✅ Synthetic no longer overlaps other products (only visible during SYNTHETIC step)
- * ✅ Pro-Start shows on BOTH eaves and rakes
- * ✅ Dormer/exclusion holes reveal original photo (no black artifacts)
- * ✅ Hips visible like valleys after shingles
- * ✅ Two-page PDF export:
- *    Page 1: Finished shingles
- *    Page 2: Underlayments/metals through Pro-Start
- *
  * REQUIRED:
  * 1) Put logo at: /public/roofviz-logo.png
- * 2) npm i react-konva konva jspdf
+ * 2) npm i react-konva konva jspdf framer-motion
  */
 
 type Step =
@@ -69,20 +53,22 @@ const STEPS: Step[] = [
   "EXPORT",
 ];
 
+const QUICK_STEPS: Step[] = ["START", "TRACE", "SHINGLES", "EXPORT"];
+
 const STEP_TITLE: Record<Step, string> = {
   START: "Start a project",
   TRACE: "Step 1 — Map Your Roof",
-  TEAROFF: "Step 2 — What We're Replacing",
-  GUTTER_APRON: "Step 3 — Foundation Protection",
-  ICE_WATER: "Step 4 — Ice & Water Shield",
-  SYNTHETIC: "Step 5 — Full-Deck Waterproof Barrier",
-  DRIP_EDGE: "Step 6 — Perimeter Defense",
-  VALLEY_METAL: "Step 7 — Valley Armor",
-  PRO_START: "Step 8 — Starter Course",
-  SHINGLES: "Step 9 — Your New Roof",
-  RIDGE_VENT: "Step 10 — Ventilation System",
-  CAP_SHINGLES: "Step 11 — Ridge Cap Finish",
-  EXPORT: "Finish — Send Proposal",
+  TEAROFF: "Step 2 — Existing roof tear-off (decking exposed)",
+  GUTTER_APRON: "Step 3 — Gutter apron (eaves)",
+  ICE_WATER: "Step 4 — Ice & water (eaves + valleys)",
+  SYNTHETIC: "Step 5 — Synthetic underlayment (field)",
+  DRIP_EDGE: "Step 6 — Drip edge (rakes)",
+  VALLEY_METAL: "Step 7 — Galvanized valley metal (valleys)",
+  PRO_START: "Step 8 — Pro-start starter strip (eaves + rakes)",
+  SHINGLES: "Step 9 — Shingles",
+  RIDGE_VENT: "Step 10 — Ridge vent (ridges)",
+  CAP_SHINGLES: "Step 11 — Cap shingles (same as shingles)",
+  EXPORT: "Finish — Export PDF",
 };
 
 type LineKind = "EAVE" | "RAKE" | "VALLEY" | "RIDGE" | "HIP";
@@ -94,20 +80,11 @@ type Tool =
   | "DRAW_RAKE"
   | "DRAW_VALLEY"
   | "DRAW_RIDGE"
-  | "DRAW_HIP"
-  | "BRUSH_ICE_WATER";
+  | "DRAW_HIP";
 
-type Polyline = {
-  id: string;
-  kind: LineKind;
-  points: number[];
-  aiLabeled?: boolean;   // set by Auto-Label; false/undefined = manual
-  locked?: boolean;      // locked lines survive Re-run Auto-Label
-  confidence?: number;   // 0–1, set by auto-label; undefined = manual/unscored
-  segmentCount?: number; // for merged ridge: how many raw segments were fused
-};
+type Polyline = { id: string; kind: LineKind; points: number[] };
 
-type MetalColor = "Galvanized" | "Aluminum" | "White" | "Black" | "Bronze" | "Brown" | "Gray";
+type MetalColor = "Aluminum" | "White" | "Black" | "Bronze" | "Brown" | "Gray";
 type ShingleColor =
   | "Barkwood"
   | "Charcoal"
@@ -116,12 +93,6 @@ type ShingleColor =
   | "OysterGray"
   | "Slate"
   | "Black";
-
-type ShingleSelection = {
-  manufacturerId: string;
-  lineId: string;
-  colorId: string;
-};
 
 type Roof = {
   id: string;
@@ -133,36 +104,26 @@ type Roof = {
   holes: number[][];
   lines: Polyline[];
 
-  // your standard sizing defaults (per-roof adjustable)
-  gutterApronW: number; // 8
-  dripEdgeW: number; // 8
-  iceWaterEaveW: number; // 72
-  iceWaterValleyW: number; // 36
-  valleyMetalW: number; // 10
-  proStartW: number; // 12
-  ridgeVentW: number; // 12
-  capW: number; // 8
+  gutterApronW: number;
+  dripEdgeW: number;
+  iceWaterEaveW: number;
+  iceWaterValleyW: number;
+  valleyMetalW: number;
+  proStartW: number;
+  ridgeVentW: number;
+  capW: number;
 
   gutterApronColor: MetalColor;
   dripEdgeColor: MetalColor;
   valleyMetalColor: MetalColor;
 
   shingleScale: number;
-  shingleRotation: number;       // degrees, -45..45; 0 = horizontal
-  perspectiveStrength: number;   // 0.0–0.4 ground-photo perspective warp, default 0
-  proStartOnRakes: boolean;
-
-  iceWaterOnEaves: boolean;     // default true
-  iceWaterOnValleys: boolean;   // default true
-  iceWaterBrush: { id: string; points: number[]; size: number }[];
-  iceWaterBrushSize: number;    // default 30
 };
 
 type PhotoProject = {
   id: string;
   name: string;
   src: string;
-  photoSrcs: string[]; // all uploaded photos for this project
 
   step: Step;
 
@@ -170,65 +131,18 @@ type PhotoProject = {
   activeRoofId: string;
 
   shingleColor: ShingleColor;
-  shingleSelection: ShingleSelection;
-  textureColorStrength: number;  // 0–100: how strongly to tint the base texture
 
   showGuidesDuringInstall: boolean;
   showEditHandles: boolean;
 
   stageScale: number;
   stagePos: { x: number; y: number };
-
-  photoStates: Record<string, {
-    roofs: Roof[];
-    activeRoofId: string;
-    stageScale: number;
-    stagePos: { x: number; y: number };
-  }>;
-
-  thumbnail?: string; // base64 canvas snapshot captured at CAP_SHINGLES
-};
-
-type CompanyProfile = {
-  name: string;
-  phone: string;
-  repName: string;
-  logo: string; // base64 data URL
-};
-
-type AppStats = {
-  presentationsStarted: number;
-  pdfsExported: number;
-  linksShared: number;
 };
 
 type ExportView = "LIVE" | "PDF_SHINGLES" | "PDF_UNDERLAY";
 
 function uid() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
-}
-
-// Compress an image data-URL to max 1400px on longest side, JPEG 0.82.
-// Keeps localStorage well under the 5 MB quota for typical job photos.
-function compressForStorage(dataUrl: string): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new window.Image();
-    img.onload = () => {
-      const MAX = 1400;
-      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) { resolve(dataUrl); return; }
-      ctx.drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL("image/jpeg", 0.82));
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -244,179 +158,45 @@ function atLeast(cur: Step, target: Step) {
 }
 
 function kindColor(k: LineKind) {
-  if (k === "EAVE") return "#2563eb";
-  if (k === "RAKE") return "#10b981";
-  if (k === "VALLEY") return "#64748b";
-  if (k === "RIDGE") return "#f59e0b";
-  return "#a855f7"; // HIP
+  if (k === "EAVE") return "rgba(37,99,235,0.95)";
+  if (k === "RAKE") return "rgba(16,185,129,0.95)";
+  if (k === "VALLEY") return "rgba(100,116,139,0.95)";
+  if (k === "RIDGE") return "rgba(245,158,11,0.95)";
+  return "rgba(168,85,247,0.95)"; // HIP
 }
 
 function metalRGBA(color: MetalColor, alpha: number) {
   const a = alpha;
   switch (color) {
-    case "Galvanized": return `rgba(155,165,172,${a})`;
-    case "Aluminum": return `rgba(198,205,211,${a})`;
-    case "White":    return `rgba(245,246,248,${a})`;
-    case "Black":    return `rgba(25,25,28,${a})`;
-    case "Bronze":   return `rgba(132,97,60,${a})`;
-    case "Brown":    return `rgba(92,64,45,${a})`;
-    case "Gray":     return `rgba(120,126,134,${a})`;
+    case "Aluminum":
+      return `rgba(198,205,211,${a})`;
+    case "White":
+      return `rgba(245,246,248,${a})`;
+    case "Black":
+      return `rgba(25,25,28,${a})`;
+    case "Bronze":
+      return `rgba(132,97,60,${a})`;
+    case "Brown":
+      return `rgba(92,64,45,${a})`;
+    case "Gray":
+      return `rgba(120,126,134,${a})`;
   }
-}
-
-// RGB tuples for jsPDF legend boxes
-function metalRGB(color: MetalColor): [number, number, number] {
-  switch (color) {
-    case "Galvanized": return [155, 165, 172];
-    case "Aluminum": return [198, 205, 211];
-    case "White":    return [230, 232, 235];
-    case "Black":    return [25,  25,  28];
-    case "Bronze":   return [132, 97,  60];
-    case "Brown":    return [92,  64,  45];
-    case "Gray":     return [120, 126, 134];
-  }
-}
-
-function shingleRGB(color: ShingleColor): [number, number, number] {
-  switch (color) {
-    case "Barkwood":     return [111, 79,  52];
-    case "Charcoal":     return [75,  78,  85];
-    case "WeatheredWood":return [106, 98,  86];
-    case "PewterGray":   return [122, 128, 135];
-    case "OysterGray":   return [141, 144, 146];
-    case "Slate":        return [93,  106, 121];
-    case "Black":        return [47,  49,  53];
-  }
-}
-
-// Per-step contextual hints shown in the panel
-const STEP_HINT: Partial<Record<Step, string>> = {
-  TRACE:        "Outline each roof section and label the edges — eaves, rakes, valleys, ridges.",
-  TEAROFF:      "This is the bare decking exposed after removing the old roof — the foundation of your new system.",
-  GUTTER_APRON: "Metal flashing that seals the eave edge and channels water into the gutters — installed first.",
-  ICE_WATER:    "Self-sealing membrane that stops ice dam leaks and protects valleys. Installed 6 feet up from the eave.",
-  SYNTHETIC:    "Breathable, lightweight barrier that covers the full field — the first line of defense against moisture.",
-  DRIP_EDGE:    "Precision-bent metal along the rake edges that keeps water off the fascia and away from the structure.",
-  VALLEY_METAL: "Continuous metal channel that routes water safely off the roof. Upgrade to a colored W-valley in Settings.",
-  PRO_START:    "Adhesive starter strip that creates the sealant bond for the first shingle course at the eave and rake.",
-  SHINGLES:     "Architectural shingles installed over the full field — this is what the homeowner sees every day.",
-  RIDGE_VENT:   "Continuous vent along the ridge that balances attic airflow and extends roof life.",
-  CAP_SHINGLES: "Pre-cut cap shingles finish the ridge with a clean, weathertight seal over the vent.",
-  EXPORT:       "Your visualization is complete — export a PDF to share with your customer.",
-};
-
-const STEP_SHORT: Partial<Record<Step, string>> = {
-  TRACE:        "Map Roof",
-  TEAROFF:      "Tear-Off",
-  GUTTER_APRON: "Foundation",
-  ICE_WATER:    "Ice Shield",
-  SYNTHETIC:    "Waterproof Barrier",
-  DRIP_EDGE:    "Perimeter",
-  VALLEY_METAL: "Valley Armor",
-  PRO_START:    "Starter Course",
-  SHINGLES:     "New Roof",
-  RIDGE_VENT:   "Ventilation",
-  CAP_SHINGLES: "Ridge Finish",
-  EXPORT:       "Send Proposal",
-};
-
-const STEP_LABELS: Partial<Record<Step, string>> = {
-  TRACE:        "Map Your Roof",
-  TEAROFF:      "What We're Replacing",
-  GUTTER_APRON: "Foundation Protection",
-  ICE_WATER:    "Ice & Water Shield",
-  SYNTHETIC:    "Full-Deck Waterproof Barrier",
-  DRIP_EDGE:    "Perimeter Defense",
-  VALLEY_METAL: "Valley Armor",
-  PRO_START:    "Starter Course",
-  SHINGLES:     "Your New Roof",
-  RIDGE_VENT:   "Ventilation System",
-  CAP_SHINGLES: "Ridge Cap Finish",
-  EXPORT:       "Send Proposal",
-};
-
-// ── 5-chapter presentation structure ──────────────────────────────────────
-type PresentationChapter = { id: string; label: string; shortLabel: string; steps: Step[] };
-
-const PRESENTATION_CHAPTERS: PresentationChapter[] = [
-  { id: "foundation",  label: "The Foundation",        shortLabel: "Foundation",     steps: ["TEAROFF", "GUTTER_APRON"] },
-  { id: "protection",  label: "Protection Layers",     shortLabel: "Protection",     steps: ["ICE_WATER", "SYNTHETIC", "DRIP_EDGE"] },
-  { id: "valley",      label: "Valley & Ridge System", shortLabel: "Valley & Ridge", steps: ["VALLEY_METAL", "PRO_START"] },
-  { id: "roof",        label: "Your New Roof",         shortLabel: "Your Roof",      steps: ["SHINGLES", "RIDGE_VENT", "CAP_SHINGLES"] },
-  { id: "final",       label: "Final Look",            shortLabel: "Final Look",     steps: [] },
-];
-
-const STEP_TIP: Partial<Record<Step, string>> = {
-  TRACE:        "Click to map the roof outline. Click the first point again to close the shape.",
-  TEAROFF:      "This shows the deck exposed — the clean slate your new protection system installs on.",
-  GUTTER_APRON: "Metal flashing at the eave edge, installed before the protection layers go on.",
-  ICE_WATER:    "Self-sealing membrane — 6 feet up from the eave and 36\" into each valley.",
-  SYNTHETIC:    "Breathable barrier covering the full field. Laps 2\" per course.",
-  DRIP_EDGE:    "Metal edge on the rakes — keeps water off the fascia after the barrier is laid.",
-  VALLEY_METAL: "Set a color in Customize to upgrade from galvanized to a finished W-valley.",
-  PRO_START:    "Adhesive starter strip seals the first shingle course at eaves and rakes.",
-  SHINGLES:     "Architectural shingles — installed bottom-to-top with a 5⅝\" exposure.",
-  RIDGE_VENT:   "Continuous vent matched to the attic's net free area for balanced airflow.",
-  CAP_SHINGLES: "Each cap overlaps 5\" and is nailed through the ridge vent below.",
-  EXPORT:       "Two-page proposal: finished roof view + full protection system breakdown.",
-};
-
-// Returns the subset of STEPS that should appear given the lines drawn across all roofs.
-// Steps for which no relevant edge type exists are silently skipped during navigation.
-function relevantSteps(roofs: Roof[]): Set<Step> {
-  const allLines = roofs.flatMap((r) => r.lines);
-  const has = (k: LineKind) => allLines.some((l) => l.kind === k);
-  const s = new Set<Step>([
-    "START", "TRACE", "TEAROFF", "ICE_WATER", "SYNTHETIC", "SHINGLES", "EXPORT",
-  ]);
-  if (has("EAVE"))                   s.add("GUTTER_APRON");
-  if (has("RAKE"))                   s.add("DRIP_EDGE");
-  if (has("VALLEY"))                 s.add("VALLEY_METAL");
-  if (has("EAVE") || has("RAKE"))    s.add("PRO_START");
-  if (has("RIDGE")) { s.add("RIDGE_VENT"); s.add("CAP_SHINGLES"); }
-  return s;
 }
 
 function useHtmlImage(src?: string) {
   const [img, setImg] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
-    // Clear stale image immediately so a previous project's photo never leaks
-    // into a different project while the new image is loading.
-    setImg(null);
-    if (!src) return;
+    if (!src) {
+      setImg(null);
+      return;
+    }
     const i = new window.Image();
-    // crossOrigin only for data: URLs — needed for canvas export.
-    // External URLs (Vercel Blob CDN) load without it; setting it can block
-    // the load if the CDN doesn't return the expected CORS header.
-    if (src.startsWith("data:")) i.crossOrigin = "anonymous";
+    i.crossOrigin = "anonymous";
     i.onload = () => setImg(i);
-    i.onerror = () => setImg(null);
     i.src = src;
   }, [src]);
 
-  return img;
-}
-
-// Loads a shingle texture image; if the specific path 404s, automatically falls
-// back to /shingles/_default/architectural.png, then to undefined (→ procedural).
-function useShingleBaseImage(specificSrc: string): HTMLImageElement | undefined {
-  const [img, setImg] = useState<HTMLImageElement | undefined>(undefined);
-  useEffect(() => {
-    if (!specificSrc || typeof window === "undefined") { setImg(undefined); return; }
-    let cancelled = false;
-    function tryLoad(src: string, fallback?: string) {
-      const image = new window.Image();
-      image.onload = () => { if (!cancelled) setImg(image); };
-      image.onerror = () => {
-        if (!cancelled && fallback) tryLoad(fallback);
-        else if (!cancelled) setImg(undefined);
-      };
-      image.src = src;
-    }
-    tryLoad(specificSrc, "/shingles/default/architectural.png");
-    return () => { cancelled = true; };
-  }, [specificSrc]);
   return img;
 }
 
@@ -437,34 +217,24 @@ function defaultRoof(name: string): Roof {
     holes: [],
     lines: [],
 
-    // standards
-    gutterApronW: 3,
-    dripEdgeW: 3,
-    iceWaterEaveW: 72,
-    iceWaterValleyW: 36,
+    gutterApronW: 8,
+    dripEdgeW: 8,
+    iceWaterEaveW: 40,
+    iceWaterValleyW: 20,
     valleyMetalW: 10,
     proStartW: 12,
-    ridgeVentW: 4,
-    capW: 3,
+    ridgeVentW: 12,
+    capW: 8,
 
     gutterApronColor: "Aluminum",
     dripEdgeColor: "Aluminum",
-    valleyMetalColor: "Galvanized",
+    valleyMetalColor: "Aluminum",
 
-    // smaller shingles by default
     shingleScale: 0.20,
-    shingleRotation: 0,
-    perspectiveStrength: 0,
-    proStartOnRakes: true,
-
-    iceWaterOnEaves: true,
-    iceWaterOnValleys: true,
-    iceWaterBrush: [],
-    iceWaterBrushSize: 30,
   };
 }
 
-/* ---------- Procedural textures (big canvas => no obvious tile boxes) ---------- */
+/* ---------- Procedural textures ---------- */
 function addNoise(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -513,433 +283,6 @@ function shinglePalette(c: ShingleColor) {
     case "Black":
       return { top: "#2f3135", bot: "#070809" };
   }
-}
-
-// ── Shingle catalog ────────────────────────────────────────────────────────
-// Each color entry: { name, top (highlight hex), bot (shadow hex), rgb [r,g,b] }
-const SHINGLE_CATALOG = {
-  gaf: { name: "GAF", lines: {
-    hdz: { name: "Timberline HDZ", colors: {
-      barkwood:      { name: "Barkwood",        top: "#6f4f34", bot: "#24140e", rgb: [111, 79,  52] as [number,number,number] },
-      charcoal:      { name: "Charcoal",         top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",   top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      pewterGray:    { name: "Pewter Gray",       top: "#7a8087", bot: "#262b31", rgb: [122,128, 135] as [number,number,number] },
-      oysterGray:    { name: "Oyster Gray",       top: "#8d9092", bot: "#33373c", rgb: [141,144, 146] as [number,number,number] },
-      slate:         { name: "Slate",             top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
-      hunter:        { name: "Hunter Green",      top: "#2e4a2e", bot: "#0e190e", rgb: [ 46, 74,  46] as [number,number,number] },
-      hickory:       { name: "Hickory",           top: "#5c3d1e", bot: "#1c0e03", rgb: [ 92, 61,  30] as [number,number,number] },
-      shakewood:     { name: "Shakewood",         top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92,  62] as [number,number,number] },
-      sienna:        { name: "Sienna",            top: "#7d3d1e", bot: "#2e0f04", rgb: [125, 61,  30] as [number,number,number] },
-      royalSlate:    { name: "Royal Slate",       top: "#4a5260", bot: "#16191f", rgb: [ 74, 82,  96] as [number,number,number] },
-      blackWalnut:   { name: "Black Walnut",      top: "#2f3135", bot: "#070809", rgb: [ 47, 49,  53] as [number,number,number] },
-      missionBrown:  { name: "Mission Brown",     top: "#5a3318", bot: "#1c0d04", rgb: [ 90, 51,  24] as [number,number,number] },
-    }},
-    ns: { name: "Timberline NS", colors: {
-      charcoal:      { name: "Charcoal",         top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",   top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      pewterGray:    { name: "Pewter Gray",       top: "#7a8087", bot: "#262b31", rgb: [122,128, 135] as [number,number,number] },
-      barkwood:      { name: "Barkwood",          top: "#6f4f34", bot: "#24140e", rgb: [111, 79,  52] as [number,number,number] },
-      oysterGray:    { name: "Oyster Gray",       top: "#8d9092", bot: "#33373c", rgb: [141,144, 146] as [number,number,number] },
-      shakewood:     { name: "Shakewood",         top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92,  62] as [number,number,number] },
-      blackWalnut:   { name: "Black Walnut",      top: "#2f3135", bot: "#070809", rgb: [ 47, 49,  53] as [number,number,number] },
-      slate:         { name: "Slate",             top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
-      missionBrown:  { name: "Mission Brown",     top: "#5a3318", bot: "#1c0d04", rgb: [ 90, 51,  24] as [number,number,number] },
-    }},
-    uhdz: { name: "Timberline UHDZ", colors: {
-      antiqueSlate:  { name: "Antique Slate",    top: "#606878", bot: "#1e2028", rgb: [ 96,104,120] as [number,number,number] },
-      barkwood:      { name: "Barkwood",         top: "#6f4f34", bot: "#24140e", rgb: [111, 79, 52] as [number,number,number] },
-      birchwood:     { name: "Birchwood",        top: "#9a8870", bot: "#342e22", rgb: [154,136,112] as [number,number,number] },
-      biscayneBlue:  { name: "Biscayne Blue",    top: "#4a5e72", bot: "#161e28", rgb: [ 74, 94,114] as [number,number,number] },
-      charcoal:      { name: "Charcoal",         top: "#4b4e55", bot: "#151619", rgb: [ 75, 78, 85] as [number,number,number] },
-      copperCanyon:  { name: "Copper Canyon",    top: "#8a4a28", bot: "#2e1808", rgb: [138, 74, 40] as [number,number,number] },
-      foxHollowGray: { name: "Fox Hollow Gray",  top: "#828074", bot: "#2a2820", rgb: [130,128,116] as [number,number,number] },
-      goldenAmber:   { name: "Golden Amber",     top: "#9a6828", bot: "#342208", rgb: [154,104, 40] as [number,number,number] },
-      hickory:       { name: "Hickory",          top: "#5c3d1e", bot: "#1c0e03", rgb: [ 92, 61, 30] as [number,number,number] },
-      hunterGreen:   { name: "Hunter Green",     top: "#2e4a2e", bot: "#0e190e", rgb: [ 46, 74, 46] as [number,number,number] },
-      missionBrown:  { name: "Mission Brown",    top: "#5a3318", bot: "#1c0d04", rgb: [ 90, 51, 24] as [number,number,number] },
-      oysterGray:    { name: "Oyster Gray",      top: "#8d9092", bot: "#33373c", rgb: [141,144,146] as [number,number,number] },
-      pewterGray:    { name: "Pewter Gray",      top: "#7a8087", bot: "#262b31", rgb: [122,128,135] as [number,number,number] },
-      shakewood:     { name: "Shakewood",        top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92, 62] as [number,number,number] },
-      slate:         { name: "Slate",            top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106,121] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",   top: "#6a6256", bot: "#231f1a", rgb: [106, 98, 86] as [number,number,number] },
-    }},
-    asii: { name: "Armor Shield II", colors: {
-      barkwood:      { name: "Barkwood",         top: "#6f4f34", bot: "#24140e", rgb: [111, 79, 52] as [number,number,number] },
-      charcoal:      { name: "Charcoal",         top: "#4b4e55", bot: "#151619", rgb: [ 75, 78, 85] as [number,number,number] },
-      foxHollowGray: { name: "Fox Hollow Gray",  top: "#828074", bot: "#2a2820", rgb: [130,128,116] as [number,number,number] },
-      missionBrown:  { name: "Mission Brown",    top: "#5a3318", bot: "#1c0d04", rgb: [ 90, 51, 24] as [number,number,number] },
-      oysterGray:    { name: "Oyster Gray",      top: "#8d9092", bot: "#33373c", rgb: [141,144,146] as [number,number,number] },
-      pewterGray:    { name: "Pewter Gray",      top: "#7a8087", bot: "#262b31", rgb: [122,128,135] as [number,number,number] },
-      royalSlate:    { name: "Royal Slate",      top: "#4a5260", bot: "#16191f", rgb: [ 74, 82, 96] as [number,number,number] },
-      shakewood:     { name: "Shakewood",        top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92, 62] as [number,number,number] },
-      slate:         { name: "Slate",            top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106,121] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",   top: "#6a6256", bot: "#231f1a", rgb: [106, 98, 86] as [number,number,number] },
-    }},
-  }},
-  owens: { name: "Owens Corning", lines: {
-    duration: { name: "Duration", colors: {
-      teak:          { name: "Teak",              top: "#7b5b3a", bot: "#291a0b", rgb: [123, 91,  58] as [number,number,number] },
-      desertTan:     { name: "Desert Tan",        top: "#b09472", bot: "#4a3520", rgb: [176,148, 114] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      chateauGreen:  { name: "Chateau Green",     top: "#3d5233", bot: "#10180d", rgb: [ 61, 82,  51] as [number,number,number] },
-      weathered:     { name: "Weathered",         top: "#7a7260", bot: "#27231b", rgb: [122,114,  96] as [number,number,number] },
-      onyxBlack:     { name: "Onyx Black",        top: "#1e2024", bot: "#060608", rgb: [ 30, 32,  36] as [number,number,number] },
-      quarryGray:    { name: "Quarry Gray",       top: "#858a8e", bot: "#2c3033", rgb: [133,138, 142] as [number,number,number] },
-      harborBlue:    { name: "Harbor Blue",       top: "#4a5b6e", bot: "#161c22", rgb: [ 74, 91, 110] as [number,number,number] },
-      shakewood:     { name: "Shakewood",         top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92,  62] as [number,number,number] },
-      estateGray:    { name: "Estate Gray",       top: "#707668", bot: "#252820", rgb: [112,118, 104] as [number,number,number] },
-      agedCedar:     { name: "Aged Cedar",        top: "#8a6a48", bot: "#2e2010", rgb: [138,106,  72] as [number,number,number] },
-      brownstone:    { name: "Brownstone",        top: "#5a4030", bot: "#1c1008", rgb: [ 90, 64,  48] as [number,number,number] },
-      chaparral:     { name: "Chaparral",         top: "#a28f70", bot: "#3a3020", rgb: [162,143, 112] as [number,number,number] },
-    }},
-    oakridge: { name: "Oakridge", colors: {
-      teak:          { name: "Teak",              top: "#7b5b3a", bot: "#291a0b", rgb: [123, 91,  58] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
-      onyxBlack:     { name: "Onyx Black",        top: "#1e2024", bot: "#060608", rgb: [ 30, 32,  36] as [number,number,number] },
-      quarryGray:    { name: "Quarry Gray",       top: "#858a8e", bot: "#2c3033", rgb: [133,138, 142] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      desertTan:     { name: "Desert Tan",        top: "#b09472", bot: "#4a3520", rgb: [176,148, 114] as [number,number,number] },
-      weathered:     { name: "Weathered",         top: "#7a7260", bot: "#27231b", rgb: [122,114,  96] as [number,number,number] },
-      rusticJade:    { name: "Rustic Jade",       top: "#2e4a35", bot: "#0c1710", rgb: [ 46, 74,  53] as [number,number,number] },
-      estateGray:    { name: "Estate Gray",       top: "#707668", bot: "#252820", rgb: [112,118, 104] as [number,number,number] },
-      agedCedar:     { name: "Aged Cedar",        top: "#8a6a48", bot: "#2e2010", rgb: [138,106,  72] as [number,number,number] },
-      harborBlue:    { name: "Harbor Blue",       top: "#4a5b6e", bot: "#161c22", rgb: [ 74, 91, 110] as [number,number,number] },
-      shakewood:     { name: "Shakewood",         top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92,  62] as [number,number,number] },
-    }},
-  }},
-  certainteed: { name: "CertainTeed", lines: {
-    landmark: { name: "Landmark", colors: {
-      moireBlack:    { name: "Moire Black",       top: "#232528", bot: "#070809", rgb: [ 35, 37,  40] as [number,number,number] },
-      heatherBlend:  { name: "Heather Blend",     top: "#6a5060", bot: "#22191f", rgb: [106, 80,  96] as [number,number,number] },
-      colonialSlate: { name: "Colonial Slate",    top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#7c7060", bot: "#2a2518", rgb: [124,112,  96] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
-      shadowGray:    { name: "Shadow Gray",       top: "#56616a", bot: "#1c2126", rgb: [ 86, 97, 106] as [number,number,number] },
-      swiftwater:    { name: "Swiftwater",        top: "#4a5a6a", bot: "#161c22", rgb: [ 74, 90, 106] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      autumnBlend:   { name: "Autumn Blend",      top: "#7a4c2a", bot: "#2a1508", rgb: [122, 76,  42] as [number,number,number] },
-      burntSienna:   { name: "Burnt Sienna",      top: "#884828", bot: "#2e1408", rgb: [136, 72,  40] as [number,number,number] },
-      georgetownGray:{ name: "Georgetown Gray",   top: "#485258", bot: "#161a1c", rgb: [ 72, 82,  88] as [number,number,number] },
-      mellowGold:    { name: "Mellow Gold",       top: "#a28858", bot: "#382e14", rgb: [162,136,  88] as [number,number,number] },
-      graniteRidge:  { name: "Granite Ridge",     top: "#6a7270", bot: "#222828", rgb: [106,114, 112] as [number,number,number] },
-    }},
-    presidential: { name: "Presidential Solaris", colors: {
-      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      colonialSlate: { name: "Colonial Slate",    top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
-      moireBlack:    { name: "Moire Black",       top: "#232528", bot: "#070809", rgb: [ 35, 37,  40] as [number,number,number] },
-      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      swiftwater:    { name: "Swiftwater",        top: "#4a5a6a", bot: "#161c22", rgb: [ 74, 90, 106] as [number,number,number] },
-      heatherBlend:  { name: "Heather Blend",     top: "#6a5060", bot: "#22191f", rgb: [106, 80,  96] as [number,number,number] },
-      autumnBlend:   { name: "Autumn Blend",      top: "#7a4c2a", bot: "#2a1508", rgb: [122, 76,  42] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#7c7060", bot: "#2a2518", rgb: [124,112,  96] as [number,number,number] },
-      shadowGray:    { name: "Shadow Gray",       top: "#56616a", bot: "#1c2126", rgb: [ 86, 97, 106] as [number,number,number] },
-      georgetownGray:{ name: "Georgetown Gray",   top: "#485258", bot: "#161a1c", rgb: [ 72, 82,  88] as [number,number,number] },
-    }},
-  }},
-  tamko: { name: "TAMKO", lines: {
-    heritage: { name: "Heritage", colors: {
-      rusticBlack:   { name: "Rustic Black",      top: "#232426", bot: "#070708", rgb: [ 35, 36,  38] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      glacierGray:   { name: "Glacier Gray",      top: "#909498", bot: "#2f3236", rgb: [144,148, 152] as [number,number,number] },
-      sandDune:      { name: "Sand Dune",         top: "#b0946a", bot: "#453416", rgb: [176,148, 106] as [number,number,number] },
-      naturalTimber: { name: "Natural Timber",    top: "#7a5c34", bot: "#2a1c0a", rgb: [122, 92,  52] as [number,number,number] },
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      rusticSlate:   { name: "Rustic Slate",      top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
-      rusticRedwood: { name: "Rustic Redwood",    top: "#7a3a2a", bot: "#2a100a", rgb: [122, 58,  42] as [number,number,number] },
-      rusticCedar:   { name: "Rustic Cedar",      top: "#6c4024", bot: "#220e04", rgb: [108, 64,  36] as [number,number,number] },
-      rusticBrown:   { name: "Rustic Brown",      top: "#5e3a1c", bot: "#1e0c04", rgb: [ 94, 58,  28] as [number,number,number] },
-      silverGray:    { name: "Silver Gray",       top: "#a0a4a8", bot: "#383c40", rgb: [160,164, 168] as [number,number,number] },
-      royalSlate:    { name: "Royal Slate",       top: "#485460", bot: "#141a1e", rgb: [ 72, 84,  96] as [number,number,number] },
-    }},
-    heritagePremium: { name: "Heritage Premium", colors: {
-      rusticBlack:   { name: "Rustic Black",      top: "#232426", bot: "#070708", rgb: [ 35, 36,  38] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      glacierGray:   { name: "Glacier Gray",      top: "#909498", bot: "#2f3236", rgb: [144,148, 152] as [number,number,number] },
-      naturalTimber: { name: "Natural Timber",    top: "#7a5c34", bot: "#2a1c0a", rgb: [122, 92,  52] as [number,number,number] },
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      rusticSlate:   { name: "Rustic Slate",      top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
-      sandDune:      { name: "Sand Dune",         top: "#b0946a", bot: "#453416", rgb: [176,148, 106] as [number,number,number] },
-      rusticRedwood: { name: "Rustic Redwood",    top: "#7a3a2a", bot: "#2a100a", rgb: [122, 58,  42] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      silverGray:    { name: "Silver Gray",       top: "#a0a4a8", bot: "#383c40", rgb: [160,164, 168] as [number,number,number] },
-    }},
-  }},
-  iko: { name: "IKO", lines: {
-    dynasty: { name: "Dynasty", colors: {
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      cambridgeGray: { name: "Cambridge Gray",    top: "#7a8290", bot: "#262d33", rgb: [122,130, 144] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      colonialGrey:  { name: "Colonial Grey",     top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
-      morningMist:   { name: "Morning Mist",      top: "#9a9fa4", bot: "#353b3f", rgb: [154,159, 164] as [number,number,number] },
-      terraCotta:    { name: "Terra Cotta",       top: "#8a4a30", bot: "#301510", rgb: [138, 74,  48] as [number,number,number] },
-      midnightBlack: { name: "Midnight Black",    top: "#1a1c20", bot: "#050606", rgb: [ 26, 28,  32] as [number,number,number] },
-      harvestWheat:  { name: "Harvest Wheat",     top: "#a08050", bot: "#3a2c14", rgb: [160,128,  80] as [number,number,number] },
-      havanaBrown:   { name: "Havana Brown",      top: "#6a4020", bot: "#221208", rgb: [106, 64,  32] as [number,number,number] },
-      slateBlue:     { name: "Slate Blue",        top: "#4a5870", bot: "#161c26", rgb: [ 74, 88, 112] as [number,number,number] },
-      hunterGreen:   { name: "Hunter Green",      top: "#2e4a2e", bot: "#0e190e", rgb: [ 46, 74,  46] as [number,number,number] },
-      goldenCedar:   { name: "Golden Cedar",      top: "#8a6030", bot: "#2e1e08", rgb: [138, 96,  48] as [number,number,number] },
-    }},
-    cambridge: { name: "Cambridge", colors: {
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
-      colonialGrey:  { name: "Colonial Grey",     top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
-      morningMist:   { name: "Morning Mist",      top: "#9a9fa4", bot: "#353b3f", rgb: [154,159, 164] as [number,number,number] },
-      midnightBlack: { name: "Midnight Black",    top: "#1a1c20", bot: "#050606", rgb: [ 26, 28,  32] as [number,number,number] },
-      teak:          { name: "Teak",              top: "#7b5b3a", bot: "#291a0b", rgb: [123, 91,  58] as [number,number,number] },
-      harvestWheat:  { name: "Harvest Wheat",     top: "#a08050", bot: "#3a2c14", rgb: [160,128,  80] as [number,number,number] },
-      terraCotta:    { name: "Terra Cotta",       top: "#8a4a30", bot: "#301510", rgb: [138, 74,  48] as [number,number,number] },
-      havanaBrown:   { name: "Havana Brown",      top: "#6a4020", bot: "#221208", rgb: [106, 64,  32] as [number,number,number] },
-    }},
-  }},
-  atlas: { name: "Atlas", lines: {
-    pinnacle: { name: "Pinnacle Pristine", colors: {
-      antiqueBlack:  { name: "Antique Black",     top: "#242628", bot: "#070809", rgb: [ 36, 38,  40] as [number,number,number] },
-      canyon:        { name: "Canyon",            top: "#7a5030", bot: "#2a1808", rgb: [122, 80,  48] as [number,number,number] },
-      weathered:     { name: "Weathered",         top: "#7a7260", bot: "#27231b", rgb: [122,114,  96] as [number,number,number] },
-      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
-      silverBirch:   { name: "Silver Birch",      top: "#9a9ea2", bot: "#363a3e", rgb: [154,158, 162] as [number,number,number] },
-      mountainSlate: { name: "Mountain Slate",    top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
-      brownstone:    { name: "Brownstone",        top: "#5a4030", bot: "#1c1008", rgb: [ 90, 64,  48] as [number,number,number] },
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      forestGreen:   { name: "Forest Green",      top: "#2a4430", bot: "#0a150d", rgb: [ 42, 68,  48] as [number,number,number] },
-      harvestGold:   { name: "Harvest Gold",      top: "#9a7840", bot: "#34260e", rgb: [154,120,  64] as [number,number,number] },
-      shakewood:     { name: "Shakewood",         top: "#7a5c3e", bot: "#2a1c0e", rgb: [122, 92,  62] as [number,number,number] },
-    }},
-    stormMaster: { name: "StormMaster", colors: {
-      antiqueBlack:  { name: "Antique Black",     top: "#242628", bot: "#070809", rgb: [ 36, 38,  40] as [number,number,number] },
-      canyon:        { name: "Canyon",            top: "#7a5030", bot: "#2a1808", rgb: [122, 80,  48] as [number,number,number] },
-      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
-      mountainSlate: { name: "Mountain Slate",    top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
-      brownstone:    { name: "Brownstone",        top: "#5a4030", bot: "#1c1008", rgb: [ 90, 64,  48] as [number,number,number] },
-      silverBirch:   { name: "Silver Birch",      top: "#9a9ea2", bot: "#363a3e", rgb: [154,158, 162] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
-      weathered:     { name: "Weathered",         top: "#7a7260", bot: "#27231b", rgb: [122,114,  96] as [number,number,number] },
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      forestGreen:   { name: "Forest Green",      top: "#2a4430", bot: "#0a150d", rgb: [ 42, 68,  48] as [number,number,number] },
-    }},
-  }},
-  malarkey: { name: "Malarkey", lines: {
-    vista: { name: "Vista", colors: {
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      autumnBlend:   { name: "Autumn Blend",      top: "#7a4c2a", bot: "#2a1508", rgb: [122, 76,  42] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
-      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      mountainAsh:   { name: "Mountain Ash",      top: "#7a5c34", bot: "#2a1c0a", rgb: [122, 92,  52] as [number,number,number] },
-      blackjack:     { name: "Blackjack",         top: "#232528", bot: "#070809", rgb: [ 35, 37,  40] as [number,number,number] },
-      pacificBlue:   { name: "Pacific Blue",      top: "#3a5060", bot: "#101820", rgb: [ 58, 80,  96] as [number,number,number] },
-      greyGhost:     { name: "Grey Ghost",        top: "#747c80", bot: "#262a2c", rgb: [116,124, 128] as [number,number,number] },
-      steelBlue:     { name: "Steel Blue",        top: "#445a6e", bot: "#141e26", rgb: [ 68, 90, 110] as [number,number,number] },
-      russet:        { name: "Russet",            top: "#703830", bot: "#240e0a", rgb: [112, 56,  48] as [number,number,number] },
-      harvestWheat:  { name: "Harvest Wheat",     top: "#a08050", bot: "#3a2c14", rgb: [160,128,  80] as [number,number,number] },
-    }},
-    legacy: { name: "Legacy", colors: {
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      driftwood:     { name: "Driftwood",         top: "#6e6050", bot: "#231e17", rgb: [110, 96,  80] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      blackjack:     { name: "Blackjack",         top: "#232528", bot: "#070809", rgb: [ 35, 37,  40] as [number,number,number] },
-      pewter:        { name: "Pewter",            top: "#828a8c", bot: "#2a2e30", rgb: [130,138, 140] as [number,number,number] },
-      mountainAsh:   { name: "Mountain Ash",      top: "#7a5c34", bot: "#2a1c0a", rgb: [122, 92,  52] as [number,number,number] },
-      autumnBlend:   { name: "Autumn Blend",      top: "#7a4c2a", bot: "#2a1508", rgb: [122, 76,  42] as [number,number,number] },
-      pacificBlue:   { name: "Pacific Blue",      top: "#3a5060", bot: "#101820", rgb: [ 58, 80,  96] as [number,number,number] },
-      greyGhost:     { name: "Grey Ghost",        top: "#747c80", bot: "#262a2c", rgb: [116,124, 128] as [number,number,number] },
-      blackberry:    { name: "Blackberry",        top: "#4a3050", bot: "#170e1a", rgb: [ 74, 48,  80] as [number,number,number] },
-    }},
-  }},
-  pabco: { name: "PABCO", lines: {
-    premier: { name: "Premier", colors: {
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      colonialGray:  { name: "Colonial Gray",     top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      sierra:        { name: "Sierra",            top: "#8a5830", bot: "#2e1c08", rgb: [138, 88,  48] as [number,number,number] },
-      shadowGray:    { name: "Shadow Gray",       top: "#56616a", bot: "#1c2126", rgb: [ 86, 97, 106] as [number,number,number] },
-      midnightBlack: { name: "Midnight Black",    top: "#1a1c20", bot: "#050606", rgb: [ 26, 28,  32] as [number,number,number] },
-      harvestGold:   { name: "Harvest Gold",      top: "#9a7840", bot: "#34260e", rgb: [154,120,  64] as [number,number,number] },
-      teak:          { name: "Teak",              top: "#7b5b3a", bot: "#291a0b", rgb: [123, 91,  58] as [number,number,number] },
-      rusticBlack:   { name: "Rustic Black",      top: "#232426", bot: "#070708", rgb: [ 35, 36,  38] as [number,number,number] },
-      autumnBlend:   { name: "Autumn Blend",      top: "#7a4c2a", bot: "#2a1508", rgb: [122, 76,  42] as [number,number,number] },
-      desertTan:     { name: "Desert Tan",        top: "#b09472", bot: "#4a3520", rgb: [176,148, 114] as [number,number,number] },
-      sage:          { name: "Sage",              top: "#5a6e4a", bot: "#1c2414", rgb: [ 90,110,  74] as [number,number,number] },
-    }},
-    galaxy: { name: "Galaxy", colors: {
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      brownwood:     { name: "Brownwood",         top: "#5e3d20", bot: "#1d0e04", rgb: [ 94, 61,  32] as [number,number,number] },
-      shadowGray:    { name: "Shadow Gray",       top: "#56616a", bot: "#1c2126", rgb: [ 86, 97, 106] as [number,number,number] },
-      midnightBlack: { name: "Midnight Black",    top: "#1a1c20", bot: "#050606", rgb: [ 26, 28,  32] as [number,number,number] },
-      sierra:        { name: "Sierra",            top: "#8a5830", bot: "#2e1c08", rgb: [138, 88,  48] as [number,number,number] },
-      colonialGray:  { name: "Colonial Gray",     top: "#525c63", bot: "#191e22", rgb: [ 82, 92,  99] as [number,number,number] },
-      teak:          { name: "Teak",              top: "#7b5b3a", bot: "#291a0b", rgb: [123, 91,  58] as [number,number,number] },
-      harvestGold:   { name: "Harvest Gold",      top: "#9a7840", bot: "#34260e", rgb: [154,120,  64] as [number,number,number] },
-      autumnBlend:   { name: "Autumn Blend",      top: "#7a4c2a", bot: "#2a1508", rgb: [122, 76,  42] as [number,number,number] },
-    }},
-  }},
-  generic: { name: "Generic", lines: {
-    standard: { name: "Standard", colors: {
-      barkwood:      { name: "Barkwood",          top: "#6f4f34", bot: "#24140e", rgb: [111, 79,  52] as [number,number,number] },
-      charcoal:      { name: "Charcoal",          top: "#4b4e55", bot: "#151619", rgb: [ 75, 78,  85] as [number,number,number] },
-      weatheredWood: { name: "Weathered Wood",    top: "#6a6256", bot: "#231f1a", rgb: [106, 98,  86] as [number,number,number] },
-      pewterGray:    { name: "Pewter Gray",       top: "#7a8087", bot: "#262b31", rgb: [122,128, 135] as [number,number,number] },
-      oysterGray:    { name: "Oyster Gray",       top: "#8d9092", bot: "#33373c", rgb: [141,144, 146] as [number,number,number] },
-      slate:         { name: "Slate",             top: "#5d6a79", bot: "#1b2128", rgb: [ 93,106, 121] as [number,number,number] },
-      black:         { name: "Black",             top: "#2f3135", bot: "#070809", rgb: [ 47, 49,  53] as [number,number,number] },
-    }},
-  }},
-} as const;
-
-function resolveShinglePalette(sel: ShingleSelection): { top: string; bot: string } {
-  const mfr = SHINGLE_CATALOG[sel.manufacturerId as keyof typeof SHINGLE_CATALOG];
-  const line = mfr?.lines[sel.lineId as keyof typeof mfr.lines] as { colors: Record<string, { top: string; bot: string }> } | undefined;
-  const color = line?.colors[sel.colorId];
-  if (color?.top && color?.bot) return { top: color.top, bot: color.bot };
-  return { top: "#6f4f34", bot: "#24140e" }; // fallback: barkwood
-}
-
-function resolveShingleRGB(sel: ShingleSelection): [number, number, number] {
-  const mfr = SHINGLE_CATALOG[sel.manufacturerId as keyof typeof SHINGLE_CATALOG];
-  const line = mfr?.lines[sel.lineId as keyof typeof mfr.lines] as { colors: Record<string, { rgb: [number,number,number] }> } | undefined;
-  const color = line?.colors[sel.colorId];
-  if (color?.rgb) return color.rgb;
-  return [111, 79, 52]; // fallback: barkwood
-}
-
-function shingleColorToSelection(c: ShingleColor): ShingleSelection {
-  const colorMap: Record<ShingleColor, string> = {
-    "Barkwood":      "barkwood",
-    "Charcoal":      "charcoal",
-    "WeatheredWood": "weatheredWood",
-    "PewterGray":    "pewterGray",
-    "OysterGray":    "oysterGray",
-    "Slate":         "slate",
-    "Black":         "black",
-  };
-  return { manufacturerId: "generic", lineId: "standard", colorId: colorMap[c] ?? "barkwood" };
-}
-
-// Derives the /public/shingles/ path for a given selection.
-// camelCase colorId → kebab-case;  line name → slugified.
-function shingleTexturePath(sel: ShingleSelection): string {
-  const mfr = SHINGLE_CATALOG[sel.manufacturerId as keyof typeof SHINGLE_CATALOG];
-  const lineObj = mfr?.lines[sel.lineId as keyof typeof mfr.lines] as { name: string } | undefined;
-  const lineSlug = lineObj
-    ? lineObj.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")
-    : sel.lineId;
-  const colorSlug = sel.colorId.replace(/([A-Z])/g, (m) => `-${m.toLowerCase()}`);
-  return `/shingles/${sel.manufacturerId}/${lineSlug}/${colorSlug}.png`;
-}
-
-// Parse a 6-digit hex color → [r, g, b]
-function hexToRgb(hex: string): [number, number, number] {
-  const v = parseInt(hex.replace("#", ""), 16);
-  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-}
-
-// Renders a base texture tinted toward the catalog palette via gradient mapping (duotone).
-// Maps each pixel's luminance → bot color (dark areas) to top color (bright areas).
-// strength 0 = original texture; 1 = full duotone.
-function applyColorTint(
-  img: HTMLImageElement,
-  palette: { top: string; bot: string },
-  strength: number,
-): string {
-  if (typeof document === "undefined") return "";
-  const S = 512;
-  const c = document.createElement("canvas");
-  c.width = S; c.height = S;
-  const ctx = c.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D | null;
-  if (!ctx) return "";
-  // Guard: jsdom test mock may not implement drawImage / getImageData
-  if (typeof (ctx as unknown as { drawImage?: unknown }).drawImage !== "function") return "";
-  ctx.drawImage(img, 0, 0, S, S);
-  if (strength <= 0.01) return c.toDataURL("image/jpeg", 0.88);
-
-  const imgData = ctx.getImageData(0, 0, S, S);
-  if (!imgData) return c.toDataURL("image/jpeg", 0.88);
-  const data = imgData.data;
-
-  const botRGB = hexToRgb(palette.bot);
-  const topRGB = hexToRgb(palette.top);
-
-  // Pass 1: find luminance range so the full bot→top gradient is always used
-  // regardless of the base texture's absolute brightness.
-  let lumaMin = 1, lumaMax = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    const L = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) / 255;
-    if (L < lumaMin) lumaMin = L;
-    if (L > lumaMax) lumaMax = L;
-  }
-  const lumaRange = lumaMax - lumaMin || 1;
-
-  // Pass 2: gradient-map each pixel, then blend with original at `strength`
-  for (let i = 0; i < data.length; i += 4) {
-    const L = ((data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) / 255 - lumaMin) / lumaRange;
-    // Slight gamma lift so mid-tones read brighter (more vivid, less muddy)
-    const Lg = Math.pow(L, 0.80);
-    const cr = botRGB[0] + (topRGB[0] - botRGB[0]) * Lg;
-    const cg = botRGB[1] + (topRGB[1] - botRGB[1]) * Lg;
-    const cb = botRGB[2] + (topRGB[2] - botRGB[2]) * Lg;
-    data[i]     = Math.round(data[i]     * (1 - strength) + cr * strength);
-    data[i + 1] = Math.round(data[i + 1] * (1 - strength) + cg * strength);
-    data[i + 2] = Math.round(data[i + 2] * (1 - strength) + cb * strength);
-  }
-  ctx.putImageData(imgData, 0, 0);
-  return c.toDataURL("image/jpeg", 0.88);
-}
-
-// Tiny noise canvas generated once — used as a repeating grain overlay on shingles.
-let _shingleNoiseCanvas: HTMLCanvasElement | null = null;
-function getShingleNoiseCanvas(): HTMLCanvasElement | null {
-  if (typeof document === "undefined") return null;
-  if (_shingleNoiseCanvas) return _shingleNoiseCanvas;
-  const SIZE = 128;
-  const c = document.createElement("canvas");
-  c.width = SIZE; c.height = SIZE;
-  const ctx = c.getContext("2d")!;
-  const id = ctx.createImageData(SIZE, SIZE);
-  for (let i = 0; i < id.data.length; i += 4) {
-    const v = Math.floor(Math.random() * 255);
-    id.data[i] = id.data[i + 1] = id.data[i + 2] = v;
-    id.data[i + 3] = 255;
-  }
-  ctx.putImageData(id, 0, 0);
-  _shingleNoiseCanvas = c;
-  return c;
-}
-
-// Course-depth shadow canvas — 16×11px tile (height = courseH) drawn once and reused.
-// Soft gradient at bottom of each course simulates the butt-edge shadow/depth.
-let _courseShadowCanvas: HTMLCanvasElement | null = null;
-function getCourseShadowCanvas(): HTMLCanvasElement | null {
-  if (typeof document === "undefined") return null;
-  if (_courseShadowCanvas) return _courseShadowCanvas;
-  const W = 16, H = 11; // H must match courseH in makeShingleTexture
-  const c = document.createElement("canvas");
-  c.width = W; c.height = H;
-  const ctx = c.getContext("2d");
-  if (!ctx || typeof (ctx as CanvasRenderingContext2D & { createLinearGradient?: unknown }).createLinearGradient !== "function") return null;
-  // Bottom shadow — butt edge of the course above casts shadow downward
-  const shadow = ctx.createLinearGradient(0, H * 0.50, 0, H);
-  shadow.addColorStop(0, "rgba(0,0,0,0)");
-  shadow.addColorStop(0.45, "rgba(0,0,0,0.18)");
-  shadow.addColorStop(1, "rgba(0,0,0,0.38)");
-  ctx.fillStyle = shadow;
-  ctx.fillRect(0, 0, W, H);
-  // Top micro-shadow — bottom edge of nail hem from course below
-  const top = ctx.createLinearGradient(0, 0, 0, H * 0.18);
-  top.addColorStop(0, "rgba(0,0,0,0.12)");
-  top.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = top;
-  ctx.fillRect(0, 0, W, H * 0.14);
-  _courseShadowCanvas = c;
-  return c;
 }
 
 function makeDeckingTexture(w: number, h: number) {
@@ -1022,60 +365,76 @@ function makeSyntheticTexture(w: number, h: number) {
   return c.toDataURL("image/png");
 }
 
-function makeShingleTexture(_w: number, _h: number, palette: { top: string; bot: string }) {
-  // Flat-color base so the tile seams never show as color bands on large roofs.
-  const W = 2400, H = 2400;
+function makeShingleTexture(w: number, h: number, color: ShingleColor) {
   const c = document.createElement("canvas");
-  c.width = W; c.height = H;
+  c.width = Math.max(1400, Math.floor(w));
+  c.height = Math.max(1400, Math.floor(h));
   const ctx = c.getContext("2d")!;
+  const W = c.width,
+    H = c.height;
 
-  const pal = palette;
-
-  // Uniform base — no gradient so the repeating tile is invisible.
-  ctx.fillStyle = pal.top;
+  const pal = shinglePalette(color);
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, pal.top);
+  g.addColorStop(1, pal.bot);
+  ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 
-  const courseH = 11; // exposure height — must match fillPatternOffsetY calculation
-  const tabW    = 16; // shingle tab width
+  const courseH = 7;
+  const tabW = 10;
 
   for (let row = 0; row * courseH < H + courseH; row++) {
     const y = row * courseH;
     const offset = (row % 2) * (tabW / 2);
 
-    // Shadow strip at the butt edge of each course (uses the shingle's own dark tone).
-    ctx.globalAlpha = 0.40;
-    ctx.fillStyle = pal.bot;
-    ctx.fillRect(0, y, W, 2);
+    ctx.globalAlpha = 0.34;
+    ctx.strokeStyle = "rgba(0,0,0,0.46)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
 
-    // Very faint highlight just below, giving the butt edge a slight lift.
-    ctx.globalAlpha = 0.10;
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, y + 2, W, 1);
+    ctx.globalAlpha = 0.1;
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, y + 1.2);
+    ctx.lineTo(W, y + 1.2);
+    ctx.stroke();
 
-    // Tab cut dividers — faint, top 55% of exposure only.
-    ctx.globalAlpha = 0.08;
-    ctx.strokeStyle = pal.bot;
-    ctx.lineWidth = 0.9;
-    for (let col = 0; col < Math.ceil(W / tabW) + 2; col++) {
-      const tx = col * tabW + offset;
+    for (let x = -tabW; x < W + tabW; x += tabW) {
+      const xx = x + offset;
+
+      ctx.globalAlpha = 0.1;
+      ctx.strokeStyle = "rgba(0,0,0,0.26)";
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(tx, y + 2);
-      ctx.lineTo(tx, y + courseH * 0.55);
+      ctx.moveTo(xx, y);
+      ctx.lineTo(xx, y + courseH);
       ctx.stroke();
+
+      if (Math.random() > 0.55) {
+        ctx.globalAlpha = 0.04 + Math.random() * 0.08;
+        ctx.fillStyle = "rgba(0,0,0,0.9)";
+        const bw = tabW * (0.7 + Math.random() * 0.8);
+        const bh = courseH * (0.35 + Math.random() * 0.75);
+        ctx.fillRect(
+          xx + 1 + Math.random() * 2,
+          y + 1 + Math.random() * 2,
+          bw,
+          bh
+        );
+      }
     }
   }
 
   ctx.globalAlpha = 1;
-  // Minimal noise for a slight granular texture.
-  addNoise(ctx, W, H, 28000, 0.003, 0.022);
+  addNoise(ctx, W, H, 420000, 0.003, 0.06);
+  vignette(ctx, W, H, 0.09);
   return c.toDataURL("image/png");
 }
 
-// ── Photo-derived shingle texture ──────────────────────────────────────────
-// Samples the uploaded photo in a mosaic of patches, adds shingle course lines,
-// contrast/desaturation normalization, noise, and vignette.
-// Returns a data URL (jpeg); empty string on any error → caller falls back to
-// the procedural makeShingleTexture.
 /* ---------- strokes ---------- */
 function ShinyMetalStroke({
   points,
@@ -1094,7 +453,6 @@ function ShinyMetalStroke({
         points={points}
         stroke={metalRGBA(color, opacity)}
         strokeWidth={width}
-        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         shadowColor="rgba(0,0,0,0.18)"
@@ -1106,7 +464,6 @@ function ShinyMetalStroke({
         points={points}
         stroke="rgba(255,255,255,0.28)"
         strokeWidth={Math.max(2, width * 0.22)}
-        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         opacity={0.9}
@@ -1115,7 +472,6 @@ function ShinyMetalStroke({
         points={points}
         stroke="rgba(0,0,0,0.14)"
         strokeWidth={Math.max(1, width * 0.1)}
-        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         dash={[6, 10]}
@@ -1132,7 +488,6 @@ function StarterStroke({ points, width }: { points: number[]; width: number }) {
         points={points}
         stroke="rgba(18,18,20,0.92)"
         strokeWidth={width}
-        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         shadowColor="rgba(0,0,0,0.12)"
@@ -1144,7 +499,6 @@ function StarterStroke({ points, width }: { points: number[]; width: number }) {
         points={points}
         stroke="rgba(255,255,255,0.10)"
         strokeWidth={Math.max(2, width * 0.18)}
-        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         opacity={0.82}
@@ -1160,7 +514,6 @@ function RidgeVentStroke({ points, width }: { points: number[]; width: number })
         points={points}
         stroke="rgba(15,15,16,0.90)"
         strokeWidth={width}
-        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         shadowColor="rgba(0,0,0,0.12)"
@@ -1172,7 +525,6 @@ function RidgeVentStroke({ points, width }: { points: number[]; width: number })
         points={points}
         stroke="rgba(255,255,255,0.10)"
         strokeWidth={Math.max(2, width * 0.16)}
-        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         opacity={0.85}
@@ -1181,7 +533,6 @@ function RidgeVentStroke({ points, width }: { points: number[]; width: number })
         points={points}
         stroke="rgba(255,255,255,0.10)"
         strokeWidth={Math.max(2, width * 0.10)}
-        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
         dash={[6, 8]}
@@ -1196,17 +547,13 @@ function CapBand({
   width,
   shinglesImg,
   patternScale,
-  clipStrokeWidth,
 }: {
   points: number[];
   width: number;
   shinglesImg: HTMLImageElement;
   patternScale: number;
-  clipStrokeWidth?: number;
 }) {
   if (points.length < 4) return null;
-
-  const clipW = clipStrokeWidth ?? width;
 
   return (
     <Group
@@ -1215,7 +562,7 @@ function CapBand({
         ctx.beginPath();
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        ctx.lineWidth = clipW;
+        ctx.lineWidth = width;
         ctx.moveTo(points[0], points[1]);
         for (let i = 2; i < points.length; i += 2) ctx.lineTo(points[i], points[i + 1]);
         ctx.stroke();
@@ -1233,12 +580,10 @@ function CapBand({
         fillPatternScaleY={patternScale}
         opacity={0.98}
       />
-      <Rect x={-5000} y={-5000} width={12000} height={12000} fill="rgba(255,255,255,0.35)" />
       <Line
         points={points}
         stroke="rgba(0,0,0,0.18)"
         strokeWidth={Math.max(1, width * 0.18)}
-        strokeScaleEnabled={false}
         lineCap="round"
         lineJoin="round"
       />
@@ -1246,370 +591,49 @@ function CapBand({
   );
 }
 
-/* ------------------- Roof auto-detection ------------------- */
-
-// Andrew's monotone-chain convex hull
-function convexHull(pts: [number, number][]): [number, number][] {
-  if (pts.length < 3) return pts;
-  const s = [...pts].sort((a, b) => a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]);
-  const cross = (o: [number,number], a: [number,number], b: [number,number]) =>
-    (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]);
-  const lower: [number,number][] = [];
-  for (const p of s) {
-    while (lower.length >= 2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0) lower.pop();
-    lower.push(p);
-  }
-  const upper: [number,number][] = [];
-  for (const p of [...s].reverse()) {
-    while (upper.length >= 2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0) upper.pop();
-    upper.push(p);
-  }
-  return [...lower.slice(0,-1), ...upper.slice(0,-1)];
-}
-
-type AutoSuggest = { outline: number[]; lines: Array<{ kind: LineKind; points: number[] }> };
-
-// Sobel-edge + Hough-transform roof line detector (runs client-side on a small canvas).
-function autoDetectRoof(img: HTMLImageElement, displayW: number, displayH: number): AutoSuggest {
-  const MAX = 350;
-  const sc = Math.min(MAX / img.naturalWidth, MAX / img.naturalHeight);
-  const pw = Math.max(1, Math.round(img.naturalWidth * sc));
-  const ph = Math.max(1, Math.round(img.naturalHeight * sc));
-  const toX = (x: number) => (x / sc) * (displayW / img.naturalWidth);
-  const toY = (y: number) => (y / sc) * (displayH / img.naturalHeight);
-
-  // Draw image to small processing canvas
-  const tc = document.createElement("canvas");
-  tc.width = pw; tc.height = ph;
-  const tCtx = tc.getContext("2d")!;
-  tCtx.drawImage(img, 0, 0, pw, ph);
-  const { data } = tCtx.getImageData(0, 0, pw, ph);
-
-  // Grayscale
-  const gray = new Float32Array(pw * ph);
-  for (let i = 0; i < pw * ph; i++) {
-    gray[i] = 0.299*data[i*4] + 0.587*data[i*4+1] + 0.114*data[i*4+2];
-  }
-
-  // Gaussian blur 3×3 (reduces noise before edge detection)
-  const bl = new Float32Array(pw * ph);
-  for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) {
-    bl[y*pw+x] = (
-      gray[(y-1)*pw+(x-1)] + 2*gray[(y-1)*pw+x] + gray[(y-1)*pw+(x+1)] +
-      2*gray[y*pw+(x-1)] + 4*gray[y*pw+x] + 2*gray[y*pw+(x+1)] +
-      gray[(y+1)*pw+(x-1)] + 2*gray[(y+1)*pw+x] + gray[(y+1)*pw+(x+1)]
-    ) / 16;
-  }
-
-  // Sobel edge magnitude + binary threshold at 22% of max
-  const mag = new Float32Array(pw * ph);
-  let mx = 0;
-  for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) {
-    const gx = -bl[(y-1)*pw+(x-1)] + bl[(y-1)*pw+(x+1)] - 2*bl[y*pw+(x-1)] + 2*bl[y*pw+(x+1)] - bl[(y+1)*pw+(x-1)] + bl[(y+1)*pw+(x+1)];
-    const gy = -bl[(y-1)*pw+(x-1)] - 2*bl[(y-1)*pw+x] - bl[(y-1)*pw+(x+1)] + bl[(y+1)*pw+(x-1)] + 2*bl[(y+1)*pw+x] + bl[(y+1)*pw+(x+1)];
-    mag[y*pw+x] = Math.hypot(gx, gy);
-    if (mag[y*pw+x] > mx) mx = mag[y*pw+x];
-  }
-  const edge = new Uint8Array(pw * ph);
-  for (let i = 0; i < pw*ph; i++) edge[i] = mag[i] >= mx * 0.22 ? 1 : 0;
-
-  // Standard Hough transform
-  const diag = Math.ceil(Math.hypot(pw, ph));
-  const NT = 180, NR = 2*diag+1;
-  const acc = new Int32Array(NT * NR);
-  const cLUT = new Float32Array(NT), sLUT = new Float32Array(NT);
-  for (let t = 0; t < NT; t++) { cLUT[t] = Math.cos(t*Math.PI/NT); sLUT[t] = Math.sin(t*Math.PI/NT); }
-  for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) {
-    if (!edge[y*pw+x]) continue;
-    for (let t = 0; t < NT; t++) {
-      const r = Math.round(x*cLUT[t] + y*sLUT[t]) + diag;
-      if (r >= 0 && r < NR) acc[t*NR+r]++;
-    }
-  }
-
-  // Extract top 7 peaks with tighter neighbourhood suppression
-  const minV = Math.max(25, Math.min(pw, ph) * 0.16);
-  const peaks: {t: number; r: number; v: number}[] = [];
-  const sup = new Uint8Array(NT * NR);
-  for (let i = 0; i < 7; i++) {
-    let best = 0, bt = 0, br = 0;
-    for (let t = 0; t < NT; t++) for (let r = 0; r < NR; r++) {
-      if (!sup[t*NR+r] && acc[t*NR+r] > best) { best = acc[t*NR+r]; bt = t; br = r; }
-    }
-    if (best < minV) break;
-    peaks.push({ t: bt, r: br, v: best });
-    // Wider suppression window to prevent near-duplicate lines
-    for (let dt = -15; dt <= 15; dt++) for (let dr = -30; dr <= 30; dr++) {
-      const nt = ((bt+dt)%NT+NT)%NT, nr = br+dr;
-      if (nr >= 0 && nr < NR) sup[nt*NR+nr] = 1;
-    }
-  }
-
-  // Classify each detected line
-  const classify = (tIdx: number, pts: number[]): LineKind => {
-    const deg = (tIdx * 180) / NT;
-    if (deg > 65 && deg < 115) return (pts[1] + pts[3]) / 2 < displayH * 0.5 ? "RIDGE" : "EAVE";
-    if (deg < 25 || deg > 155) return "RAKE";
-    return deg < 90 ? "HIP" : "VALLEY";
-  };
-
-  const allLines: AutoSuggest["lines"] = [];
-  const lineEqs: { ct: number; st: number; rho: number }[] = [];
-  for (const { t, r } of peaks) {
-    const rho = r - diag, ct = cLUT[t], st = sLUT[t];
-    lineEqs.push({ ct, st, rho });
-    const cp: number[] = [];
-    const addPt = (px: number, py: number) => {
-      if (px >= -1 && px <= pw+1 && py >= -1 && py <= ph+1) cp.push(px, py);
-    };
-    if (Math.abs(st) > 0.01) { addPt(0, rho/st); addPt(pw, (rho-pw*ct)/st); }
-    if (Math.abs(ct) > 0.01) { addPt(rho/ct, 0); addPt((rho-ph*st)/ct, ph); }
-    if (cp.length >= 4) {
-      const pts = [toX(cp[0]), toY(cp[1]), toX(cp[cp.length-2]), toY(cp[cp.length-1])];
-      allLines.push({ kind: classify(t, pts), points: pts });
-    }
-  }
-
-  // Limit to at most 2 lines per kind so the result stays clean
-  const maxPerKind: Record<LineKind, number> = { EAVE: 2, RAKE: 2, VALLEY: 2, RIDGE: 1, HIP: 2 };
-  const kindCounts: Partial<Record<LineKind, number>> = {};
-  const lines = allLines.filter((l) => {
-    const cnt = kindCounts[l.kind] ?? 0;
-    if (cnt >= maxPerKind[l.kind]) return false;
-    kindCounts[l.kind] = cnt + 1;
-    return true;
-  });
-
-  // Find intersections of line pairs → convex hull → outline polygon
-  const iPts: [number, number][] = [];
-  for (let i = 0; i < lineEqs.length; i++) for (let j = i+1; j < lineEqs.length; j++) {
-    const { ct: c1, st: s1, rho: r1 } = lineEqs[i], { ct: c2, st: s2, rho: r2 } = lineEqs[j];
-    const det = c1*s2 - c2*s1;
-    if (Math.abs(det) < 0.01) continue;
-    const ix = (r1*s2 - r2*s1) / det, iy = (c1*r2 - c2*r1) / det;
-    if (ix >= 0 && ix <= pw && iy >= 0 && iy <= ph) iPts.push([toX(ix), toY(iy)]);
-  }
-  // Fall back to image corners if too few intersections
-  if (iPts.length < 3) {
-    iPts.push([toX(0),toY(0)],[toX(pw),toY(0)],[toX(pw),toY(ph)],[toX(0),toY(ph)]);
-  }
-  const outline = convexHull(iPts).flatMap(p => p);
-  return { outline, lines };
-}
-
-/* ------------------- Ramer-Douglas-Peucker polygon simplification --------- */
-function rdpSimplify(pts: [number, number][], epsilon: number): [number, number][] {
-  if (pts.length < 3) return pts;
-  const [x1, y1] = pts[0];
-  const [x2, y2] = pts[pts.length - 1];
-  const dx = x2 - x1, dy = y2 - y1;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  let maxDist = 0, maxIdx = 1;
-  for (let i = 1; i < pts.length - 1; i++) {
-    const [px, py] = pts[i];
-    const dist = len > 0
-      ? Math.abs(dy * px - dx * py + x2 * y1 - y2 * x1) / len
-      : Math.hypot(px - x1, py - y1);
-    if (dist > maxDist) { maxDist = dist; maxIdx = i; }
-  }
-  if (maxDist > epsilon) {
-    return [
-      ...rdpSimplify(pts.slice(0, maxIdx + 1), epsilon).slice(0, -1),
-      ...rdpSimplify(pts.slice(maxIdx), epsilon),
-    ];
-  }
-  return [pts[0], pts[pts.length - 1]];
-}
-
-type PhotoTransform = { scale: number; drawW: number; drawH: number; offX: number; offY: number; imgW: number; imgH: number };
-
-/** Compute a "contain" photo transform — photo fits inside stage without distortion */
-function getPhotoTransform(imgW: number, imgH: number, sw: number, sh: number): PhotoTransform {
-  const scale = Math.min(sw / imgW, sh / imgH);
-  const drawW = imgW * scale;
-  const drawH = imgH * scale;
-  return { scale, drawW, drawH, offX: (sw - drawW) / 2, offY: (sh - drawH) / 2, imgW, imgH };
-}
-
-/** Image-space flat array → stage-space flat array */
-function imgToStage(pts: number[], tx: PhotoTransform): number[] {
-  return pts.map((v, i) => (i % 2 === 0 ? tx.offX + v * tx.scale : tx.offY + v * tx.scale));
-}
-
-/** Stage-space flat array → image-space flat array */
-function stageToImgPts(pts: number[], tx: PhotoTransform): number[] {
-  return pts.map((v, i) => (i % 2 === 0 ? (v - tx.offX) / tx.scale : (v - tx.offY) / tx.scale));
-}
-
-/* ------------------- Logo animation ------------------- */
-function LogoAnimated({
-  width = 175,
-  height = 51,
-  showCheck = true,
-  href,
-  onClick,
-  style,
-}: {
-  width?: number;
-  height?: number;
-  showCheck?: boolean;
-  href?: string;
-  onClick?: () => void;
-  style?: React.CSSProperties;
-}) {
-  // New value on every mount → animation always replays on load/refresh
-  const [mountKey] = useState(() => Date.now());
-
-  const inner = (
-    <span style={{ position: "relative", display: "inline-flex", alignItems: "center", ...style }}>
-      {/* Logo slides in from the left */}
-      <motion.span
-        key={`logo-pop-${mountKey}`}
-        initial={{ opacity: 0, x: -36 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ type: "spring", stiffness: 260, damping: 22 }}
-        style={{ display: "inline-flex" }}
-      >
-        <Image src="/roofviz-logo.png" alt="RoofViz" width={width} height={height} priority />
-      </motion.span>
-
-      {showCheck && (
-        <motion.svg
-          key={`logo-check-${mountKey}`}
-          viewBox="0 0 32 32"
-          width={32}
-          height={32}
-          style={{
-            position: "absolute",
-            top: -10,
-            right: -14,
-            overflow: "visible",
-            pointerEvents: "none",
-          }}
-          initial={{ opacity: 0, scale: 0.55 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.36, type: "spring", stiffness: 360, damping: 20 }}
-        >
-          {/* Solid green circle */}
-          <circle cx="16" cy="16" r="11" fill="#16a34a" />
-          {/* Outer glow ring */}
-          <circle cx="16" cy="16" r="13" fill="none" stroke="rgba(22,163,74,0.30)" strokeWidth={2} />
-          {/* Downstroke: top-left → valley — speeds up going down (easeIn) */}
-          <motion.path
-            d="M9 14.5 L13.5 21"
-            fill="none"
-            stroke="#ffffff"
-            strokeWidth={3}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            initial={{ pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ delay: 0.50, duration: 0.24, ease: "easeIn" }}
-          />
-          {/* Upstroke: valley → top-right — slows as it reaches the top (easeOut) */}
-          <motion.path
-            d="M13.5 21 L23 11"
-            fill="none"
-            stroke="#ffffff"
-            strokeWidth={3}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            initial={{ pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ delay: 0.74, duration: 0.30, ease: "easeOut" }}
-          />
-        </motion.svg>
-      )}
-    </span>
-  );
-
-  if (href) {
-    return (
-      <a href={href} style={{ display: "inline-flex", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "none" }}>
-        {inner}
-      </a>
-    );
-  }
-  if (onClick) {
-    return (
-      <button onClick={onClick} style={{ display: "inline-flex", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-        {inner}
-      </button>
-    );
-  }
-  return <>{inner}</>;
-}
-
 /* ------------------- Main ------------------- */
 export default function Page() {
   const stageRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const [projectName, setProjectName] = useState("My Roof Project");
-
   const [w, setW] = useState(1100);
   const [h, setH] = useState(700);
-  const [stageKey, setStageKey] = useState(0);
-  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth <= 640);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
+    if (!containerRef.current) return;
+    const el = containerRef.current;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      setW(Math.max(420, Math.floor(r.width)));
+      setH(Math.max(420, Math.floor(r.height)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
+  /* ── Core state ──────────────────────────── */
   const [photos, setPhotos] = useState<PhotoProject[]>([]);
   const [activePhotoId, setActivePhotoId] = useState<string>("");
-  const [screen, setScreen] = useState<"MENU" | "PROJECT" | "CUSTOMER_VIEW">("MENU");
-  const [customerViewData, setCustomerViewData] = useState<{
-    name: string;
-    shingleColor: ShingleColor;
-    photos: Array<{ src: string; roofs: Roof[]; canvasW: number; canvasH: number; stageScale?: number; stagePos?: { x: number; y: number } }>;
-  } | null>(null);
-  const [customerPhotoIdx, setCustomerPhotoIdx] = useState(0);
-  const [customerStep, setCustomerStep] = useState<Step>("TEAROFF");
-  const [customerShingleColor, setCustomerShingleColor] = useState<ShingleColor>("Barkwood");
-  const [customerShingleSelection, setCustomerShingleSelection] = useState<ShingleSelection>({ manufacturerId: "gaf", lineId: "hdz", colorId: "charcoal" });
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [shareEmail, setShareEmail] = useState("");
-  const [shareEmailSending, setShareEmailSending] = useState(false);
-  const [shareEmailSent, setShareEmailSent] = useState(false);
-  const [shareStatus, setShareStatus] = useState<"" | "compressing" | "uploading" | "sending" | "copied">("");
-  const [shareErrorMsg, setShareErrorMsg] = useState("");
-  const [toastMsg, setToastMsg] = useState("");
-  const [toastVisible, setToastVisible] = useState(false);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(true);
 
-  const active = useMemo(() => {
-    if (screen === "CUSTOMER_VIEW" && customerViewData) {
-      const photoData = customerViewData.photos[customerPhotoIdx] ?? customerViewData.photos[0];
-      if (!photoData) return null;
+  /* ── UI state ────────────────────────────── */
+  const [screen, setScreen] = useState<"MENU" | "PROJECT">("MENU");
+  const [activeTab, setActiveTab] = useState<"edit" | "settings">("edit");
+  const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [manufacturer, setManufacturer] = useState("gaf");
+  const [presentationMode, setPresentationMode] = useState(false);
+  const [sliderX, setSliderX] = useState<number | null>(null);
+  const [sliderDragging, setSliderDragging] = useState(false);
+  const [workflowMode, setWorkflowMode] = useState<"quick" | "advanced">("advanced");
+  const [showEmailDialog, setShowEmailDialog] = useState(false);
+  const [emailTo, setEmailTo] = useState("");
+  const [emailSending, setEmailSending] = useState(false);
 
-      // Use the saved stage transform from the share URL so the customer sees
-      // exactly what the sales rep had. Fall back to scale=1 / pos={0,0} which
-      // lets photoTx naturally fill the photo to the customer's canvas.
-      return {
-        id: "customer-view",
-        name: customerViewData.name,
-        src: photoData.src,
-        photoSrcs: [],
-        step: customerStep,
-        roofs: photoData.roofs,
-        activeRoofId: photoData.roofs[0]?.id ?? "",
-        shingleColor: customerShingleColor,
-        shingleSelection: customerShingleSelection,
-        textureColorStrength: 100,
-        showGuidesDuringInstall: false,
-        showEditHandles: false,
-        stageScale: photoData.stageScale ?? 1,
-        stagePos: { x: photoData.stagePos?.x ?? 0, y: photoData.stagePos?.y ?? 0 },
-        photoStates: {},
-      } as PhotoProject;
-    }
-    return photos.find((p) => p.id === activePhotoId) || null;
-  }, [photos, activePhotoId, screen, customerViewData, customerPhotoIdx, customerStep, customerShingleColor, customerShingleSelection]);
+  /* ── Derived ─────────────────────────────── */
+  const active = useMemo(
+    () => photos.find((p) => p.id === activePhotoId) || null,
+    [photos, activePhotoId]
+  );
   const photoImg = useHtmlImage(active?.src);
 
   const activeRoof = useMemo(() => {
@@ -1617,380 +641,13 @@ export default function Page() {
     return active.roofs.find((r) => r.id === active.activeRoofId) || null;
   }, [active]);
 
-  // ResizeObserver — re-registers when screen changes so it attaches after MENU→PROJECT transition
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const el = containerRef.current;
-    const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect();
-      setW(Math.max(1, Math.floor(r.width)));
-      setH(Math.max(1, Math.floor(r.height)));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen]);
-
-  // Pinch-to-zoom on mobile canvas
-  const pinchRef = useRef<{ dist: number; scale: number } | null>(null);
-  const currentScaleRef = useRef(1);
-  useEffect(() => { currentScaleRef.current = active?.stageScale ?? 1; }, [active?.stageScale]);
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 2) {
-        const t1 = e.touches[0], t2 = e.touches[1];
-        pinchRef.current = {
-          dist: Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY),
-          scale: currentScaleRef.current,
-        };
-      }
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 2 || !pinchRef.current) return;
-      e.preventDefault();
-      const t1 = e.touches[0], t2 = e.touches[1];
-      const newDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const newScale = clamp(pinchRef.current.scale * newDist / pinchRef.current.dist, 0.3, 5);
-      patchActive(p => ({ ...p, stageScale: newScale }));
-    };
-    const onTouchEnd = () => { pinchRef.current = null; };
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: false });
-    el.addEventListener("touchend", onTouchEnd);
-    return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", onTouchEnd);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen]);
-
+  /* ── Tool state ──────────────────────────── */
   const [tool, setTool] = useState<Tool>("NONE");
   const [draftLine, setDraftLine] = useState<Polyline | null>(null);
   const [draftHole, setDraftHole] = useState<number[] | null>(null);
-  const brushPaintingRef = useRef(false);
-  const brushStrokeRef = useRef<number[]>([]);
-  const [brushDraft, setBrushDraft] = useState<{ points: number[]; size: number } | null>(null);
-
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [uiTab, setUiTab] = useState<"edit" | "settings">("edit");
-  const [presentationMode, setPresentationMode] = useState(false);
-  const [finalLookMode, setFinalLookMode] = useState(false);
-  const [stepFlash, setStepFlash] = useState(false);
-  const [baMode, setBaMode] = useState(false);
-  const [baSplit, setBaSplit] = useState(0.5);
-  const baDragging = useRef(false);
-  const [isCustomerView, setIsCustomerView] = useState(false);
-  const [companyProfile, setCompanyProfile] = useState<CompanyProfile>({ name: "", phone: "", repName: "", logo: "" });
-  const [appStats, setAppStats] = useState<AppStats>({ presentationsStarted: 0, pdfsExported: 0, linksShared: 0 });
-  const [accountOpen, setAccountOpen] = useState(false);
-  // Save stageScale/stagePos before entering customer view so we can restore on exit
-  const savedEditViewRef = useRef<{ stageScale: number; stagePos: { x: number; y: number } } | null>(null);
-
-  const photoTx = useMemo((): PhotoTransform => {
-    const img = photoImg as HTMLImageElement | undefined;
-    if (!img?.naturalWidth || !img?.naturalHeight) {
-      return { scale: 1, drawW: w, drawH: h, offX: 0, offY: 0, imgW: w, imgH: h };
-    }
-    return getPhotoTransform(img.naturalWidth, img.naturalHeight, w, h);
-  }, [photoImg, w, h]);
-
-  // ── Cleanup state ─────────────────────────────────────────────────────────
-  const [cleanupOpen, setCleanupOpen]           = useState(false);
-  const [cleanupStrength, setCleanupStrength]   = useState(0.5);       // 0–1
-  const [cleanupSnapAngles, setCleanupSnapAngles] = useState(false);
-  const [cleanupLockedIds, setCleanupLockedIds] = useState<Set<string>>(new Set());
-  // Snapshot of the roof BEFORE the last applied cleanup — enables one-step undo
-  const [cleanupUndoRoof, setCleanupUndoRoof]   = useState<Roof | null>(null);
-
-  // ── Edge Detection + Plane Suggestion state ────────────────────────────────
-  const [edgePanel, setEdgePanel]               = useState(false);
-  const [edgeDetecting, setEdgeDetecting]       = useState(false);
-  const [detectedSegs, setDetectedSegs]         = useState<LabeledSegment[]>([]);
-  const [erasedSegIds, setErasedSegIds]         = useState<Set<string>>(new Set());
-  // Spatial erase mask: midpoints of erased segments — survives re-detection
-  const [edgeErasedMask, setEdgeErasedMask]     = useState<Array<{x: number; y: number}>>([]);
-  const [userAddedSegs, setUserAddedSegs]       = useState<LabeledSegment[]>([]);
-  const [edgeSensitivity, setEdgeSensitivity]   = useState(0.5);
-  const [edgeDetailSuppression, setEdgeDetailSuppression] = useState(0.5);
-  const [edgeMinLine, setEdgeMinLine]           = useState(0.06); // 6% default (roof-optimised)
-  const [edgeDominantOnly, setEdgeDominantOnly] = useState(true);
-  const [edgeNumDirections, setEdgeNumDirections] = useState(3);
-  const [edgeMaxLines, setEdgeMaxLines]         = useState(80);
-  const [showDetectedLayer, setShowDetectedLayer] = useState(true);
-  const [edgeTool, setEdgeTool]                 = useState<"NONE" | "ERASE_EDGE" | "ADD_EDGE">("NONE");
-  const [edgeAddDraft, setEdgeAddDraft]         = useState<[number, number] | null>(null);
-  const [planeSuggs, setPlaneSuggs]             = useState<PlaneSuggestion[]>([]);
-  const [hoveredSuggId, setHoveredSuggId]       = useState<string | null>(null);
-  const [suggestingPlanes, setSuggestingPlanes] = useState(false);
-  // Facade vs top-down mode
-  const [edgeMode, setEdgeMode]                 = useState<"facade" | "topDown">("topDown");
-  const [edgeRoofRegionFraction, setEdgeRoofRegionFraction] = useState(0.5);
-  const [edgeIgnoreVertical, setEdgeIgnoreVertical] = useState(true);
-  const [edgeSkyBoundaryBias, setEdgeSkyBoundaryBias] = useState(true);
-  const [edgeContrastThreshold, setEdgeContrastThreshold] = useState(0.06);
-  const [edgePerDirectionCap, setEdgePerDirectionCap] = useState(2);
-
-  // All visible segments (detected − erased + user-added), capped + sorted for display
-  const visibleSegs = useMemo<LabeledSegment[]>(() => {
-    const base = detectedSegs.filter((s) => !erasedSegIds.has(s.id));
-    return [...base, ...userAddedSegs];
-  }, [detectedSegs, erasedSegIds, userAddedSegs]);
-
-  // Display-capped version sorted by length descending
-  const displaySegs = useMemo<LabeledSegment[]>(() => {
-    return visibleSegs.slice().sort((a, b) => b.length - a.length).slice(0, edgeMaxLines);
-  }, [visibleSegs, edgeMaxLines]);
-
-  // Live preview of cleaned geometry — recomputed whenever the panel is open or settings change
-  const cleanupPreview = useMemo<Roof | null>(() => {
-    if (!cleanupOpen || !activeRoof) return null;
-    const opts = strengthToOptions(cleanupStrength, cleanupSnapAngles, cleanupLockedIds);
-    return cleanupGeometry(activeRoof, opts) as Roof;
-  }, [cleanupOpen, activeRoof, cleanupStrength, cleanupSnapAngles, cleanupLockedIds]);
-
   const [exportView, setExportView] = useState<ExportView>("LIVE");
-  const [autoSuggest, setAutoSuggest] = useState<AutoSuggest | null>(null);
-  const [autoDetecting, setAutoDetecting] = useState(false);
-  const [aiState, setAiState]       = useState<"idle" | "loading" | "preview" | "error">("idle");
-  const [aiPolygon, setAiPolygon]   = useState<number[] | null>(null);
-  const [aiPolygonRaw, setAiPolygonRaw] = useState<number[] | null>(null);
-  const [aiShowRaw, setAiShowRaw]   = useState(false);
-  const [aiError, setAiError]       = useState<string | null>(null);
-  const [autoLabelState, setAutoLabelState] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [autoLabelSuggestions, setAutoLabelSuggestions] = useState<
-    { kind: "RIDGE" | "VALLEY"; points: number[]; confidence: number }[]
-  >([]);
-  const [autoLabelError, setAutoLabelError] = useState<string | null>(null);
-  const [aiJudgeResult, setAiJudgeResult] = useState<{
-    eave: { count: number };
-    rake: { count: number };
-    ridge: { confidence: "high" | "medium" | "low" | "none"; reasons: string[]; hasCandidates: boolean };
-    valley: { confidence: "labeled" | "possible" | "none"; reasons: string[]; hasCandidates: boolean };
-  } | null>(null);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renamingName, setRenamingName] = useState("");
 
-  // Persist company profile whenever it changes.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try { localStorage.setItem("roofviz_company", JSON.stringify(companyProfile)); } catch {}
-  }, [companyProfile]);
-
-  // Persist activity stats whenever they change.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try { localStorage.setItem("roofviz_stats", JSON.stringify(appStats)); } catch {}
-  }, [appStats]);
-
-  // Persist projects to localStorage whenever they change.
-  useEffect(() => {
-    if (typeof window === "undefined" || photos.length === 0) return;
-    try { localStorage.setItem("roofviz_v3", JSON.stringify(photos)); } catch {}
-    try { if (activePhotoId) localStorage.setItem("roofviz_v3_active", activePhotoId); } catch {}
-  }, [photos, activePhotoId]);
-
-  // On mount: check for customer share link, then load localStorage.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    // Customer share link takes priority — if ?share= is present, ALWAYS
-    // show customer view, never fall through to the full editor.
-    const params = new URLSearchParams(window.location.search);
-    const shareParam = params.get("share");
-    if (shareParam) {
-      try {
-        const json = decodeURIComponent(escape(atob(shareParam.replace(/-/g, "+").replace(/_/g, "/"))));
-        const raw = JSON.parse(json);
-        // Support both compact keys (new) and full keys (legacy links)
-        const name = raw.n ?? raw.name ?? "Roof Preview";
-        const shingleColor: ShingleColor = raw.c ?? raw.shingleColor ?? "Barkwood";
-
-        function decodeRoofs(rawRoofs: any[]): Roof[] {
-          return rawRoofs.map((r: any) => ({
-            id: r.id ?? uid(),
-            name: r.name ?? "Roof 1",
-            closed: r.cl === 1 || r.closed === true,
-            outline: r.o ?? r.outline ?? [],
-            holes: r.h ?? r.holes ?? [],
-            lines: (r.l ?? r.lines ?? []).map((l: any) => ({
-              id: l.id ?? uid(),
-              kind: l.k ?? l.kind,
-              points: l.p ?? l.points ?? [],
-            })),
-            shingleScale: r.sc ?? r.shingleScale ?? 0.20,
-            shingleRotation: r.sr ?? 0,
-            valleyMetalColor: r.vc ?? r.valleyMetalColor ?? "Galvanized",
-            valleyMetalW: r.vw ?? r.valleyMetalW ?? 18,
-            gutterApronW: r.gaw ?? 8,
-            gutterApronColor: r.gac ?? "Aluminum",
-            dripEdgeW: r.dew ?? 8,
-            dripEdgeColor: r.dec ?? "Aluminum",
-            iceWaterEaveW: r.iwe ?? 72,
-            iceWaterValleyW: r.iwv ?? 36,
-            proStartW: r.psw ?? 12,
-            ridgeVentW: r.rvw ?? 12,
-            capW: r.cpw ?? 8,
-            proStartOnRakes: r.por === 1,
-            iceWaterOnEaves: r.iwe_on !== false,
-            iceWaterOnValleys: r.iwv_on !== false,
-            iceWaterBrush: [],
-            iceWaterBrushSize: r.iwbs ?? 30,
-            perspectiveStrength: r.ps ?? 0,
-          }));
-        }
-
-        // New multi-photo format: raw.photos array
-        // Legacy single-photo format: raw.r + raw.p + raw.cw + raw.ch
-        let photos: Array<{ src: string; roofs: Roof[]; canvasW: number; canvasH: number; stageScale?: number; stagePos?: { x: number; y: number } }>;
-        if (Array.isArray(raw.photos) && raw.photos.length > 0) {
-          photos = raw.photos.map((ph: any) => ({
-            src: ph.p ?? "",
-            roofs: decodeRoofs(ph.r ?? []),
-            canvasW: ph.cw ?? 0,
-            canvasH: ph.ch ?? 0,
-            stageScale: ph.ss ?? undefined,
-            stagePos: ph.spx != null ? { x: ph.spx, y: ph.spy ?? 0 } : undefined,
-          }));
-        } else {
-          // Legacy: single photo
-          photos = [{
-            src: raw.p ?? "",
-            roofs: decodeRoofs(raw.r ?? raw.roofs ?? []),
-            canvasW: raw.cw ?? 0,
-            canvasH: raw.ch ?? 0,
-          }];
-        }
-
-        setCustomerViewData({ name, shingleColor, photos });
-        setCustomerPhotoIdx(0);
-        setCustomerShingleColor(shingleColor);
-        // Decode manufacturer selection from new ms field; fall back to legacy shingleColor mapping
-        const rawMs = raw.ms;
-        const initSel: ShingleSelection = (rawMs?.m && rawMs?.l && rawMs?.c)
-          ? { manufacturerId: rawMs.m, lineId: rawMs.l, colorId: rawMs.c }
-          : shingleColorToSelection(shingleColor);
-        setCustomerShingleSelection(initSel);
-        setCustomerStep("TEAROFF");
-      } catch {
-        // Decode failed — show blank customer view rather than exposing the editor
-        setCustomerViewData({ name: "Preview", shingleColor: "Barkwood", photos: [{ src: "", roofs: [], canvasW: 0, canvasH: 0 }] });
-      }
-      setScreen("CUSTOMER_VIEW");
-      return;
-    }
-
-    // Load company profile
-    try {
-      const cp = localStorage.getItem("roofviz_company");
-      if (cp) setCompanyProfile(JSON.parse(cp));
-    } catch {}
-
-    // Load activity stats
-    try {
-      const st = localStorage.getItem("roofviz_stats");
-      if (st) setAppStats(JSON.parse(st));
-    } catch {}
-
-    // Load saved projects and auto-navigate back to active project
-    try {
-      const raw = localStorage.getItem("roofviz_v3");
-      if (raw) {
-        const parsed = JSON.parse(raw) as PhotoProject[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const migrated = parsed.map((p) => ({
-            ...p,
-            photoSrcs: p.photoSrcs ?? (p.src ? [p.src] : []),
-            photoStates: p.photoStates ?? {},
-
-            shingleSelection: p.shingleSelection ?? shingleColorToSelection(p.shingleColor ?? "Barkwood"),
-            textureColorStrength: p.textureColorStrength ?? 100,
-          }));
-          const savedActiveId = localStorage.getItem("roofviz_v3_active");
-          const restoredId = migrated.find((p) => p.id === savedActiveId)?.id ?? migrated[0].id;
-          setPhotos(migrated);
-          setActivePhotoId(restoredId);
-          setScreen("MENU");
-        }
-      }
-    } catch {}
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── Customer View (fullscreen presentation) ────────────────────────────────
-
-  function enterCustomerView() {
-    // Save edit-mode zoom/pan so we can restore it after customer view
-    savedEditViewRef.current = {
-      stageScale: active?.stageScale ?? 1,
-      stagePos: active?.stagePos ?? { x: 0, y: 0 },
-    };
-    setIsCustomerView(true);
-    try { document.documentElement.requestFullscreen?.(); } catch {}
-  }
-
-  function exitCustomerView() {
-    // Restore zoom/pan to what it was before entering customer view
-    const saved = savedEditViewRef.current;
-    if (saved) {
-      patchActive((p) => ({ ...p, stageScale: saved.stageScale, stagePos: saved.stagePos }));
-      savedEditViewRef.current = null;
-    }
-    setIsCustomerView(false);
-    if (document.fullscreenElement) {
-      try { document.exitFullscreen?.(); } catch {}
-    }
-  }
-
-  function showToast(msg: string) {
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setToastMsg(msg);
-    setToastVisible(true);
-    toastTimerRef.current = setTimeout(() => setToastVisible(false), 3200);
-  }
-
-  // Helper: measure container after layout settles (double RAF) and bump stageKey
-  function scheduleRemeasure() {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (!containerRef.current) return;
-      const r = containerRef.current.getBoundingClientRect();
-      setW(Math.max(1, Math.floor(r.width)));
-      setH(Math.max(1, Math.floor(r.height)));
-    }));
-  }
-
-  // Handle native ESC exit from fullscreen (button exit is handled by exitCustomerView directly)
-  useEffect(() => {
-    const handler = () => {
-      if (!document.fullscreenElement && isCustomerView) {
-        exitCustomerView();
-      }
-    };
-    document.addEventListener("fullscreenchange", handler);
-    return () => document.removeEventListener("fullscreenchange", handler);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCustomerView]);
-
-  // Force Konva to fully repaint after customer view toggle or any dimension/project change
-  useLayoutEffect(() => {
-    requestAnimationFrame(() => { stageRef.current?.batchDraw?.(); });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCustomerView, w, h, activePhotoId]);
-
-  // Re-measure on window resize / orientation change
-  useEffect(() => {
-    const handler = () => scheduleRemeasure();
-    window.addEventListener("resize", handler);
-    window.addEventListener("orientationchange", handler);
-    return () => {
-      window.removeEventListener("resize", handler);
-      window.removeEventListener("orientationchange", handler);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  /* ── Helpers ─────────────────────────────── */
   function patchActive(updater: (p: PhotoProject) => PhotoProject) {
     setPhotos((prev) => prev.map((p) => (p.id === activePhotoId ? updater(p) : p)));
   }
@@ -2003,448 +660,59 @@ export default function Page() {
     }));
   }
 
-  // ── AI Roof Outline ────────────────────────────────────────────────────────
+  const hasClosedRoof = active?.roofs.some((r) => r.closed) ?? false;
 
-  function adoptAiOutline() {
-    if (!aiPolygon) return;
-    patchActiveRoof((r) => ({ ...r, outline: aiPolygon, closed: true }));
-    setAiState("idle"); setAiPolygon(null); setAiPolygonRaw(null); setAiShowRaw(false); setAiError(null);
-  }
-
-  function discardAiOutline() {
-    setAiState("idle"); setAiPolygon(null); setAiPolygonRaw(null); setAiShowRaw(false); setAiError(null);
-    setAutoLabelState("idle"); setAutoLabelSuggestions([]); setAutoLabelError(null);
-  }
-
-  async function generateAiOutline() {
-    if (!active?.src) return;
-    setAiState("loading"); setAiError(null);
-    try {
-      // Get natural image dimensions (= world coordinate space)
-      const [imgNatW, imgNatH] = await new Promise<[number, number]>((resolve, reject) => {
-        const img = document.createElement("img");
-        img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
-        img.onerror = reject;
-        img.src = active.src;
-      });
-      // Resize to max 1024px for API efficiency
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const img = document.createElement("img");
-        img.onload = () => {
-          const maxPx = 1024;
-          const sc = Math.min(1, maxPx / Math.max(img.width, img.height));
-          const cw = Math.round(img.width * sc), ch = Math.round(img.height * sc);
-          const cv = document.createElement("canvas");
-          cv.width = cw; cv.height = ch;
-          cv.getContext("2d")!.drawImage(img, 0, 0, cw, ch);
-          resolve(cv.toDataURL("image/jpeg", 0.85).split(",")[1]);
-        };
-        img.onerror = reject;
-        img.src = active.src;
-      });
-
-      const res = await fetch("/api/ai/roof-outline", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: base64, mimeType: "image/jpeg" }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { polygon?: { x: number; y: number }[]; confidence?: number; error?: string };
-
-      if (data.error || !data.polygon || data.polygon.length < 3) {
-        setAiState("error");
-        setAiError("AI couldn't confidently detect this roof. Try manual tracing.");
-        return;
-      }
-
-      // Normalize → world coords
-      const worldPts: [number, number][] = data.polygon.map((pt) => [pt.x * imgNatW, pt.y * imgNatH]);
-      if (worldPts.length < 3) {
-        setAiState("error");
-        setAiError("AI couldn't confidently detect this roof. Try manual tracing.");
-        return;
-      }
-      const rawFlat = worldPts.flatMap(([x, y]) => [x, y]);
-      setAiPolygonRaw(rawFlat);
-      setAiShowRaw(false);
-      // Run cleanup pipeline (RDP + edge snap + straightening)
-      const cleaned = await cleanAiOutline(rawFlat, active.src, imgNatW, imgNatH);
-      setAiPolygon(cleaned.length >= 6 ? cleaned : rawFlat);
-      setAiState("preview");
-    } catch (err) {
-      console.error("[generateAiOutline]", err);
-      setAiState("error");
-      setAiError("AI couldn't confidently detect this roof. Try manual tracing.");
-    }
-  }
-
-  // ── Auto-Label Roof Edges ───────────────────────────────────────────────────
-
-  // ── Ridge cluster helper ──────────────────────────────────────────────────
-  // Collects near-horizontal outline edges in the top 40% of Y-range, clusters
-  // them by Y-proximity, and merges each qualifying cluster into one span.
-  // Does NOT apply the rake-support gate — callers decide.
-  function buildRidgeClusters(
-    pts: number[], roofWidth: number, roofHeight: number, minY: number
-  ): { x1: number; y1: number; x2: number; y2: number; segCount: number; confidence: number }[] {
-    const n = pts.length / 2;
-    if (n < 3 || roofWidth <= 0) return [];
-    const ridgeYZone = minY + 0.40 * roofHeight;
-
-    type RawSeg = { x1: number; y1: number; x2: number; y2: number; len: number };
-    const raws: RawSeg[] = [];
-    for (let i = 0; i < n; i++) {
-      const x1 = pts[i * 2], y1 = pts[i * 2 + 1];
-      const j = (i + 1) % n;
-      const x2 = pts[j * 2], y2 = pts[j * 2 + 1];
-      const dx = x2 - x1, dy = y2 - y1;
-      if (Math.atan2(Math.abs(dy), Math.abs(dx)) * 180 / Math.PI < 20
-          && (y1 + y2) / 2 <= ridgeYZone) {
-        raws.push({ x1, y1, x2, y2, len: Math.hypot(dx, dy) });
-      }
-    }
-    if (raws.length === 0) return [];
-
-    raws.sort((a, b) => (a.y1 + a.y2) / 2 - (b.y1 + b.y2) / 2);
-    const yTol = roofHeight * 0.10;
-    const clusters: RawSeg[][] = [];
-    for (const c of raws) {
-      const cMidY = (c.y1 + c.y2) / 2;
-      const existing = clusters.find(cl => {
-        const clMidY = cl.reduce((s, x) => s + (x.y1 + x.y2) / 2, 0) / cl.length;
-        return Math.abs(cMidY - clMidY) <= yTol;
-      });
-      if (existing) existing.push(c); else clusters.push([c]);
-    }
-
-    const result: { x1: number; y1: number; x2: number; y2: number; segCount: number; confidence: number }[] = [];
-    for (const cluster of clusters) {
-      const totalLen = cluster.reduce((s, c) => s + c.len, 0);
-      if (totalLen < roofWidth * 0.30) continue; // too short to be a real ridge (≥30% of width required)
-      let minRX = Infinity, maxRX = -Infinity, sumY = 0;
-      for (const c of cluster) {
-        const lx = Math.min(c.x1, c.x2), rx = Math.max(c.x1, c.x2);
-        if (lx < minRX) minRX = lx;
-        if (rx > maxRX) maxRX = rx;
-        sumY += c.y1 + c.y2;
-      }
-      const avgY = sumY / (cluster.length * 2);
-      const ratio = Math.min(1, totalLen / roofWidth);
-      result.push({ x1: minRX, y1: avgY, x2: maxRX, y2: avgY,
-        segCount: cluster.length, confidence: Math.min(0.95, 0.65 + ratio * 0.35) });
-    }
-    return result;
-  }
-
-  function autoLabelEdges(roof: Roof): Polyline[] {
-    const pts = roof.outline;
-    const n = pts.length / 2;
-    if (n < 3) return [];
-
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (let i = 0; i < n; i++) {
-      const x = pts[i * 2], y = pts[i * 2 + 1];
-      if (x < minX) minX = x; if (x > maxX) maxX = x;
-      if (y < minY) minY = y; if (y > maxY) maxY = y;
-    }
-    const roofWidth = maxX - minX;
-    const roofHeight = maxY - minY;
-    const eaveYThreshold = minY + 0.75 * roofHeight;
-
-    const result: Polyline[] = [];
-
-    for (let i = 0; i < n; i++) {
-      const x1 = pts[i * 2], y1 = pts[i * 2 + 1];
-      const j = (i + 1) % n;
-      const x2 = pts[j * 2], y2 = pts[j * 2 + 1];
-      const dx = x2 - x1, dy = y2 - y1;
-      const rawAngle = Math.atan2(Math.abs(dy), Math.abs(dx)) * 180 / Math.PI;
-      const midY = (y1 + y2) / 2;
-
-      if (rawAngle < 20 && midY >= eaveYThreshold) {
-        result.push({ id: uid(), kind: "EAVE", points: [x1, y1, x2, y2], aiLabeled: true, confidence: 0.95 });
-      } else if (rawAngle >= 20 && rawAngle <= 70) {
-        result.push({ id: uid(), kind: "RAKE", points: [x1, y1, x2, y2], aiLabeled: true, confidence: 0.90 });
-      }
-      // Ridge is never auto-labeled — use "Suggest Ridge" button instead.
-    }
-
-    return result;
-  }
-
-  // Returns ridge cluster candidates WITHOUT the rake-support gate.
-  // Used by the "Suggest Ridge" button.
-  function suggestRidges(roof: Roof): { kind: "RIDGE"; points: number[]; confidence: number }[] {
-    const pts = roof.outline;
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (let i = 0; i < pts.length / 2; i++) {
-      const x = pts[i * 2], y = pts[i * 2 + 1];
-      if (x < minX) minX = x; if (x > maxX) maxX = x;
-      if (y < minY) minY = y; if (y > maxY) maxY = y;
-    }
-    const roofWidth = maxX - minX;
-
-    // Use labeled rakes to boost/gate confidence
-    const rakeLns = roof.lines.filter(l => l.kind === "RAKE");
-    const snapTol = roofWidth * 0.04;
-    const rakeEPs = rakeLns.flatMap(l => [
-      { x: l.points[0], y: l.points[1] }, { x: l.points[2], y: l.points[3] },
-    ]);
-    const hasSupport = (ex: number, ey: number) =>
-      rakeEPs.some(p => Math.hypot(p.x - ex, p.y - ey) <= snapTol);
-    // If no rakes are labeled yet, skip the support gate (graceful fallback)
-    const noRakesLabeled = rakeLns.length === 0;
-
-    return buildRidgeClusters(pts, roofWidth, maxY - minY, minY)
-      .flatMap(c => {
-        const leftOK = hasSupport(c.x1, c.y1);
-        const rightOK = hasSupport(c.x2, c.y2);
-        // Require at least one end supported unless no rakes exist yet
-        if (!noRakesLabeled && !leftOK && !rightOK) return [];
-        // Adjust confidence based on support quality
-        let conf = c.confidence;
-        if (!noRakesLabeled) {
-          if (leftOK && rightOK) conf = Math.min(0.95, conf + 0.05);
-          else conf = Math.max(0.60, conf - 0.10); // partial support
-        }
-        // Only surface Medium+ confidence (≥0.70) suggestions
-        if (conf < 0.70) return [];
-        return [{ kind: "RIDGE" as const, points: [c.x1, c.y1, c.x2, c.y2], confidence: conf }];
-      });
-  }
-
-  // Detect valley candidates from concave (inward-dipping) vertices in the outline polygon.
-  // A valley vertex is a local Y-maximum in the middle zone between eave and ridge levels.
-  function suggestValleys(roof: Roof): { kind: "VALLEY"; points: number[]; confidence: number }[] {
-    const pts = roof.outline;
-    const n = pts.length / 2;
-    if (n < 4) return [];
-
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (let i = 0; i < n; i++) {
-      const x = pts[i * 2], y = pts[i * 2 + 1];
-      if (x < minX) minX = x; if (x > maxX) maxX = x;
-      if (y < minY) minY = y; if (y > maxY) maxY = y;
-    }
-    const roofWidth = maxX - minX;
-    const eaveYThreshold = minY + 0.75 * (maxY - minY);
-    const ridgeYZone = minY + 0.35 * (maxY - minY);
-
-    const suggestions: { kind: "VALLEY"; points: number[]; confidence: number }[] = [];
-    const seen = new Set<string>();
-
-    const addEdge = (ax: number, ay: number, bx: number, by: number, ia: number, ib: number) => {
-      const key = `${Math.min(ia, ib)}-${Math.max(ia, ib)}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const ddx = bx - ax, ddy = by - ay;
-      const angle = Math.atan2(Math.abs(ddy), Math.abs(ddx)) * 180 / Math.PI;
-      if (angle >= 15 && angle <= 75) {
-        const len = Math.hypot(ddx, ddy);
-        const conf = Math.min(0.85, 0.55 + (len / roofWidth) * 0.55);
-        suggestions.push({ kind: "VALLEY", points: [ax, ay, bx, by], confidence: conf });
-      }
-    };
-
-    for (let i = 0; i < n; i++) {
-      const prev = ((i - 1) + n) % n;
-      const next = (i + 1) % n;
-      const py = pts[prev * 2 + 1];
-      const cx = pts[i * 2], cy = pts[i * 2 + 1];
-      const ny = pts[next * 2 + 1];
-      // Valley vertex: local Y-maximum in middle zone (dips down between two peaks in screen coords)
-      const isLocalYMax = cy > py && cy > ny;
-      const inMiddleZone = cy < eaveYThreshold && cy > ridgeYZone;
-      if (isLocalYMax && inMiddleZone) {
-        addEdge(pts[prev * 2], py, cx, cy, prev, i);
-        addEdge(cx, cy, pts[next * 2], ny, i, next);
-      }
-    }
-
-    return suggestions;
-  }
-
-  function runAiJudgeLocally(roof: Roof, lines: Polyline[]) {
-    const pts = roof.outline;
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (let i = 0; i < pts.length / 2; i++) {
-      const x = pts[i * 2], y = pts[i * 2 + 1];
-      if (x < minX) minX = x; if (x > maxX) maxX = x;
-      if (y < minY) minY = y; if (y > maxY) maxY = y;
-    }
-    const roofWidth = maxX - minX;
-    const roofHeight = maxY - minY;
-
-    // ── EAVE / RAKE ──────────────────────────────────────────────────────────
-    const eaveLns = lines.filter(l => l.kind === "EAVE");
-    const rakeLns = lines.filter(l => l.kind === "RAKE");
-
-    // ── RIDGE ─────────────────────────────────────────────────────────────────
-    const ridgeLns = lines.filter(l => l.kind === "RIDGE");
-    const ridgeClusters = buildRidgeClusters(pts, roofWidth, roofHeight, minY);
-    const snapTol = roofWidth * 0.04;
-    const rakeEPs = rakeLns.flatMap(l => [
-      { x: l.points[0], y: l.points[1] }, { x: l.points[2], y: l.points[3] },
-    ]);
-    const rakeSupport = (ex: number, ey: number) =>
-      rakeEPs.some(p => Math.hypot(p.x - ex, p.y - ey) <= snapTol);
-
-    const ridgeReasons: string[] = [];
-    let ridgeConf: "high" | "medium" | "low" | "none" = "none";
-    let ridgeHasCandidates = ridgeClusters.length > 0;
-
-    if (ridgeLns.length > 0) {
-      const r = ridgeLns[0];
-      const spanPct = Math.round(Math.abs(r.points[2] - r.points[0]) / roofWidth * 100);
-      const lOK = rakeSupport(r.points[0], r.points[1]);
-      const rOK = rakeSupport(r.points[2], r.points[3]);
-      if (lOK && rOK) {
-        ridgeConf = "high";
-        ridgeReasons.push("Supported by rakes on both ends");
-        ridgeReasons.push(`Span covers ~${spanPct}% of roof width`);
-      } else {
-        ridgeConf = "medium";
-        ridgeReasons.push(`Span covers ~${spanPct}% of roof width`);
-        if (!lOK) ridgeReasons.push("No rake support near left end");
-        if (!rOK) ridgeReasons.push("No rake support near right end");
-        ridgeReasons.push("Consider re-labeling or adjusting rakes");
-      }
-    } else if (ridgeClusters.length > 0) {
-      const best = ridgeClusters[0];
-      const spanPct = Math.round((best.x2 - best.x1) / roofWidth * 100);
-      const lOK = rakeSupport(best.x1, best.y1);
-      const rOK = rakeSupport(best.x2, best.y2);
-      if (lOK && rOK) {
-        ridgeConf = "medium";
-        ridgeReasons.push("Candidate found with rake support — not yet labeled");
-        ridgeReasons.push(`Span covers ~${spanPct}% of roof width`);
-        ridgeReasons.push("Use 'Suggest Ridge' to adopt");
-      } else {
-        ridgeConf = "low";
-        ridgeReasons.push("No confident ridge detected from this view");
-        ridgeReasons.push(`Candidate span covers ~${spanPct}% of roof width`);
-        if (rakeLns.length < 2) ridgeReasons.push("Fewer than 2 rakes — trace rakes first");
-        else ridgeReasons.push("No rake endpoint near ridge candidate ends");
-      }
+  function toggleSlider() {
+    if (sliderX !== null) {
+      setSliderX(null);
     } else {
-      ridgeConf = "none";
-      ridgeReasons.push("No confident ridge detected from this view");
-      ridgeReasons.push("No near-horizontal edges found in top 40% of outline");
-      ridgeReasons.push("Ridge may not be visible in this facade view");
+      setSliderX(Math.round(w / 2));
     }
-
-    // ── VALLEY ───────────────────────────────────────────────────────────────
-    const valleyLns = lines.filter(l => l.kind === "VALLEY");
-    const valleyCands = suggestValleys(roof);
-    const valleyReasons: string[] = [];
-    let valleyConf: "labeled" | "possible" | "none" = "none";
-    const valleyHasCandidates = valleyCands.length > 0;
-
-    if (valleyLns.length > 0) {
-      valleyConf = "labeled";
-      valleyReasons.push(`${valleyLns.length} valley(s) labeled`);
-    } else if (valleyCands.length > 0) {
-      valleyConf = "possible";
-      valleyReasons.push("Interior convergence suggests possible valley");
-      valleyReasons.push("Use 'Suggest Valley' to review candidates");
-    } else {
-      valleyConf = "none";
-      valleyReasons.push("No valley vertices detected in this outline");
-      valleyReasons.push("Valley intersections not visible from facade");
-    }
-
-    setAiJudgeResult({
-      eave: { count: eaveLns.length },
-      rake: { count: rakeLns.length },
-      ridge: { confidence: ridgeConf, reasons: ridgeReasons, hasCandidates: ridgeHasCandidates },
-      valley: { confidence: valleyConf, reasons: valleyReasons, hasCandidates: valleyHasCandidates },
-    });
+    setSliderDragging(false);
   }
 
-  function lineLength(pts: number[]): number {
-    let total = 0;
-    for (let i = 0; i + 3 < pts.length; i += 2) {
-      total += Math.hypot(pts[i + 2] - pts[i], pts[i + 3] - pts[i + 1]);
-    }
-    return total;
+  function onSliderPointerDown(e: React.PointerEvent) {
+    setSliderDragging(true);
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
   }
 
-  function triggerAutoLabel() {
-    if (!activeRoof?.closed) return;
-    setAutoLabelState("loading");
-    setAutoLabelSuggestions([]);
-    setAutoLabelError(null);
-    setAiJudgeResult(null);
-
-    // Classify outline edges into eave/rake/ridge, preserving locked lines
-    patchActiveRoof((r) => {
-      const locked = r.lines.filter(l => l.locked);
-      return { ...r, lines: [...locked, ...autoLabelEdges(r)] };
-    });
-
-    setAutoLabelState("done");
+  function onSliderPointerMove(e: React.PointerEvent) {
+    if (!sliderDragging || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    setSliderX(clamp(Math.round(e.clientX - rect.left), 0, w));
   }
 
-  function triggerSuggestValleys() {
-    if (!activeRoof?.closed) return;
-    setAutoLabelError(null);
-    const suggestions = suggestValleys(activeRoof);
-    setAutoLabelSuggestions(suggestions);
-    if (suggestions.length === 0) {
-      setAutoLabelError("No valley candidates detected — try tracing manually.");
-    }
+  function onSliderPointerUp() {
+    setSliderDragging(false);
   }
 
-  function triggerSuggestRidges() {
-    if (!activeRoof?.closed) return;
-    setAutoLabelError(null);
-    // suggestRidges already applies 0.70 threshold internally
-    const suggestions = suggestRidges(activeRoof);
-    setAutoLabelSuggestions(suggestions);
-    if (suggestions.length === 0) {
-      setAutoLabelError("No confident ridge detected from this view — draw manually.");
-    }
-  }
+  // Convert screen-space sliderX to stage (world) coordinates for Konva clipping
+  const stageSliderX = sliderX !== null && active
+    ? (sliderX - (active.stagePos?.x ?? 0)) / (active.stageScale ?? 1)
+    : null;
 
-  function adoptAutoLabelSuggestion(idx: number) {
-    const s = autoLabelSuggestions[idx];
-    if (!s) return;
-    patchActiveRoof((r) => ({
-      ...r,
-      lines: [...r.lines, { id: uid(), kind: s.kind as LineKind, points: s.points, aiLabeled: true, confidence: s.confidence, locked: true }],
-    }));
-    setAutoLabelSuggestions((prev) => prev.filter((_, j) => j !== idx));
+  function showToast(msg: string, type: "success" | "error" = "success") {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
   }
 
   function startProject() {
     const id = uid();
     const roof1 = defaultRoof("Roof 1");
-    const existingNums = photos
-      .map((p) => {
-        const m = p.name.match(/^New Project(?: (\d+))?$/);
-        return m ? (m[1] ? parseInt(m[1]) : 1) : 0;
-      })
-      .filter(Boolean);
-    const nextNum = existingNums.length === 0 ? 0 : Math.max(...existingNums) + 1;
-    const name = nextNum === 0 ? "New Project" : `New Project ${nextNum}`;
     const item: PhotoProject = {
       id,
-      name,
+      name: "New Project",
       src: "",
-      photoSrcs: [],
       step: "TRACE",
       roofs: [roof1],
       activeRoofId: roof1.id,
       shingleColor: "Barkwood",
-      shingleSelection: { manufacturerId: "gaf", lineId: "hdz", colorId: "barkwood" },
-      textureColorStrength: 100,
       showGuidesDuringInstall: false,
       showEditHandles: false,
       stageScale: 1,
       stagePos: { x: 0, y: 0 },
-      photoStates: {},
     };
-    setPhotos((prev) => [item, ...prev]);
+    setPhotos((prev) => [...prev, item]);
     setActivePhotoId(id);
     setScreen("PROJECT");
   }
@@ -2454,88 +722,57 @@ export default function Page() {
     setScreen("PROJECT");
   }
 
-  function deleteProject(id: string) {
-    setPhotos((prev) => {
-      const next = prev.filter((p) => p.id !== id);
-      // If we deleted the active project, switch active to first remaining.
-      if (id === activePhotoId) setActivePhotoId(next[0]?.id ?? "");
-      return next;
-    });
-  }
-
-  function renameProject(id: string, name: string) {
-    setPhotos((prev) => prev.map((p) => p.id === id ? { ...p, name } : p));
-  }
-
-  function runAutoDetect() {
-    if (!photoImg || !active) return;
-    setAutoDetecting(true);
-    setAutoSuggest(null);
-    // Defer to next tick so the "Detecting…" label renders before the heavy computation.
-    setTimeout(() => {
-      try {
-        const result = autoDetectRoof(photoImg, w, h);
-        setAutoSuggest(result);
-      } catch {
-        // Detection failed silently; user can trace manually.
-      } finally {
-        setAutoDetecting(false);
-      }
-    }, 0);
-  }
-
-  function acceptAutoSuggest() {
-    if (!autoSuggest) return;
-    patchActiveRoof((r) => ({
-      ...r,
-      outline: stageToImgPts(autoSuggest.outline, photoTx),
-      closed: true,
-      lines: autoSuggest.lines.map((l) => ({ ...l, id: uid(), points: stageToImgPts(l.points, photoTx) })),
-    }));
-    setAutoSuggest(null);
-    setTool("NONE");
-  }
-
-  // Upload one or more photos into the currently active project.
-  // All selected files are added to photoSrcs; src switches to the first new one.
   function addFiles(files: FileList | null) {
-    if (!files || files.length === 0 || !activePhotoId) return;
-    const targetId = activePhotoId;
-    const promises = Array.from(files).map(
-      (file) =>
-        new Promise<string>((resolve) => {
-          const fr = new FileReader();
-          fr.onload = () => compressForStorage(String(fr.result)).then(resolve);
-          fr.readAsDataURL(file);
-        })
-    );
-    Promise.all(promises).then((newSrcs) => {
-      setPhotos((prev) =>
-        prev.map((p) => {
-          if (p.id !== targetId) return p;
-          const existing = p.photoSrcs ?? [];
-          const merged = [...existing, ...newSrcs];
-          // Save current photo's state before switching
-          const saved = { ...p.photoStates };
-          if (p.src) {
-            saved[p.src] = { roofs: p.roofs, activeRoofId: p.activeRoofId,
-                             stageScale: p.stageScale, stagePos: p.stagePos };
+    if (!files || files.length === 0) return;
+    const list = Array.from(files);
+
+    list.forEach((file, idx) => {
+      const fr = new FileReader();
+      fr.onload = () => {
+        const data = String(fr.result);
+
+        setPhotos((prev) => {
+          const next = prev.slice();
+          const activeIdx = next.findIndex((p) => p.id === activePhotoId);
+
+          if (idx === 0 && activeIdx !== -1 && !next[activeIdx].src) {
+            next[activeIdx] = {
+              ...next[activeIdx],
+              src: data,
+              name: file.name,
+              step: "TRACE",
+              stageScale: 1,
+              stagePos: { x: 0, y: 0 },
+            };
+            return next;
           }
-          // New photos start with fresh state (not inherited from current)
-          const firstNewSrc = newSrcs[0];
-          const freshRoof = defaultRoof("Roof 1");
-          return {
-            ...p,
-            photoSrcs: merged,
-            src: firstNewSrc,
-            photoStates: saved,
-            roofs: [freshRoof],
-            activeRoofId: freshRoof.id,
+
+          const id = uid();
+          const roof1 = defaultRoof("Roof 1");
+          const item: PhotoProject = {
+            id,
+            name: file.name,
+            src: data,
+            step: "TRACE",
+            roofs: [roof1],
+            activeRoofId: roof1.id,
+            shingleColor: "Barkwood",
+            showGuidesDuringInstall: false,
+            showEditHandles: false,
             stageScale: 1,
             stagePos: { x: 0, y: 0 },
           };
-        })
-      );
+          next.unshift(item);
+          return next;
+        });
+
+        if (!(idx === 0 && active && !active.src)) {
+          if (!activePhotoId) {
+            // noop
+          }
+        }
+      };
+      fr.readAsDataURL(file);
     });
   }
 
@@ -2551,71 +788,6 @@ export default function Page() {
     setTool("TRACE_ROOF");
     setDraftLine(null);
     setDraftHole(null);
-    showToast("Roof added — trace its outline on the canvas");
-  }
-
-  function deleteRoof(roofId: string) {
-    if (!active || active.roofs.length <= 1) return;
-    patchActive((p) => {
-      const remaining = p.roofs.filter((r) => r.id !== roofId);
-      const newActive = p.activeRoofId === roofId
-        ? (remaining[0]?.id ?? "")
-        : p.activeRoofId;
-      return { ...p, roofs: remaining, activeRoofId: newActive };
-    });
-  }
-
-  function switchToPhoto(newSrc: string) {
-    patchActive((p) => {
-      const saved = { ...p.photoStates };
-      if (p.src) {
-        saved[p.src] = { roofs: p.roofs, activeRoofId: p.activeRoofId,
-                         stageScale: p.stageScale, stagePos: p.stagePos };
-      }
-      const next = saved[newSrc];
-      if (next) {
-        return { ...p, src: newSrc, photoStates: saved, roofs: next.roofs,
-                 activeRoofId: next.activeRoofId, stageScale: next.stageScale, stagePos: next.stagePos };
-      }
-      const freshRoof = defaultRoof("Roof 1");
-      return { ...p, src: newSrc, photoStates: saved, roofs: [freshRoof],
-               activeRoofId: freshRoof.id, stageScale: 1, stagePos: { x: 0, y: 0 } };
-    });
-    setTool("NONE"); setDraftLine(null); setDraftHole(null);
-    setAutoLabelState("idle"); setAutoLabelSuggestions([]); setAutoLabelError(null);
-  }
-
-  function removeCurrentPhoto() {
-    if (!active || !active.src) return;
-    const removedSrc = active.src;
-    patchActive((p) => {
-      const saved = { ...p.photoStates };
-      // Save current state before removing
-      saved[removedSrc] = { roofs: p.roofs, activeRoofId: p.activeRoofId,
-                             stageScale: p.stageScale, stagePos: p.stagePos };
-      const newSrcs = (p.photoSrcs ?? []).filter((s) => s !== removedSrc);
-      // Remove the deleted photo's saved state
-      delete saved[removedSrc];
-      const nextSrc = newSrcs[0] ?? "";
-      const nextState = nextSrc ? saved[nextSrc] : null;
-      if (nextState) {
-        return { ...p, photoSrcs: newSrcs, src: nextSrc, photoStates: saved,
-                 roofs: nextState.roofs, activeRoofId: nextState.activeRoofId,
-                 stageScale: nextState.stageScale, stagePos: nextState.stagePos };
-      }
-      const freshRoof = defaultRoof("Roof 1");
-      return { ...p, photoSrcs: newSrcs, src: nextSrc, photoStates: saved,
-               roofs: [freshRoof], activeRoofId: freshRoof.id, stageScale: 1, stagePos: { x: 0, y: 0 } };
-    });
-    setTool("NONE"); setDraftLine(null); setDraftHole(null);
-  }
-
-  function deleteLine(lineId: string) {
-    patchActiveRoof((r) => ({ ...r, lines: r.lines.filter((l) => l.id !== lineId) }));
-  }
-
-  function deleteHole(holeIndex: number) {
-    patchActiveRoof((r) => ({ ...r, holes: r.holes.filter((_, i) => i !== holeIndex) }));
   }
 
   function resetSelectedRoof() {
@@ -2627,56 +799,85 @@ export default function Page() {
     setDraftHole(null);
   }
 
+  const activeSteps = workflowMode === "quick" ? QUICK_STEPS : STEPS;
+
   function canGoNext() {
     if (!active) return false;
+    const curIdx = activeSteps.indexOf(active.step);
+    if (curIdx === -1 || curIdx >= activeSteps.length - 1) return false;
     if (active.step === "TRACE") {
       if (!active.roofs.some((r) => r.closed)) return false;
     }
-    const rel = relevantSteps(active.roofs);
-    let nextIdx = stepIndex(active.step) + 1;
-    while (nextIdx < STEPS.length && !rel.has(STEPS[nextIdx])) nextIdx++;
-    return nextIdx < STEPS.length;
+    return true;
   }
 
   function goNext() {
     if (!active || !canGoNext()) return;
-    const rel = relevantSteps(active.roofs);
-    let nextIdx = stepIndex(active.step) + 1;
-    while (nextIdx < STEPS.length && !rel.has(STEPS[nextIdx])) nextIdx++;
-    if (nextIdx >= STEPS.length) return;
-    const next = STEPS[nextIdx];
+    const curIdx = activeSteps.indexOf(active.step);
+    const next = activeSteps[curIdx + 1];
     patchActive((p) => ({ ...p, step: next, showEditHandles: next === "TRACE" ? p.showEditHandles : false }));
+    setTool("NONE");
     setDraftLine(null);
     setDraftHole(null);
-    // Auto-activate the trace tool when entering TRACE so users know to click the canvas.
-    if (next === "TRACE" && !activeRoof?.closed) {
-      setTool("TRACE_ROOF");
-    } else {
-      setTool("NONE");
-    }
-    if (next === "EXPORT") showToast("Visualization complete — export your PDF below");
   }
 
   function goBack() {
     if (!active) return;
-    const idx = stepIndex(active.step);
-    if (idx <= 0) return;
-    const rel = relevantSteps(active.roofs);
-    let prevIdx = idx - 1;
-    while (prevIdx > 0 && !rel.has(STEPS[prevIdx])) prevIdx--;
-    const prev = STEPS[prevIdx];
+    const curIdx = activeSteps.indexOf(active.step);
+    if (curIdx <= 0) return;
+    const prev = activeSteps[curIdx - 1];
     patchActive((p) => ({ ...p, step: prev }));
     setTool("NONE");
     setDraftLine(null);
     setDraftHole(null);
   }
 
-  function jumpToStep(step: Step) {
+  function switchWorkflowMode(mode: "quick" | "advanced") {
+    if (!active || mode === workflowMode) return;
+    setWorkflowMode(mode);
+    if (mode === "quick") {
+      // Snap to nearest quick step >= current
+      const curFull = stepIndex(active.step);
+      const nearest = QUICK_STEPS.find((s) => stepIndex(s) >= curFull) || QUICK_STEPS[QUICK_STEPS.length - 1];
+      if (nearest !== active.step) {
+        patchActive((p) => ({ ...p, step: nearest }));
+      }
+    }
+  }
+
+  async function handleCopyLink() {
     if (!active) return;
-    patchActive((p) => ({ ...p, step }));
-    setTool("NONE");
-    setDraftLine(null);
-    setDraftHole(null);
+    const shareUrl = `${window.location.origin}?project=${active.id}`;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      showToast("Link copied to clipboard!", "success");
+    } catch {
+      showToast("Failed to copy link", "error");
+    }
+  }
+
+  async function handleSendEmail() {
+    if (!active || !emailTo.trim()) return;
+    setEmailSending(true);
+    try {
+      const shareUrl = `${window.location.origin}?project=${active.id}`;
+      const res = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: emailTo.trim(), shareUrl, projectName: active.name }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to send email");
+      }
+      showToast("Email sent successfully!", "success");
+      setShowEmailDialog(false);
+      setEmailTo("");
+    } catch (err: any) {
+      showToast(err.message || "Failed to send email", "error");
+    } finally {
+      setEmailSending(false);
+    }
   }
 
   function beginDraw(kind: LineKind) {
@@ -2760,128 +961,38 @@ export default function Page() {
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  // ── Ramer–Douglas–Peucker simplification ──────────────────────────────────
-  function rdpSimplify(pts: number[], epsilon: number): number[] {
-    if (pts.length < 6) return pts; // fewer than 3 points — nothing to simplify
-    // Convert flat [x,y,x,y,...] to [{x,y}] pairs
-    const points: { x: number; y: number }[] = [];
-    for (let i = 0; i < pts.length; i += 2) points.push({ x: pts[i], y: pts[i + 1] });
-
-    function perpendicularDist(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) {
-      const dx = b.x - a.x, dy = b.y - a.y;
-      if (dx === 0 && dy === 0) return Math.hypot(p.x - a.x, p.y - a.y);
-      const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy);
-      return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
-    }
-
-    function rdp(pts: { x: number; y: number }[], start: number, end: number, eps: number, keep: boolean[]) {
-      if (end <= start + 1) return;
-      let maxDist = 0, maxIdx = start;
-      for (let i = start + 1; i < end; i++) {
-        const d = perpendicularDist(pts[i], pts[start], pts[end]);
-        if (d > maxDist) { maxDist = d; maxIdx = i; }
-      }
-      if (maxDist > eps) {
-        keep[maxIdx] = true;
-        rdp(pts, start, maxIdx, eps, keep);
-        rdp(pts, maxIdx, end, eps, keep);
-      }
-    }
-
-    const keep = new Array(points.length).fill(false);
-    keep[0] = true;
-    keep[points.length - 1] = true;
-    rdp(points, 0, points.length - 1, epsilon, keep);
-
-    const result: number[] = [];
-    for (let i = 0; i < points.length; i++) {
-      if (keep[i]) result.push(points[i].x, points[i].y);
-    }
-    return result;
-  }
-
-  // Snap each segment angle to the nearest of {0,45,90,135}° if within 12°
-  function snapAngles(pts: number[]): number[] {
-    if (pts.length < 4) return pts;
-    const snapped: number[] = [pts[0], pts[1]];
-    const SNAP_ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
-    const THRESHOLD = 12; // degrees
-
-    for (let i = 2; i < pts.length; i += 2) {
-      const px = snapped[snapped.length - 2], py = snapped[snapped.length - 1];
-      const cx = pts[i], cy = pts[i + 1];
-      const angleDeg = (Math.atan2(cy - py, cx - px) * 180) / Math.PI;
-      const normAngle = ((angleDeg % 360) + 360) % 360;
-      let bestDiff = Infinity, bestSnap = normAngle;
-      for (const sa of SNAP_ANGLES) {
-        const diff = Math.abs(((normAngle - sa + 180) % 360) - 180);
-        if (diff < bestDiff) { bestDiff = diff; bestSnap = sa; }
-      }
-      if (bestDiff <= THRESHOLD) {
-        const len = Math.hypot(cx - px, cy - py);
-        const rad = (bestSnap * Math.PI) / 180;
-        snapped.push(px + len * Math.cos(rad), py + len * Math.sin(rad));
-      } else {
-        snapped.push(cx, cy);
-      }
-    }
-    return snapped;
-  }
-
   function onStageDown(e: any) {
-    if (presentationMode) return;
-    if (baMode) {
-      const stage = e.target.getStage();
-      const rawPos = stage?.getPointerPosition();
-      if (rawPos && Math.abs(rawPos.x - baSplit * w) < 22) {
-        baDragging.current = true;
-      }
-      return;
-    }
     if (!active || !activeRoof || !photoImg) return;
     const stage = e.target.getStage();
-    const rawPos = stage.getPointerPosition();
-    if (!rawPos) return;
-
-    // Convert from screen/container coords → world coords, accounting for
-    // the stage's current scale and pan offset.
-    const scale = stage.scaleX();
-    const pos = {
-      x: (rawPos.x - stage.x()) / scale,
-      y: (rawPos.y - stage.y()) / scale,
-    };
-    // Keep the close-snap radius constant in screen pixels regardless of zoom.
-    const imageCloseRadius = CLOSE_DIST / (scale * photoTx.scale);
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
 
     if (active.step === "TRACE" && tool === "TRACE_ROOF" && !activeRoof.closed) {
-      const iPos = stageToImgPts([pos.x, pos.y], photoTx);
       const pts = activeRoof.outline;
       if (pts.length >= 6) {
         const x0 = pts[0], y0 = pts[1];
-        if (dist(iPos[0], iPos[1], x0, y0) <= imageCloseRadius) {
+        if (dist(pos.x, pos.y, x0, y0) <= CLOSE_DIST) {
           patchActiveRoof((r) => ({ ...r, closed: true }));
           setTool("NONE");
-          showToast("Roof outline closed ✓");
           return;
         }
       }
-      patchActiveRoof((r) => ({ ...r, outline: [...r.outline, iPos[0], iPos[1]] }));
+      patchActiveRoof((r) => ({ ...r, outline: [...r.outline, pos.x, pos.y] }));
       return;
     }
 
     if (active.step === "TRACE" && tool === "TRACE_HOLE") {
       if (!draftHole) return;
-      const iPos = stageToImgPts([pos.x, pos.y], photoTx);
       if (draftHole.length >= 6) {
         const x0 = draftHole[0], y0 = draftHole[1];
-        if (dist(iPos[0], iPos[1], x0, y0) <= imageCloseRadius) {
+        if (dist(pos.x, pos.y, x0, y0) <= CLOSE_DIST) {
           patchActiveRoof((r) => ({ ...r, holes: [...r.holes, draftHole] }));
           setDraftHole([]);
           setTool("NONE");
           return;
         }
       }
-      setDraftHole((pts) => (pts ? [...pts, iPos[0], iPos[1]] : [iPos[0], iPos[1]]));
+      setDraftHole((pts) => (pts ? [...pts, pos.x, pos.y] : [pos.x, pos.y]));
       return;
     }
 
@@ -2894,259 +1005,45 @@ export default function Page() {
         tool === "DRAW_HIP")
     ) {
       if (!draftLine) return;
-      const iPos = stageToImgPts([pos.x, pos.y], photoTx);
-      setDraftLine((d) => (d ? { ...d, points: [...d.points, iPos[0], iPos[1]] } : d));
-      return;
-    }
-
-    // Edge detection tools
-    if (active.step === "TRACE" && edgeTool === "ERASE_EDGE") {
-      const ERASE_RADIUS = 20 / ((active.stageScale || 1) * photoTx.scale);
-      const toErase = visibleSegs.filter((s) => {
-        const dx = s.x2 - s.x1, dy = s.y2 - s.y1;
-        const len2 = dx * dx + dy * dy;
-        if (len2 < 1) return false;
-        const t = Math.max(0, Math.min(1, ((pos.x - s.x1) * dx + (pos.y - s.y1) * dy) / len2));
-        const nearX = s.x1 + t * dx, nearY = s.y1 + t * dy;
-        const d2 = (pos.x - nearX) ** 2 + (pos.y - nearY) ** 2;
-        return d2 <= ERASE_RADIUS * ERASE_RADIUS;
-      });
-      if (toErase.length > 0) {
-        const ids = new Set(erasedSegIds);
-        const addIds = new Set(userAddedSegs.map((s) => s.id));
-        const newMask: Array<{x: number; y: number}> = [];
-        toErase.forEach((s) => {
-          if (addIds.has(s.id)) setUserAddedSegs((prev) => prev.filter((u) => u.id !== s.id));
-          else {
-            ids.add(s.id);
-            newMask.push({ x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 });
-          }
-        });
-        setErasedSegIds(ids);
-        if (newMask.length > 0) setEdgeErasedMask((prev) => [...prev, ...newMask]);
-        setPlaneSuggs([]);
-      }
-      return;
-    }
-
-    if (active.step === "TRACE" && edgeTool === "ADD_EDGE") {
-      if (!edgeAddDraft) {
-        setEdgeAddDraft([pos.x, pos.y]);
-      } else {
-        const dx = pos.x - edgeAddDraft[0], dy = pos.y - edgeAddDraft[1];
-        const len = Math.sqrt(dx * dx + dy * dy);
-        if (len > 5) {
-          let angle = Math.atan2(dy, dx);
-          if (angle < 0) angle += Math.PI;
-          setUserAddedSegs((prev) => [...prev, {
-            id: Math.random().toString(16).slice(2),
-            x1: edgeAddDraft[0], y1: edgeAddDraft[1],
-            x2: pos.x, y2: pos.y,
-            angle, length: len,
-            label: "unknown" as const,
-            confidence: 0.5,
-            source: "auto-detect" as const,
-          }]);
-          setPlaneSuggs([]); // reset suggestions
-        }
-        setEdgeAddDraft(null);
-      }
-      return;
-    }
-
-    // Brush ice & water painting — start a new stroke (store in photo-space)
-    if (active.step === "ICE_WATER" && tool === "BRUSH_ICE_WATER" && activeRoof.closed) {
-      const bPos = stageToImgPts([pos.x, pos.y], photoTx);
-      brushPaintingRef.current = true;
-      brushStrokeRef.current = [bPos[0], bPos[1]];
-      setBrushDraft({ points: [bPos[0], bPos[1]], size: activeRoof.iceWaterBrushSize ?? 30 });
+      setDraftLine((d) => (d ? { ...d, points: [...d.points, pos.x, pos.y] } : d));
       return;
     }
   }
 
-  function onStageMove() {
-    if (baMode) {
-      if (baDragging.current) {
-        const stage = stageRef.current;
-        if (!stage) return;
-        const rawPos = stage.getPointerPosition();
-        if (rawPos) setBaSplit(Math.max(0.05, Math.min(0.95, rawPos.x / w)));
-      }
-      return;
-    }
-    if (!brushPaintingRef.current || tool !== "BRUSH_ICE_WATER") return;
-    const stage = stageRef.current;
-    if (!stage) return;
-    const rawPos = stage.getPointerPosition();
-    if (!rawPos) return;
-    const sc = stage.scaleX();
-    const wx = (rawPos.x - stage.x()) / sc;
-    const wy = (rawPos.y - stage.y()) / sc;
-    const bPos = stageToImgPts([wx, wy], photoTx);
-    const prev = brushStrokeRef.current;
-    if (prev.length >= 2) {
-      const lx = prev[prev.length - 2], ly = prev[prev.length - 1];
-      if ((bPos[0] - lx) ** 2 + (bPos[1] - ly) ** 2 < 9) return; // skip if <3px movement in photo-space
-    }
-    brushStrokeRef.current = [...prev, bPos[0], bPos[1]];
-    setBrushDraft({ points: brushStrokeRef.current, size: activeRoof?.iceWaterBrushSize ?? 30 });
-  }
-
-  function onStageUp() {
-    if (baMode) { baDragging.current = false; return; }
-    if (!brushPaintingRef.current) return;
-    const rawPts = brushStrokeRef.current;
-    if (activeRoof && rawPts.length >= 4) {
-      const size = activeRoof.iceWaterBrushSize ?? 30;
-      const epsilon = Math.max(3, Math.min(12, size * 0.35));
-      const simplified = rdpSimplify(rawPts, epsilon);
-      const finalPts = simplified.length >= 4 ? snapAngles(simplified) : rawPts;
-      const newStroke = { id: uid(), points: finalPts, size };
-      patchActiveRoof((r) => ({ ...r, iceWaterBrush: [...(r.iceWaterBrush ?? []), newStroke] }));
-    }
-    brushPaintingRef.current = false;
-    brushStrokeRef.current = [];
-    setBrushDraft(null);
-  }
-
-  function updateOutlinePoint(i: number, photoX: number, photoY: number) {
+  function updateOutlinePoint(i: number, x: number, y: number) {
     if (!activeRoof) return;
     patchActiveRoof((r) => {
       const next = r.outline.slice();
-      next[i * 2] = photoX;
-      next[i * 2 + 1] = photoY;
+      next[i * 2] = x;
+      next[i * 2 + 1] = y;
       return { ...r, outline: next };
     });
   }
 
-  // Enter key shortcut: finish the current line or hole without clicking the button.
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Enter") return;
-      e.preventDefault();
-      if (tool === "TRACE_HOLE") {
-        if (!activeRoof || !draftHole || draftHole.length < 6) return;
-        patchActiveRoof((r) => ({ ...r, holes: [...r.holes, draftHole] }));
-        setDraftHole([]);
-        setTool("NONE");
-      } else if (
-        tool === "DRAW_EAVE" || tool === "DRAW_RAKE" || tool === "DRAW_VALLEY" ||
-        tool === "DRAW_RIDGE" || tool === "DRAW_HIP"
-      ) {
-        if (!activeRoof || !draftLine || draftLine.points.length < 4) return;
-        patchActiveRoof((r) => ({ ...r, lines: [...r.lines, { ...draftLine, id: uid() }] }));
-        setDraftLine({ id: uid(), kind: draftLine.kind, points: [] });
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  // Re-register whenever the captured state changes so the handler is never stale.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tool, draftLine, draftHole, activeRoof, active]);
-
-  // Presentation mode: cinematic cross-fade on step change (fast cut in, slow fade out)
-  useEffect(() => {
-    if (!presentationMode) return;
-    setStepFlash(true);
-    const t = setTimeout(() => setStepFlash(false), 80);
-    return () => clearTimeout(t);
-  }, [active?.step, presentationMode]);
-
-  // Capture a rendered thumbnail when the project reaches CAP_SHINGLES
-  useEffect(() => {
-    if (active?.step !== "CAP_SHINGLES" || !stageRef.current || !active.src) return;
-    if (screen === "CUSTOMER_VIEW") return;
-    const t = setTimeout(() => {
-      try {
-        const dataUrl = stageRef.current?.toDataURL({ pixelRatio: 0.6 });
-        if (dataUrl) patchActive((p) => ({ ...p, thumbnail: dataUrl }));
-      } catch { /* canvas may not be ready */ }
-    }, 600);
-    return () => clearTimeout(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.step, active?.src]);
-
-  // Auto-detect roof when a new photo loads on the TRACE step with no outline yet.
-  // On success: accept the result and advance to TEAROFF ("Upload → AI → Present" flow).
-  const autoDetectTriggeredFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!photoImg || !active || active.step !== "TRACE") return;
-    if (activeRoof?.closed || (activeRoof?.outline?.length ?? 0) > 0) return;
-    if (photoImg.src === autoDetectTriggeredFor.current) return;
-    if (photoImg.naturalWidth === 0) return; // not fully loaded
-    autoDetectTriggeredFor.current = photoImg.src;
-    const t = setTimeout(() => {
-      try {
-        const result = autoDetectRoof(photoImg, w, h);
-        if (result?.outline?.length >= 6) {
-          // Auto-accept: patch the roof and advance to TEAROFF in one update
-          setPhotos(prev => prev.map(p => {
-            if (p.id !== activePhotoId) return p;
-            const roofs = p.roofs.map(r => {
-              if (r.id !== p.activeRoofId) return r;
-              return {
-                ...r,
-                outline: stageToImgPts(result.outline, photoTx),
-                closed: true,
-                lines: result.lines.map(l => ({ ...l, id: uid(), points: stageToImgPts(l.points, photoTx) })),
-              };
-            });
-            return { ...p, roofs, step: "TEAROFF" as Step };
-          }));
-          setTool("NONE");
-          showToast("Roof detected — ready to present!");
-        }
-      } catch { /* fail silently — user can trace manually */ }
-    }, 600);
-    return () => clearTimeout(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [photoImg?.src]);
-
-  // textures
+  /* ── Textures ────────────────────────────── */
   const texW = Math.floor(w * 2.4);
   const texH = Math.floor(h * 2.4);
 
   const deckingSrc = useMemo(() => {
-    if (!active || typeof window === "undefined") return "";
+    if (!active || !active.src || typeof window === "undefined") return "";
     return makeDeckingTexture(texW, texH);
-  }, [active?.id, texW, texH]);
+  }, [active?.id, active?.src, texW, texH]);
   const deckingImg = useHtmlImage(deckingSrc);
 
   const syntheticSrc = useMemo(() => {
-    if (!active || typeof window === "undefined") return "";
+    if (!active || !active.src || typeof window === "undefined") return "";
     return makeSyntheticTexture(texW, texH);
-  }, [active?.id, texW, texH]);
+  }, [active?.id, active?.src, texW, texH]);
   const syntheticImg = useHtmlImage(syntheticSrc);
 
-  // Specific texture path derived from catalog selection (may 404 → hook falls back)
-  const shingleTexSrc = useMemo(() => {
-    if (!active) return "";
-    return shingleTexturePath(active.shingleSelection);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.shingleSelection?.manufacturerId, active?.shingleSelection?.lineId, active?.shingleSelection?.colorId]);
-  const shingleBaseImg = useShingleBaseImage(shingleTexSrc);
-
   const shingleSrc = useMemo(() => {
-    if (!active || typeof window === "undefined") return "";
-    if (shingleBaseImg) {
-      // Image loaded: tint toward catalog palette at full strength (always 100%)
-      return applyColorTint(
-        shingleBaseImg,
-        resolveShinglePalette(active.shingleSelection),
-        1.0,
-      );
-    }
-    // No image → fall back to procedural tile
-    return makeShingleTexture(texW, texH, resolveShinglePalette(active.shingleSelection));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.id, active?.shingleSelection?.manufacturerId, active?.shingleSelection?.lineId, active?.shingleSelection?.colorId, active?.textureColorStrength, shingleBaseImg, texW, texH]);
+    if (!active || !active.src || typeof window === "undefined") return "";
+    return makeShingleTexture(texW, texH, active.shingleColor);
+  }, [active?.id, active?.src, active?.shingleColor, texW, texH]);
   const shinglesImg = useHtmlImage(shingleSrc);
 
-  const activeShinglesImg = shinglesImg;
+  const metalOptions: MetalColor[] = ["Aluminum", "White", "Black", "Bronze", "Brown", "Gray"];
 
-  const metalOptions: MetalColor[] = ["Galvanized", "Aluminum", "White", "Black", "Bronze", "Brown", "Gray"];
-
-  // export view overrides rendering step
   const liveStep: Step = active?.step ?? "START";
   const currentStep: Step =
     exportView === "PDF_SHINGLES" ? "CAP_SHINGLES" :
@@ -3155,2623 +1052,521 @@ export default function Page() {
 
   const showGuides = (active?.step === "TRACE") || !!active?.showGuidesDuringInstall;
 
-  // Customer view step navigation
-  const customerNavSteps = useMemo(() => {
-    if (!customerViewData) return [] as Step[];
-    const currentRoofs = customerViewData.photos[customerPhotoIdx]?.roofs ?? customerViewData.photos[0]?.roofs ?? [];
-    const rel = relevantSteps(currentRoofs);
-    rel.delete("START"); rel.delete("TRACE"); rel.delete("EXPORT");
-    return STEPS.filter((s) => rel.has(s));
-  }, [customerViewData, customerPhotoIdx]);
-  const customerStepIdx = customerNavSteps.indexOf(customerStep);
-
-  // Presentation mode step navigation (excludes setup + export steps)
-  const presentationNavSteps = useMemo(() => {
-    if (!active) return [] as Step[];
-    const rel = relevantSteps(active.roofs);
-    rel.delete("START"); rel.delete("TRACE"); rel.delete("EXPORT");
-    return STEPS.filter((s) => rel.has(s));
-  }, [active]);
-  const presentationStepNum = presentationNavSteps.indexOf(liveStep) + 1;
-  const presentationTotalSteps = presentationNavSteps.length;
-
-  // Which of the 5 chapters is currently active?
-  const currentChapterIdx = useMemo(() => {
-    if (finalLookMode) return 4;
-    for (let i = PRESENTATION_CHAPTERS.length - 2; i >= 0; i--) {
-      if ((PRESENTATION_CHAPTERS[i].steps as readonly string[]).includes(liveStep)) return i;
-    }
-    return 0;
-  }, [finalLookMode, liveStep]);
-
-  // Generate a shareable read-only URL encoding the current project structure.
-  // photoUrl is the Vercel Blob URL of the compressed uploaded photo.
-  function generateShareUrl(urlMap: Map<string, string> = new Map()): string {
-    if (!active || screen === "CUSTOMER_VIEW") return "";
-
-    // Merge live state for the current photo into the full state map
-    const allStates: Record<string, { roofs: Roof[] }> = { ...active.photoStates };
-    if (active.src) {
-      allStates[active.src] = { ...active.photoStates[active.src], roofs: active.roofs };
-    }
-
-    function encodeRoofs(roofs: Roof[]) {
-      return roofs.map((r) => ({
-        id: r.id,
-        cl: r.closed ? 1 : 0,
-        o: r.outline.map((n) => Math.round(n)),
-        h: r.holes.map((hole) => hole.map((n) => Math.round(n))),
-        l: r.lines.map((l) => ({ k: l.kind, p: l.points.map((n) => Math.round(n)) })),
-        sc: r.shingleScale,
-        sr: r.shingleRotation,
-        vc: r.valleyMetalColor,
-        vw: r.valleyMetalW,
-        gaw: r.gutterApronW,
-        gac: r.gutterApronColor,
-        dew: r.dripEdgeW,
-        dec: r.dripEdgeColor,
-        iwe: r.iceWaterEaveW,
-        iwv: r.iceWaterValleyW,
-        iwe_on: r.iceWaterOnEaves ? 1 : 0,
-        iwv_on: r.iceWaterOnValleys ? 1 : 0,
-        psw: r.proStartW,
-        rvw: r.ridgeVentW,
-        cpw: r.capW,
-        por: r.proStartOnRakes ? 1 : 0,
-      }));
-    }
-
-    // Merge live stage state for current photo into allStates
-    const allStageStates: Record<string, { stageScale: number; stagePos: { x: number; y: number } }> = {};
-    for (const [src, ps] of Object.entries(active.photoStates)) {
-      allStageStates[src] = { stageScale: (ps as { stageScale: number; stagePos: { x: number; y: number } }).stageScale ?? 1, stagePos: (ps as { stageScale: number; stagePos: { x: number; y: number } }).stagePos ?? { x: 0, y: 0 } };
-    }
-    if (active.src) {
-      allStageStates[active.src] = { stageScale: active.stageScale ?? 1, stagePos: active.stagePos ?? { x: 0, y: 0 } };
-    }
-
-    const photos = (active.photoSrcs ?? []).map((src) => ({
-      p: urlMap.get(src) ?? "",
-      cw: w,
-      ch: h,
-      ss: allStageStates[src]?.stageScale ?? 1,
-      spx: Math.round(allStageStates[src]?.stagePos?.x ?? 0),
-      spy: Math.round(allStageStates[src]?.stagePos?.y ?? 0),
-      r: encodeRoofs(allStates[src]?.roofs ?? []),
-    }));
-
-    const shareData = {
-      n: active.name,
-      c: active.shingleColor,
-      ms: { m: active.shingleSelection.manufacturerId, l: active.shingleSelection.lineId, c: active.shingleSelection.colorId },
-      photos,
-    };
-
-    const json = JSON.stringify(shareData);
-    const encoded = btoa(unescape(encodeURIComponent(json)))
-      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-    const base = process.env.NEXT_PUBLIC_APP_URL ||
-      (typeof window !== "undefined" ? window.location.origin + window.location.pathname : "");
-    return `${base}?share=${encoded}`;
-  }
-
-  // Compress the current photo to a JPEG at reduced resolution for blob storage.
-  async function compressPhoto(src: string, maxWidth = 1200, quality = 0.55): Promise<string> {
-    return new Promise((resolve) => {
-      const img = new window.Image();
-      img.onload = () => {
-        const scale = Math.min(1, maxWidth / img.width);
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
-      };
-      img.onerror = () => resolve(src); // fallback: use original
-      img.src = src;
-    });
-  }
-
-  // Compress + upload all photos in the project; returns Map<src, blobUrl>.
-  async function prepareAllPhotoUrls(): Promise<Map<string, string>> {
-    if (!active) return new Map();
-    const srcs = active.photoSrcs ?? [];
-    const urlMap = new Map<string, string>();
-    for (const src of srcs) {
-      try {
-        setShareStatus("compressing");
-        const compressed = await compressPhoto(src, 1200, 0.55);
-        setShareStatus("uploading");
-        const uploadRes = await fetch("/api/store-photo", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageData: compressed }),
-        });
-        const uploadData = await uploadRes.json() as { url?: string; error?: string };
-        if (!uploadRes.ok || uploadData.error) throw new Error(uploadData.error ?? `store-photo ${uploadRes.status}`);
-        if (uploadData.url) urlMap.set(src, uploadData.url);
-      } catch {
-        // Continue without this photo's blob URL rather than blocking the whole share
-      }
-    }
-    return urlMap;
-  }
-
-  // Two-page PDF with material legends (multi-photo grid)
+  /* ── PDF Export ──────────────────────────── */
   async function exportPdfTwoPages() {
     if (!active || !stageRef.current) return;
 
     const mod: any = await import("jspdf");
     const jsPDF = mod.jsPDF || mod.default || mod;
 
-    // Fetch the RoofViz logo as a data URL for embedding in the PDF
-    let logoDataUrl = "";
-    try {
-      const blob = await fetch("/roofviz-logo.png").then((r) => r.blob());
-      logoDataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(blob);
-      });
-    } catch { /* logo unavailable — continue without it */ }
-
+    const projName = active.name || "Project";
     const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
-    const pageW = pdf.internal.pageSize.getWidth();  // 792
-    const pageH = pdf.internal.pageSize.getHeight(); // 612
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
 
     async function snap(view: ExportView) {
       setExportView(view);
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 120));
       return stageRef.current.toDataURL({ pixelRatio: 2 });
     }
 
-    // Shrink image slightly to leave room for the legend at the bottom.
-    const imgX = 36, imgY = 76;
-    const imgW = pageW - 72;
-    const imgH = pageH - 160; // leaves ~84pt for legend
+    const img1 = await snap("PDF_SHINGLES");
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(18);
+    pdf.text(`RoofViz — ${projName}`, 36, 40);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(12);
+    pdf.text(`Page 1: Finished Shingles`, 36, 60);
+    pdf.addImage(img1, "PNG", 36, 80, pageW - 72, pageH - 120);
 
-    const legendY = imgY + imgH + 14;
-    const boxS = 11; // legend swatch size
-    const boxGap = 8;
-
-    // Helper: draw legend items in up to 2 rows of up to 3 columns each.
-    function drawLegend(items: Array<{ r: number; g: number; b: number; label: string; lineStyle?: boolean }>) {
-      const cols = 3;
-      const itemW = imgW / cols;
-      const rowH = boxS + 10; // spacing between rows
-      pdf.setFontSize(8.5);
-      pdf.setFont("helvetica", "normal");
-      items.forEach((item, i) => {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        const x = imgX + col * itemW;
-        const rowY = legendY + row * rowH;
-        const cy = rowY + boxS / 2;
-        if (item.lineStyle) {
-          pdf.setDrawColor(item.r, item.g, item.b);
-          pdf.setLineWidth(2.5);
-          pdf.line(x, cy, x + boxS * 1.6, cy);
-          pdf.setDrawColor(0, 0, 0);
-          pdf.setLineWidth(0.5);
-          pdf.setTextColor(55, 65, 80);
-          pdf.text(item.label, x + boxS * 1.6 + 4, rowY + boxS - 1);
-        } else {
-          pdf.setFillColor(item.r, item.g, item.b);
-          pdf.setDrawColor(160, 160, 160);
-          pdf.setLineWidth(0.4);
-          pdf.rect(x, rowY, boxS, boxS, "FD");
-          pdf.setTextColor(55, 65, 80);
-          pdf.text(item.label, x + boxS + boxGap, rowY + boxS - 1);
-        }
-      });
-    }
-
-    // Build a map of all per-photo states (including the live current photo)
-    const fullStates: Record<string, { roofs: Roof[]; activeRoofId: string; stageScale: number; stagePos: { x: number; y: number } }> = { ...active.photoStates };
-    if (active.src) {
-      fullStates[active.src] = { roofs: active.roofs, activeRoofId: active.activeRoofId,
-                                  stageScale: active.stageScale, stagePos: active.stagePos };
-    }
-    const allPhotos = active.photoSrcs ?? [];
-    const originalSrc = active.src;
-
-    // Helper: switch the canvas to show a specific photo's saved state
-    async function showPhoto(src: string) {
-      await new Promise<void>((resolve) => {
-        setPhotos((prev) => prev.map((p) => {
-          if (p.id !== activePhotoId) return p;
-          const st = fullStates[src];
-          if (!st) return { ...p, src, roofs: [], activeRoofId: "", stageScale: 1, stagePos: { x: 0, y: 0 } };
-          // Always reset zoom to fit-to-screen so PDF never captures a zoomed-in view
-          return { ...p, src, roofs: st.roofs, activeRoofId: st.activeRoofId,
-                   stageScale: 1, stagePos: { x: 0, y: 0 } };
-        }));
-        setTimeout(resolve, 200);
-      });
-    }
-
-    // Capture shingle + underlay snaps for all photos
-    const shingleSnaps: string[] = [];
-    const underlaySnaps: string[] = [];
-    for (const src of allPhotos) {
-      await showPhoto(src);
-      shingleSnaps.push(await snap("PDF_SHINGLES"));
-      underlaySnaps.push(await snap("PDF_UNDERLAY"));
-    }
-    // Restore original photo
-    await showPhoto(originalSrc);
-    setExportView("LIVE");
-
-    // Use the first photo's first roof for legend colors
-    const firstState = fullStates[allPhotos[0]];
-    const r0 = firstState ? (firstState.roofs[0] ?? null) : null;
-    const sc = active.shingleColor;
-
-    // Determine which line types exist across all photos' roofs
-    const allRoofLines = Object.values(fullStates).flatMap((st) => st.roofs.flatMap((r) => r.lines));
-    const hasEave   = allRoofLines.some((l) => l.kind === "EAVE");
-    const hasRake   = allRoofLines.some((l) => l.kind === "RAKE");
-    const hasValley = allRoofLines.some((l) => l.kind === "VALLEY");
-    const hasRidge  = allRoofLines.some((l) => l.kind === "RIDGE");
-    const hasHip    = allRoofLines.some((l) => l.kind === "HIP");
-
-    // Logo dimensions: maintain 165:48 aspect ratio
-    const logoW = 150, logoH = Math.round(150 * 48 / 165);
-
-    const [sr, sg, sb] = shingleRGB(sc);
-    const [ar, ag, ab] = r0 ? metalRGB(r0.gutterApronColor) : [198, 205, 211];
-    const [dr, dg, db] = r0 ? metalRGB(r0.dripEdgeColor)    : [198, 205, 211];
-    const [vr, vg, vb] = r0 ? metalRGB(r0.valleyMetalColor) : [198, 205, 211];
-
-    const page1Items = [
-      { r: sr,  g: sg,  b: sb,  label: `${sc} Shingles (field)` },
-      ...(hasRidge ? [{ r: sr,  g: sg,  b: sb,  label: "Cap Shingles (ridge)" }] : []),
-      ...(hasValley ? [{ r: 200, g: 200, b: 200, label: "Valley seam", lineStyle: true }] : []),
-      ...(hasHip    ? [{ r: 200, g: 200, b: 200, label: "Hip seam",    lineStyle: true }] : []),
-    ];
-    const page2Items = [
-      { r: 18,  g: 23,  b: 38,  label: "Ice & Water Shield (eaves + valleys)" },
-      { r: 215, g: 230, b: 245, label: "Synthetic Underlayment (field)" },
-      ...(hasEave   ? [{ r: ar, g: ag, b: ab, label: `Gutter Apron — ${r0?.gutterApronColor ?? ""}` }] : []),
-      ...(hasRake   ? [{ r: dr, g: dg, b: db, label: `Drip Edge — ${r0?.dripEdgeColor ?? ""}` }] : []),
-      ...(hasValley ? [{ r: vr, g: vg, b: vb, label: `Valley Metal — ${r0?.valleyMetalColor ?? ""}` }] : []),
-      ...((hasEave || hasRake) ? [{ r: 18, g: 18, b: 20, label: "Pro-Start Starter Strip" }] : []),
-    ];
-
-    // Grid layout: 1 col for single photo, 2 cols for multiple
-    const N = allPhotos.length;
-    const cols = N <= 1 ? 1 : 2;
-    const rows = Math.ceil(N / cols);
-    const gapX = cols > 1 ? 10 : 0;
-    const gapY = rows > 1 ? 10 : 0;
-    const cellW = (imgW - (cols - 1) * gapX) / cols;
-    const cellH = (imgH - (rows - 1) * gapY) / rows;
-
-    // Place each image maintaining its natural aspect ratio (letterbox to avoid distortion)
-    const stageAspect = stageRef.current.width() / stageRef.current.height();
-    function addImageFit(imgData: string, cx: number, cy: number, cw: number, ch: number) {
-      const cellAspect = cw / ch;
-      let iw: number, ih: number, ix: number, iy: number;
-      if (stageAspect > cellAspect) {
-        iw = cw; ih = cw / stageAspect;
-        ix = cx; iy = cy + (ch - ih) / 2;
-      } else {
-        ih = ch; iw = ch * stageAspect;
-        ix = cx + (cw - iw) / 2; iy = cy;
-      }
-      pdf.addImage(imgData, "PNG", ix, iy, iw, ih);
-    }
-
-    function addGrid(snaps: string[]) {
-      snaps.forEach((s, i) => {
-        addImageFit(s,
-          imgX + (i % cols) * (cellW + gapX),
-          imgY + Math.floor(i / cols) * (cellH + gapY),
-          cellW, cellH);
-      });
-    }
-
-    function writePage(title: string, subtitle: string, snaps: string[], items: typeof page1Items) {
-      // Project name + subtitle
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(16);
-      pdf.setTextColor(15, 23, 42);
-      pdf.text((active?.name || projectName) ?? "", imgX, 28);
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(10);
-      pdf.setTextColor(100, 116, 139);
-      pdf.text(subtitle, imgX, 46);
-
-      // Company branding block (top-right corner)
-      const cpName = companyProfile.name.trim();
-      const cpRep  = companyProfile.repName.trim();
-      const cpPhone= companyProfile.phone.trim();
-      if (companyProfile.logo) {
-        // Company logo top-right
-        const cLogoW = 130, cLogoH = Math.round(cLogoH_ratio(cLogoW));
-        function cLogoH_ratio(w: number) { return w * 0.4; } // approx 2.5:1 ratio — adjust if needed
-        pdf.addImage(companyProfile.logo, "PNG", pageW - imgX - cLogoW, 10, cLogoW, cLogoH);
-        // Company info below logo
-        const infoY = 10 + cLogoH + 5;
-        pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(8);
-        pdf.setTextColor(100, 116, 139);
-        if (cpName)  pdf.text(cpName,  pageW - imgX - cLogoW, infoY);
-        if (cpRep)   pdf.text(cpRep,   pageW - imgX - cLogoW, infoY + 11);
-        if (cpPhone) pdf.text(cpPhone, pageW - imgX - cLogoW, infoY + 22);
-      } else if (cpName || cpRep || cpPhone) {
-        // No logo: text-only company block
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(10);
-        pdf.setTextColor(15, 23, 42);
-        let infoY = 18;
-        if (cpName)  { pdf.text(cpName,  pageW - imgX - 140, infoY); infoY += 14; }
-        pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(9);
-        pdf.setTextColor(100, 116, 139);
-        if (cpRep)   { pdf.text(cpRep,   pageW - imgX - 140, infoY); infoY += 12; }
-        if (cpPhone) { pdf.text(cpPhone, pageW - imgX - 140, infoY); }
-      } else if (logoDataUrl) {
-        // Fallback: RoofViz logo if no company branding set
-        pdf.addImage(logoDataUrl, "PNG", pageW - imgX - logoW, 14, logoW, logoH);
-      }
-
-      addGrid(snaps);
-      drawLegend(items);
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(7.5);
-      pdf.setTextColor(148, 163, 184);
-      pdf.text("MATERIAL KEY", imgX, legendY - 4);
-
-      // Footer with RoofViz attribution + company info
-      const footerY = pageH - 8;
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(7);
-      pdf.setTextColor(148, 163, 184);
-      pdf.text("Generated with RoofViz", imgX, footerY);
-      if (cpName || cpPhone) {
-        const footerRight = [cpName, cpPhone].filter(Boolean).join("  ·  ");
-        pdf.text(footerRight, pageW - imgX, footerY, { align: "right" });
-      }
-    }
-
-    writePage("Finished Roof", "Page 1 of 2  ·  Finished Roof", shingleSnaps, page1Items);
     pdf.addPage();
-    writePage("Underlayments", "Page 2 of 2  ·  Underlayments & Metals", underlaySnaps, page2Items);
+    const img2 = await snap("PDF_UNDERLAY");
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(18);
+    pdf.text(`RoofViz — ${projName}`, 36, 40);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(12);
+    pdf.text(`Page 2: Underlayments + Metals`, 36, 60);
+    pdf.addImage(img2, "PNG", 36, 80, pageW - 72, pageH - 120);
 
-    pdf.save(`${projectName.replaceAll(" ", "_")}_RoofViz.pdf`);
-    setAppStats(s => ({ ...s, pdfsExported: s.pdfsExported + 1 }));
+    setExportView("LIVE");
+    pdf.save(`${projName.replaceAll(" ", "_")}_RoofViz.pdf`);
   }
 
-  // ── Design tokens ──────────────────────────────────────────────────────────
-  const sectionCard: React.CSSProperties = {
-    background: "#ffffff",
-    borderRadius: 14,
-    padding: "16px 18px",
-    boxShadow: "0 2px 10px rgba(15,23,42,0.09), 0 0 0 1px rgba(15,23,42,0.05)",
-    marginBottom: 10,
-  };
+  /* ── localStorage persistence ────────────── */
+  useEffect(() => {
+    if (photos.length > 0) {
+      localStorage.setItem("roofviz_projects", JSON.stringify(photos));
+    }
+  }, [photos]);
 
-  const sectionLabel: React.CSSProperties = {
-    fontSize: 10,
-    fontWeight: 600,
-    letterSpacing: "0.07em",
-    color: "#94a3b8",
-    textTransform: "uppercase",
-  };
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("roofviz_projects");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setPhotos(parsed);
+          setActivePhotoId(parsed[0].id);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
-  const fieldLabel: React.CSSProperties = {
-    display: "block",
-    fontSize: 12,
-    fontWeight: 500,
-    color: "#475569",
-    marginBottom: 5,
-  };
+  /* ── JSX ─────────────────────────────────── */
 
-  const inputStyle: React.CSSProperties = {
-    display: "block",
-    width: "100%",
-    padding: "9px 13px",
-    borderRadius: 9,
-    border: "1.5px solid rgba(15,23,42,0.12)",
-    fontSize: 13,
-    fontWeight: 500,
-    background: "#ffffff",
-    color: "#0f172a",
-    boxSizing: "border-box",
-    marginBottom: 12,
-    outline: "none",
-    transition: "border-color 0.15s ease",
-  };
+  const sectionCard = "bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5 rv-section-card";
+  const btnSmall = "rv-btn-small px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 bg-white cursor-pointer";
 
-  const selectStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "8px 11px",
-    borderRadius: 8,
-    border: "1.5px solid rgba(15,23,42,0.11)",
-    fontSize: 12,
-    fontWeight: 500,
-    background: "#ffffff",
-    color: "#334155",
-    outline: "none",
-  };
-
-  const primaryBtn: React.CSSProperties = {
-    display: "block",
-    width: "100%",
-    padding: "11px 20px",
-    minHeight: 42,
-    borderRadius: 10,
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: "pointer",
-    border: "none",
-    background: "linear-gradient(135deg, #ea580c 0%, #c2410c 60%, #9a3412 100%)",
-    color: "#ffffff",
-    boxShadow: "0 3px 10px rgba(234,88,12,0.40), 0 1px 3px rgba(234,88,12,0.20)",
-    marginTop: 8,
-    letterSpacing: "0.01em",
-  };
-
-  const greenBtn: React.CSSProperties = {
-    ...primaryBtn,
-    background: "linear-gradient(135deg, #16a34a, #15803d)",
-    boxShadow: "0 2px 6px rgba(22,163,74,0.26)",
-  };
-
-  const ghostBtn: React.CSSProperties = {
-    padding: "9px 14px",
-    borderRadius: 9,
-    fontSize: 13,
-    fontWeight: 500,
-    cursor: "pointer",
-    border: "1.5px solid rgba(15,23,42,0.11)",
-    background: "#ffffff",
-    color: "#475569",
-    letterSpacing: "0.01em",
-  };
-
-  const smallBtn: React.CSSProperties = {
-    padding: "6px 11px",
-    borderRadius: 7,
-    fontSize: 11,
-    fontWeight: 500,
-    cursor: "pointer",
-    border: "1.5px solid rgba(15,23,42,0.09)",
-    background: "#ffffff",
-    color: "#475569",
-  };
-
-  const topBarBtn: React.CSSProperties = {
-    padding: "6px 13px", borderRadius: 7, fontSize: 12, fontWeight: 500,
-    cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.10)",
-    background: "#ffffff", color: "#475569", whiteSpace: "nowrap" as const,
-    letterSpacing: "0.01em",
-  };
-
-  const tabBtnBase: React.CSSProperties = {
-    flex: 1, padding: "6px 0", fontSize: 12, fontWeight: 500,
-    cursor: "pointer", border: "none", borderRadius: 7,
-    transition: "background 0.15s, color 0.15s",
-  };
-
-  const lineKindBtn = (kind: LineKind): React.CSSProperties => {
-    const map: Record<LineKind, [string, string, string]> = {
-      EAVE:   ["rgba(37,99,235,0.08)",   "rgba(37,99,235,0.28)",   "#1d4ed8"],
-      RAKE:   ["rgba(16,185,129,0.08)",  "rgba(16,185,129,0.28)",  "#065f46"],
-      VALLEY: ["rgba(100,116,139,0.08)", "rgba(100,116,139,0.28)", "#334155"],
-      RIDGE:  ["rgba(245,158,11,0.08)",  "rgba(245,158,11,0.35)",  "#92400e"],
-      HIP:    ["rgba(168,85,247,0.08)",  "rgba(168,85,247,0.28)",  "#5b21b6"],
-    };
-    const [bg, border, color] = map[kind];
-    return {
-      padding: "8px 6px",
-      borderRadius: 8,
-      fontSize: 11,
-      fontWeight: 700,
-      letterSpacing: "0.04em",
-      cursor: "pointer",
-      border: `1.5px solid ${border}`,
-      background: bg,
-      color,
-    };
-  };
-
-  const accentSectionHeader: React.CSSProperties = {
-    display: "flex", alignItems: "center", gap: 8,
-    marginBottom: 10, paddingLeft: 10, borderLeft: "3px solid #ea580c",
-  };
-  const stepBadge: React.CSSProperties = {
-    display: "inline-flex", alignItems: "center", justifyContent: "center",
-    width: 22, height: 22, borderRadius: 6,
-    background: "linear-gradient(135deg, #ea580c, #c2410c)",
-    color: "#ffffff", fontSize: 11, fontWeight: 700, flexShrink: 0,
-  };
-  const tipBox: React.CSSProperties = {
-    marginTop: 8, padding: "9px 12px", borderRadius: 9,
-    background: "rgba(234,88,12,0.05)", border: "1px solid rgba(234,88,12,0.12)",
-    fontSize: 12, color: "#475569", lineHeight: 1.55,
-  };
-
-  const stageW = w;
-  const stageH = h;
-
-  // Before/After slider: split position in world (photo) coordinates
-  const splitWorldX = w > 0
-    ? (baSplit * w - (active?.stagePos?.x ?? 0)) / (active?.stageScale ?? 1)
-    : 9999;
-
-  // ── MENU SCREEN ────────────────────────────────────────────────────────────
-  if (screen === "MENU") {
-    return (
-      <div className="rv-fade-in" style={{ minHeight: "100vh", background: "#f8fafc" }}>
-        {/* Header */}
-        <header style={{
-          background: "#ffffff",
-          borderBottom: "1px solid rgba(15,23,42,0.06)",
-          padding: "0 32px",
-          height: 60,
-          display: "flex",
-          alignItems: "center",
-          gap: 16,
-          boxShadow: "0 1px 4px rgba(15,23,42,0.04)",
-          position: "sticky",
-          top: 0,
-          zIndex: 20,
-        }}>
-          <LogoAnimated href={process.env.NEXT_PUBLIC_APP_URL || "/"} showCheck={true} />
-          <div style={{ flex: 1 }} />
-          <button
-            onClick={startProject}
-            className="rv-btn-primary"
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 7,
-              padding: "9px 20px", borderRadius: 9, fontSize: 13, fontWeight: 600,
-              cursor: "pointer", border: "none",
-              background: "linear-gradient(135deg, #ea580c, #c2410c)",
-              color: "#ffffff",
-              boxShadow: "0 2px 6px rgba(234,88,12,0.26)",
-              width: "auto", marginTop: 0, minHeight: 0, letterSpacing: "0.01em",
-            }}
-          >
-            <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 400 }}>+</span> New Roof
-          </button>
-        </header>
-
-        {/* Content */}
-        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "40px 24px 72px" }}>
-
-          {photos.length === 0 ? (
-            /* Empty state */
-            <div className="rv-fade-in" style={{
-              borderRadius: 20, overflow: "hidden",
-              boxShadow: "0 4px 24px rgba(15,23,42,0.12), 0 0 0 1px rgba(15,23,42,0.06)",
-            }}>
-              {/* Dark hero banner */}
-              <div style={{
-                background: "linear-gradient(135deg, #0f172a 0%, #1e3a5f 55%, #7c2d12 100%)",
-                padding: "52px 40px 48px", textAlign: "center", position: "relative", overflow: "hidden",
-              }}>
-                {/* Subtle texture overlay */}
-                <div style={{
-                  position: "absolute", inset: 0, opacity: 0.07,
-                  backgroundImage: "radial-gradient(circle at 20% 30%, #ea580c 0%, transparent 40%), radial-gradient(circle at 80% 70%, #3b82f6 0%, transparent 40%)",
-                }} />
-                <div style={{ position: "relative", zIndex: 1 }}>
-                  <div style={{
-                    width: 68, height: 68, borderRadius: 18,
-                    background: "linear-gradient(135deg,rgba(234,88,12,0.18),rgba(234,88,12,0.08))",
-                    border: "1px solid rgba(234,88,12,0.25)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    margin: "0 auto 20px", fontSize: 30,
-                  }}>🏠</div>
-                  <h2 style={{ fontSize: 22, fontWeight: 700, color: "#f8fafc", margin: "0 0 10px", letterSpacing: "-0.01em" }}>
-                    No presentations yet
-                  </h2>
-                  <p style={{ fontSize: 14, color: "rgba(248,250,252,0.65)", margin: "0 0 28px", lineHeight: 1.7, maxWidth: 360, marginLeft: "auto", marginRight: "auto" }}>
-                    Upload a roof photo and walk homeowners through every layer of their new roof — ice shield, underlayment, shingles, and more.
-                  </p>
-                  <button
-                    onClick={startProject}
-                    className="rv-btn-primary"
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 8,
-                      padding: "12px 32px", borderRadius: 10, fontSize: 14, fontWeight: 600,
-                      cursor: "pointer", border: "none", width: "auto", marginTop: 0, minHeight: 0,
-                      background: "linear-gradient(135deg, #ea580c, #c2410c)",
-                      color: "#ffffff",
-                      boxShadow: "0 4px 16px rgba(234,88,12,0.40)",
-                      letterSpacing: "0.01em",
-                    }}
-                  >
-                    <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 400 }}>+</span> Start New Presentation
-                  </button>
-                </div>
-              </div>
-              {/* Bottom feature strip */}
-              <div style={{
-                background: "#ffffff", padding: "20px 32px",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 32, flexWrap: "wrap",
-              }}>
-                {[
-                  { icon: "📸", text: "Upload any roof photo" },
-                  { icon: "✏️", text: "Trace the outline in seconds" },
-                  { icon: "🎨", text: "See every layer come to life" },
-                  { icon: "📤", text: "Send a branded proposal" },
-                ].map(({ icon, text }) => (
-                  <div key={text} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "#64748b", fontWeight: 500 }}>
-                    <span style={{ fontSize: 16 }}>{icon}</span>{text}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <>
-              <div style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                marginBottom: 24, flexWrap: "wrap", gap: 12,
-              }}>
-                <div>
-                  <h1 style={{ fontSize: 18, fontWeight: 600, color: "#0f172a", margin: 0 }}>Presentations</h1>
-                  <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-                    {photos.length} presentation{photos.length !== 1 ? "s" : ""}
-                  </div>
-                </div>
-                {(appStats.presentationsStarted > 0 || appStats.pdfsExported > 0 || appStats.linksShared > 0) && (
-                  <div style={{ display: "flex", gap: 8 }}>
-                    {[
-                      { icon: "✦", label: "Presented", value: appStats.presentationsStarted },
-                      { icon: "⬇", label: "PDFs", value: appStats.pdfsExported },
-                      { icon: "↗", label: "Links", value: appStats.linksShared },
-                    ].filter(x => x.value > 0).map(({ icon, label, value }) => (
-                      <div key={label} style={{
-                        display: "flex", alignItems: "center", gap: 5,
-                        background: "#ffffff", borderRadius: 99, padding: "5px 12px",
-                        boxShadow: "0 1px 4px rgba(15,23,42,0.06), 0 0 0 1px rgba(15,23,42,0.05)",
-                        fontSize: 12, color: "#475569", fontWeight: 600,
-                      }}>
-                        <span style={{ color: "#ea580c", fontSize: 11 }}>{icon}</span>
-                        <span style={{ color: "#0f172a", fontWeight: 700 }}>{value}</span>
-                        <span style={{ color: "#94a3b8", fontWeight: 500 }}>{label}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-                gap: 16,
-              }}>
-                {photos.map((p) => (
-                  <div
-                    key={p.id}
-                    className="rv-project-card rv-fade-in-up"
-                    style={{
-                      background: "#ffffff",
-                      borderRadius: 16,
-                      overflow: "hidden",
-                      boxShadow: "0 2px 12px rgba(15,23,42,0.08), 0 0 0 1px rgba(15,23,42,0.05)",
-                      cursor: "pointer",
-                    }}
-                    onClick={() => openProject(p.id)}
-                  >
-                    {/* Thumbnail */}
-                    <div style={{
-                      height: 148,
-                      background: p.thumbnail || p.src ? "none" : "linear-gradient(135deg, #0f172a, #1e3a5f)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      overflow: "hidden", position: "relative",
-                    }}>
-                      {(p.thumbnail || p.src) ? (
-                        <>
-                          <img src={p.thumbnail ?? p.src} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          {p.thumbnail && (
-                            <div style={{
-                              position: "absolute", top: 8, left: 8,
-                              background: "rgba(22,163,74,0.88)", color: "#ffffff",
-                              fontSize: 9, fontWeight: 700, padding: "2px 7px",
-                              borderRadius: 20, backdropFilter: "blur(4px)",
-                              letterSpacing: "0.06em", textTransform: "uppercase",
-                            }}>Rendered</div>
-                          )}
-                        </>
-                      ) : (
-                        <div style={{ fontSize: 36, opacity: 0.18, color: "#ffffff" }}>🏠</div>
-                      )}
-                      {p.step && p.step !== "TRACE" && p.step !== "START" && (
-                        <div style={{
-                          position: "absolute", bottom: 8, right: 8,
-                          background: "rgba(15,23,42,0.72)", color: "#e2e8f0",
-                          fontSize: 10, fontWeight: 600, padding: "3px 8px",
-                          borderRadius: 20, backdropFilter: "blur(6px)",
-                          letterSpacing: "0.03em",
-                        }}>
-                          {STEP_SHORT[p.step] ?? STEP_TITLE[p.step] ?? p.step}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Info row */}
-                    <div
-                      style={{ padding: "10px 12px 12px", display: "flex", alignItems: "center", gap: 8 }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {renamingId === p.id ? (
-                        <input
-                          autoFocus
-                          value={renamingName}
-                          onChange={(e) => setRenamingName(e.target.value)}
-                          onBlur={() => { renameProject(p.id, renamingName); setRenamingId(null); }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") { renameProject(p.id, renamingName); setRenamingId(null); }
-                            if (e.key === "Escape") setRenamingId(null);
-                          }}
-                          style={{
-                            flex: 1, padding: "4px 8px", borderRadius: 6,
-                            border: "1.5px solid rgba(234,88,12,0.40)",
-                            fontSize: 13, fontWeight: 500, outline: "none",
-                            background: "#f8fafc",
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <div
-                          style={{
-                            flex: 1, fontSize: 13, fontWeight: 600, color: "#1e293b",
-                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                            cursor: "text", padding: "4px 2px",
-                          }}
-                          title="Click to rename"
-                          onClick={(e) => { e.stopPropagation(); setRenamingId(p.id); setRenamingName(p.name); }}
-                        >
-                          {p.name}
-                        </div>
-                      )}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (confirm(`Delete "${p.name}"? This cannot be undone.`)) {
-                            setPhotos((prev) => prev.filter((x) => x.id !== p.id));
-                            if (activePhotoId === p.id) setActivePhotoId(prev => prev === p.id ? (photos.find(x => x.id !== p.id)?.id ?? "") : prev);
-                          }
-                        }}
-                        title="Delete project"
-                        className="rv-btn-small"
-                        style={{
-                          width: 28, height: 28, borderRadius: 7, border: "none",
-                          background: "transparent", color: "#cbd5e1",
-                          cursor: "pointer", fontSize: 14, display: "flex",
-                          alignItems: "center", justifyContent: "center", flexShrink: 0,
-                          padding: 0,
-                        }}
-                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.08)"; (e.currentTarget as HTMLButtonElement).style.color = "#ef4444"; }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "#cbd5e1"; }}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ── PROJECT SCREEN ──────────────────────────────────────────────────────────
   return (
-    <div style={
-      screen === "CUSTOMER_VIEW"
-        ? { display: "flex", flexDirection: isMobile ? "column" : "row", height: "100dvh", overflow: "hidden" }
-        : isCustomerView
-        ? { position: "fixed", inset: 0, zIndex: 9999, display: "flex", flexDirection: "column", background: "#0c1524" }
-        : { display: "flex", flexDirection: "column", height: "100vh", background: "#f8fafc" }
-    }>
+    <div className="flex flex-col h-screen bg-slate-50">
+      {/* ── Top bar ─────────────────────────────── */}
+      <header className="flex items-center gap-3 px-4 py-2.5 bg-white border-b border-slate-100 shadow-sm shrink-0 z-20">
+        <button onClick={() => setScreen("MENU")} className="rv-logo-btn shrink-0">
+          <Image src="/roofviz-logo.png" alt="RoofViz" width={120} height={35} priority />
+        </button>
 
-      {/* ── CUSTOMER VIEW TOP BAR ── */}
-      {isCustomerView && active && (
-        <div style={{
-          height: 52, flexShrink: 0,
-          background: "rgba(255,255,255,0.06)",
-          borderBottom: "1px solid rgba(255,255,255,0.08)",
-          display: "flex", alignItems: "center",
-          padding: "0 20px", gap: 16,
-        }}>
-          <Image src="/roofviz-logo.png" alt="RoofViz" width={90} height={26} priority style={{ flexShrink: 0 }} />
-          <span style={{ flex: 1, textAlign: "center" as const, fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>
-            {STEP_TITLE[liveStep] ?? liveStep}
-          </span>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-            <button
-              onClick={goBack}
-              disabled={stepIndex(liveStep) === 0}
-              style={{ padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
-                cursor: stepIndex(liveStep) === 0 ? "default" : "pointer",
-                border: "1.5px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.08)",
-                color: stepIndex(liveStep) === 0 ? "rgba(255,255,255,0.25)" : "#e2e8f0" }}
-            >← Back</button>
-            <button
-              onClick={goNext}
-              disabled={!canGoNext()}
-              style={{ padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
-                cursor: canGoNext() ? "pointer" : "default", border: "none",
-                background: canGoNext() ? "linear-gradient(135deg,#ea580c,#c2410c)" : "rgba(255,255,255,0.08)",
-                color: canGoNext() ? "#ffffff" : "rgba(255,255,255,0.25)" }}
-            >Next →</button>
-            <button
-              onClick={exitCustomerView}
-              style={{ padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 700,
-                cursor: "pointer", border: "1.5px solid rgba(255,100,100,0.35)",
-                background: "rgba(255,80,80,0.12)", color: "#fca5a5", marginLeft: 4 }}
-            >✕ Exit</button>
-          </div>
-        </div>
-      )}
-
-      {/* ── TOP BAR (PROJECT editor only) ── */}
-      {screen !== "CUSTOMER_VIEW" && !isCustomerView && (
-        <header style={{
-          flexShrink: 0,
-          background: "#ffffff",
-          boxShadow: "0 2px 8px rgba(15,23,42,0.06), 0 1px 0 rgba(15,23,42,0.04)",
-          zIndex: 10,
-        }}>
-          {/* Row 1 — main bar */}
-          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 10, height: isMobile ? 48 : 56, padding: isMobile ? "0 10px" : "0 18px" }}>
-          <button onClick={() => setScreen("MENU")}
-            className="rv-topbar-btn"
-            style={{ ...topBarBtn, padding: "5px 10px", color: "#64748b", flexShrink: 0 }}>
-            {isMobile ? "←" : "← Menu"}
-          </button>
-          <LogoAnimated onClick={() => setScreen("MENU")} width={isMobile ? 110 : 200} height={isMobile ? 32 : 58} showCheck={false} style={{ flexShrink: 0 }} />
-          {active && (
-            <input
-              value={active.name}
-              onChange={(e) => patchActive((p) => ({ ...p, name: e.target.value }))}
-              placeholder="Project name"
-              style={{
-                flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: "#0f172a",
-                background: "transparent", border: "none",
-                padding: "4px 8px", outline: "none",
-                letterSpacing: "0.01em", textAlign: "center",
-              }}
-            />
-          )}
-          {active && (
-            <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
-              {!presentationMode && !isMobile && (
-                <button
-                  className="rv-topbar-btn"
-                  style={{ ...topBarBtn,
-                    background: active.showGuidesDuringInstall ? "rgba(234,88,12,0.06)" : "#ffffff",
-                    color: active.showGuidesDuringInstall ? "#ea580c" : "#64748b",
-                    borderColor: active.showGuidesDuringInstall ? "rgba(234,88,12,0.22)" : "rgba(15,23,42,0.10)" }}
-                  onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}
-                >
-                  {active.showGuidesDuringInstall ? "⊙ Guides On" : "⊙ Guides"}
-                </button>
-              )}
-              {active.src && !presentationMode && !isMobile && (
-                <button className="rv-topbar-btn" style={{
-                  ...topBarBtn,
-                  background: baMode ? "rgba(234,88,12,0.07)" : "#ffffff",
-                  color: baMode ? "#ea580c" : "#64748b",
-                  borderColor: baMode ? "rgba(234,88,12,0.25)" : "rgba(15,23,42,0.10)",
-                }} onClick={() => setBaMode(v => !v)}>
-                  ◧ Before/After
-                </button>
-              )}
-              <button
-                className="rv-topbar-btn"
-                style={{ ...topBarBtn,
-                  background: presentationMode ? "linear-gradient(135deg,#7c3aed,#6d28d9)" : "#ffffff",
-                  color: presentationMode ? "#ffffff" : "#64748b",
-                  border: presentationMode ? "none" : "1.5px solid rgba(15,23,42,0.10)",
-                  fontWeight: 600,
-                  boxShadow: presentationMode ? "0 2px 6px rgba(109,40,217,0.28)" : "none",
-                }}
-                onClick={() => {
-                  const next = !presentationMode;
-                  setPresentationMode(next);
-                  setDrawerOpen(!next);
-                  if (next && active) {
-                    patchActive((p) => ({ ...p, step: "TEAROFF" }));
-                    setUiTab("edit");
-                    setBaMode(false);
-                    setAppStats(s => ({ ...s, presentationsStarted: s.presentationsStarted + 1 }));
-                    // Request fullscreen for cinematic experience
-                    if (document.documentElement.requestFullscreen) {
-                      document.documentElement.requestFullscreen().catch(() => {});
-                    }
-                  } else {
-                    setFinalLookMode(false);
-                    if (document.fullscreenElement && document.exitFullscreen) {
-                      document.exitFullscreen().catch(() => {});
-                    }
-                  }
-                }}
-              >
-                {presentationMode ? (isMobile ? "✦" : "✦ Presenting") : (isMobile ? "✦" : "✦ Present to Homeowner")}
-              </button>
-              {presentationMode && (
-                <button
-                  className="rv-topbar-btn"
-                  style={{ ...topBarBtn,
-                    background: "linear-gradient(135deg,#0ea5e9,#0284c7)",
-                    color: "#ffffff", border: "none", fontWeight: 600,
-                    boxShadow: "0 2px 6px rgba(2,132,199,0.28)",
-                  }}
-                  onClick={enterCustomerView}
-                >
-                  ⛶ Customer View
-                </button>
-              )}
-              <button
-                className="rv-topbar-btn"
-                style={{ ...topBarBtn,
-                  background: liveStep === "EXPORT" ? "linear-gradient(135deg,#16a34a,#15803d)" : "#f8fafc",
-                  color: liveStep === "EXPORT" ? "#ffffff" : "#94a3b8",
-                  border: liveStep === "EXPORT" ? "none" : "1.5px solid rgba(15,23,42,0.09)",
-                  fontWeight: liveStep === "EXPORT" ? 600 : 500,
-                  cursor: liveStep === "EXPORT" ? "pointer" : "default",
-                  boxShadow: liveStep === "EXPORT" ? "0 2px 6px rgba(22,163,74,0.28)" : "none",
-                }}
-                disabled={liveStep !== "EXPORT"}
-                onClick={liveStep === "EXPORT" ? exportPdfTwoPages : undefined}
-              >
-                ↓ Export PDF
-              </button>
-              {!presentationMode && (
-                <button className="rv-topbar-btn"
-                  style={{ ...topBarBtn,
-                    background: drawerOpen ? "rgba(234,88,12,0.07)" : "#ffffff",
-                    color: drawerOpen ? "#ea580c" : "#64748b",
-                    borderColor: drawerOpen ? "rgba(234,88,12,0.25)" : "rgba(15,23,42,0.10)",
-                  }}
-                  onClick={() => setDrawerOpen(v => !v)}
-                >
-                  {drawerOpen ? "× Panel" : "☰ Panel"}
-                </button>
-              )}
-            </div>
-          )}
-          </div>
-          {/* Row 2 — step progress strip */}
-          {active && liveStep !== "START" && !presentationMode && (
-            <div style={{ height: 34, display: "flex", alignItems: "center",
-              padding: "0 18px", gap: 0, background: "#f8fafc",
-              borderBottom: "1px solid rgba(15,23,42,0.06)", overflowX: "auto",
-              flexShrink: 0, scrollbarWidth: "none" as any }}>
-              {STEPS.filter(s => s !== "START").map((step, i) => {
-                const liveIdx = stepIndex(liveStep);
-                const thisIdx = stepIndex(step);
-                const isCompleted = thisIdx < liveIdx;
-                const isCurrent = step === liveStep;
-                const isRelevant = relevantSteps(active.roofs).has(step);
-                return (
-                  <React.Fragment key={step}>
-                    {i > 0 && (
-                      <div style={{ width: 12, height: 1, flexShrink: 0,
-                        background: isCompleted ? "#bbf7d0" : "#e2e8f0" }} />
-                    )}
-                    <button onClick={() => jumpToStep(step)} style={{
-                      padding: "3px 9px", borderRadius: 99, fontSize: 11,
-                      fontWeight: isCurrent ? 700 : 500,
-                      border: isCurrent ? "1.5px solid rgba(234,88,12,0.35)" : "1.5px solid transparent",
-                      background: isCurrent ? "rgba(234,88,12,0.08)" : "transparent",
-                      color: isCurrent ? "#ea580c" : isCompleted ? "#16a34a" : "#94a3b8",
-                      opacity: !isRelevant && !isCurrent && !isCompleted ? 0.4 : 1,
-                      cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" as const,
-                    }}>
-                      {isCompleted ? "✓ " : ""}{STEP_SHORT[step] ?? step}
-                    </button>
-                  </React.Fragment>
-                );
-              })}
-            </div>
-          )}
-        </header>
-      )}
-
-      {/* ── CONTENT AREA: canvas + floating drawer overlay ── */}
-      <div style={
-        screen === "CUSTOMER_VIEW"
-          ? { display: "contents" }
-          : isCustomerView
-        ? { display: "flex", flexDirection: "row", flex: 1, overflow: "hidden", minHeight: 0 }
-        : { display: "flex", flex: 1, overflow: "hidden", minHeight: 0, position: "relative" }
-      }>
-
-      {/* ── CUSTOMER RIGHT SIDEBAR ── */}
-      {screen === "CUSTOMER_VIEW" && customerViewData && !isMobile && (
-        <div style={{
-          order: 2,
-          width: 176,
-          flexShrink: 0,
-          background: "#ffffff",
-          borderLeft: "1.5px solid #e2e8f0",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          height: "100dvh",
-        }}>
-          {/* Logo + project name */}
-          <div style={{ padding: "14px 14px 12px", borderBottom: "1px solid #f1f5f9", flexShrink: 0 }}>
-            <Image src="/roofviz-logo.png" alt="RoofViz" width={120} height={35} priority />
-            <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: "#1e293b", lineHeight: 1.35, wordBreak: "break-word" as const }}>
-              {customerViewData.name}
-            </div>
-          </div>
-
-          {/* Step checklist — scrollable */}
-          <div style={{ flex: "1 1 0", overflowY: "auto", padding: "6px 0", scrollbarWidth: "none" as any }}>
-            {customerNavSteps.map((s, i) => {
-              const isPast = i < customerStepIdx;
-              const isCurrent = i === customerStepIdx;
-              return (
-                <button
+        {screen === "PROJECT" && active && (
+          <div className="flex items-center gap-2 ml-2">
+            <span className="text-xs font-black text-slate-400">
+              {stepIndex(liveStep) + 1}/{STEPS.length}
+            </span>
+            <div className="hidden sm:flex items-center gap-1 ml-1">
+              {activeSteps.map((s, i) => (
+                <div
                   key={s}
-                  onClick={() => setCustomerStep(s)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    width: "100%",
-                    padding: "8px 14px",
-                    border: "none",
-                    background: isCurrent ? "#eff6ff" : "transparent",
-                    borderLeft: isCurrent ? "3px solid #ea580c" : "3px solid transparent",
-                    cursor: "pointer",
-                    textAlign: "left" as const,
-                  }}
-                >
-                  <span style={{
-                    flexShrink: 0,
-                    width: 18,
-                    height: 18,
-                    borderRadius: "50%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 9,
-                    fontWeight: 700,
-                    background: isCurrent ? "#ea580c" : isPast ? "#dcfce7" : "#f1f5f9",
-                    color: isCurrent ? "#fff" : isPast ? "#16a34a" : "#cbd5e1",
-                    border: isCurrent ? "none" : isPast ? "1.5px solid #86efac" : "1.5px solid #e2e8f0",
-                  }}>
-                    {isPast ? "✓" : ""}
-                  </span>
-                  <span style={{ fontSize: 11, fontWeight: isCurrent ? 700 : 500, color: isCurrent ? "#c2410c" : isPast ? "#334155" : "#94a3b8", lineHeight: 1.3 }}>
-                    {STEP_SHORT[s] ?? s}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Prev / Next navigation */}
-          <div style={{ borderTop: "1px solid #f1f5f9", padding: "10px 14px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-            <button
-              onClick={() => customerStepIdx > 0 && setCustomerStep(customerNavSteps[customerStepIdx - 1])}
-              disabled={customerStepIdx <= 0}
-              style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 12, fontWeight: 600, color: "#475569", cursor: customerStepIdx > 0 ? "pointer" : "default", opacity: customerStepIdx > 0 ? 1 : 0.35 }}
-            >← Previous</button>
-            <button
-              onClick={() => customerStepIdx < customerNavSteps.length - 1 && setCustomerStep(customerNavSteps[customerStepIdx + 1])}
-              disabled={customerStepIdx >= customerNavSteps.length - 1}
-              style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", background: customerStepIdx < customerNavSteps.length - 1 ? "linear-gradient(135deg,#ea580c,#c2410c)" : "#e2e8f0", fontSize: 12, fontWeight: 700, color: customerStepIdx < customerNavSteps.length - 1 ? "#fff" : "#94a3b8", cursor: customerStepIdx < customerNavSteps.length - 1 ? "pointer" : "default", opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.5 }}
-            >Next →</button>
-          </div>
-
-          {/* Photo switcher — only if multiple photos */}
-          {customerViewData.photos.length > 1 && (
-            <div style={{ borderTop: "1px solid #f1f5f9", padding: "8px 14px", flexShrink: 0 }}>
-              <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 7 }}>Photos</div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <button
-                  onClick={() => setCustomerPhotoIdx(Math.max(0, customerPhotoIdx - 1))}
-                  disabled={customerPhotoIdx === 0}
-                  style={{ padding: "4px 10px", borderRadius: 6, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 14, fontWeight: 600, cursor: customerPhotoIdx > 0 ? "pointer" : "default", opacity: customerPhotoIdx > 0 ? 1 : 0.3, color: "#475569" }}
-                >‹</button>
-                <span style={{ fontSize: 11, fontWeight: 600, color: "#475569" }}>{customerPhotoIdx + 1} / {customerViewData.photos.length}</span>
-                <button
-                  onClick={() => setCustomerPhotoIdx(Math.min(customerViewData.photos.length - 1, customerPhotoIdx + 1))}
-                  disabled={customerPhotoIdx >= customerViewData.photos.length - 1}
-                  style={{ padding: "4px 10px", borderRadius: 6, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 14, fontWeight: 600, cursor: customerPhotoIdx < customerViewData.photos.length - 1 ? "pointer" : "default", opacity: customerPhotoIdx < customerViewData.photos.length - 1 ? 1 : 0.3, color: "#475569" }}
-                >›</button>
-              </div>
-            </div>
-          )}
-
-          {/* Shingle selection */}
-          <div style={{ borderTop: "1px solid #f1f5f9", padding: "10px 14px 12px", flexShrink: 0 }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Shingle Selection</div>
-            <div style={{ marginBottom: 6 }}>
-              <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Manufacturer</div>
-              <select
-                value={customerShingleSelection.manufacturerId}
-                onChange={(e) => {
-                  const mId = e.target.value;
-                  const mfr = SHINGLE_CATALOG[mId as keyof typeof SHINGLE_CATALOG];
-                  const firstLineId = Object.keys(mfr?.lines ?? {})[0] ?? "";
-                  const firstLine = (mfr?.lines as Record<string, { colors: Record<string, unknown> }>)?.[firstLineId];
-                  const firstColorId = Object.keys(firstLine?.colors ?? {})[0] ?? "";
-                  setCustomerShingleSelection({ manufacturerId: mId, lineId: firstLineId, colorId: firstColorId });
-                }}
-                style={{ width: "100%", fontSize: 11, padding: "5px 7px", borderRadius: 7, border: "1px solid rgba(15,23,42,0.15)", background: "#fff", color: "#1e293b" }}
-              >
-                {Object.entries(SHINGLE_CATALOG).map(([id, mfr]) => (
-                  <option key={id} value={id}>{mfr.name}</option>
-                ))}
-              </select>
-            </div>
-            {(() => {
-              const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
-              if (!mfr) return null;
-              return (
-                <div style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Product Line</div>
-                  <select
-                    value={customerShingleSelection.lineId}
-                    onChange={(e) => {
-                      const lId = e.target.value;
-                      const line = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[lId];
-                      const firstColorId = Object.keys(line?.colors ?? {})[0] ?? "";
-                      setCustomerShingleSelection(prev => ({ ...prev, lineId: lId, colorId: firstColorId }));
-                    }}
-                    style={{ width: "100%", fontSize: 11, padding: "5px 7px", borderRadius: 7, border: "1px solid rgba(15,23,42,0.15)", background: "#fff", color: "#1e293b" }}
-                  >
-                    {Object.entries(mfr.lines).map(([lId, line]) => (
-                      <option key={lId} value={lId}>{(line as { name: string }).name}</option>
-                    ))}
-                  </select>
-                </div>
-              );
-            })()}
-            {(() => {
-              const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
-              const line = mfr && (mfr.lines as Record<string, { name: string; colors: Record<string, { name: string; rgb: [number,number,number] }> }>)[customerShingleSelection.lineId];
-              if (!line) return null;
-              const selectedColor = line.colors[customerShingleSelection.colorId];
-              return (
-                <>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
-                    {Object.entries(line.colors).map(([cId, color]) => {
-                      const [cr, cg, cb] = color.rgb;
-                      const isSel = cId === customerShingleSelection.colorId;
-                      return (
-                        <div key={cId} onClick={() => setCustomerShingleSelection(prev => ({ ...prev, colorId: cId }))} title={color.name} style={{ width: 26, height: 26, borderRadius: "50%", background: `rgb(${cr},${cg},${cb})`, cursor: "pointer", border: isSel ? "2.5px solid #ea580c" : "2px solid rgba(15,23,42,0.12)", boxShadow: isSel ? "0 0 0 2px rgba(234,88,12,0.3)" : "none", transition: "box-shadow 0.15s", flexShrink: 0 }} />
-                      );
-                    })}
-                  </div>
-                  {selectedColor && <div style={{ fontSize: 11, fontWeight: 600, color: "#1e293b" }}>{selectedColor.name}</div>}
-                </>
-              );
-            })()}
-          </div>
-        </div>
-      )}
-
-      {/* ── MOBILE CUSTOMER VIEW BOTTOM BAR ── */}
-      {screen === "CUSTOMER_VIEW" && customerViewData && isMobile && (
-        <div style={{
-          order: 2, width: "100%", flexShrink: 0,
-          background: "#ffffff", borderTop: "1.5px solid #e2e8f0",
-          paddingBottom: "env(safe-area-inset-bottom, 0px)",
-        }}>
-          {/* Horizontal step chips */}
-          <div style={{ display: "flex", overflowX: "auto", padding: "8px 12px 4px", gap: 5, scrollbarWidth: "none" as any }}>
-            {customerNavSteps.map((s, i) => {
-              const isPast = i < customerStepIdx;
-              const isCurrent = i === customerStepIdx;
-              return (
-                <button key={s} onClick={() => setCustomerStep(s)} style={{
-                  flexShrink: 0, padding: "4px 11px", borderRadius: 99, fontSize: 11,
-                  fontWeight: isCurrent ? 700 : 500,
-                  border: isCurrent ? "1.5px solid rgba(234,88,12,0.40)" : "1.5px solid transparent",
-                  background: isCurrent ? "rgba(234,88,12,0.10)" : isPast ? "rgba(22,163,74,0.07)" : "transparent",
-                  color: isCurrent ? "#c2410c" : isPast ? "#16a34a" : "#94a3b8",
-                  cursor: "pointer",
-                }}>
-                  {isPast ? "✓ " : ""}{STEP_SHORT[s] ?? s}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Prev / Next + optional photo switcher */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 12px 8px" }}>
-            <button
-              onClick={() => customerStepIdx > 0 && setCustomerStep(customerNavSteps[customerStepIdx - 1])}
-              disabled={customerStepIdx <= 0}
-              style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 13, fontWeight: 600, color: "#475569", cursor: customerStepIdx > 0 ? "pointer" : "default", opacity: customerStepIdx > 0 ? 1 : 0.35 }}
-            >← Prev</button>
-            {customerViewData.photos.length > 1 && (
-              <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                <button onClick={() => setCustomerPhotoIdx(Math.max(0, customerPhotoIdx - 1))} disabled={customerPhotoIdx === 0} style={{ padding: "6px 10px", borderRadius: 7, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 13, fontWeight: 600, cursor: customerPhotoIdx > 0 ? "pointer" : "default", opacity: customerPhotoIdx > 0 ? 1 : 0.3, color: "#475569" }}>‹</button>
-                <span style={{ fontSize: 11, fontWeight: 600, color: "#475569", whiteSpace: "nowrap" as const }}>{customerPhotoIdx + 1}/{customerViewData.photos.length}</span>
-                <button onClick={() => setCustomerPhotoIdx(Math.min(customerViewData.photos.length - 1, customerPhotoIdx + 1))} disabled={customerPhotoIdx >= customerViewData.photos.length - 1} style={{ padding: "6px 10px", borderRadius: 7, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontSize: 13, fontWeight: 600, cursor: customerPhotoIdx < customerViewData.photos.length - 1 ? "pointer" : "default", opacity: customerPhotoIdx < customerViewData.photos.length - 1 ? 1 : 0.3, color: "#475569" }}>›</button>
-              </div>
-            )}
-            <button
-              onClick={() => customerStepIdx < customerNavSteps.length - 1 && setCustomerStep(customerNavSteps[customerStepIdx + 1])}
-              disabled={customerStepIdx >= customerNavSteps.length - 1}
-              style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", background: customerStepIdx < customerNavSteps.length - 1 ? "linear-gradient(135deg,#ea580c,#c2410c)" : "#e2e8f0", fontSize: 13, fontWeight: 700, color: customerStepIdx < customerNavSteps.length - 1 ? "#fff" : "#94a3b8", cursor: customerStepIdx < customerNavSteps.length - 1 ? "pointer" : "default", opacity: customerStepIdx < customerNavSteps.length - 1 ? 1 : 0.5 }}
-            >Next →</button>
-          </div>
-
-          {/* Compact shingle swatch row */}
-          {(() => {
-            const mfr = SHINGLE_CATALOG[customerShingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
-            const line = mfr && (mfr.lines as Record<string, { name: string; colors: Record<string, { name: string; rgb: [number,number,number] }> }>)[customerShingleSelection.lineId];
-            if (!line) return null;
-            const selectedColor = line.colors[customerShingleSelection.colorId];
-            return (
-              <div style={{ borderTop: "1px solid #f1f5f9", padding: "6px 12px 8px", display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ display: "flex", overflowX: "auto", gap: 6, flex: 1, scrollbarWidth: "none" as any }}>
-                  {Object.entries(line.colors).map(([cId, color]) => {
-                    const [cr, cg, cb] = color.rgb;
-                    const isSel = cId === customerShingleSelection.colorId;
-                    return (
-                      <div key={cId} onClick={() => setCustomerShingleSelection(prev => ({ ...prev, colorId: cId }))} title={color.name} style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0, background: `rgb(${cr},${cg},${cb})`, cursor: "pointer", border: isSel ? "2.5px solid #ea580c" : "2px solid rgba(15,23,42,0.12)", boxShadow: isSel ? "0 0 0 2px rgba(234,88,12,0.3)" : "none" }} />
-                    );
-                  })}
-                </div>
-                {selectedColor && <span style={{ fontSize: 10, fontWeight: 600, color: "#475569", flexShrink: 0, maxWidth: 70, textAlign: "right" as const, lineHeight: 1.2 }}>{selectedColor.name}</span>}
-              </div>
-            );
-          })()}
-        </div>
-      )}
-
-      {/* ── FLOATING DRAWER ── */}
-
-      {screen !== "CUSTOMER_VIEW" && !isCustomerView && (
-        <AnimatePresence>
-          {drawerOpen && !presentationMode && (
-            <motion.aside
-              key="drawer"
-              initial={isMobile ? { y: 500, opacity: 0 } : { x: 310, opacity: 0 }}
-              animate={isMobile ? { y: 0, opacity: 1 } : { x: 0, opacity: 1 }}
-              exit={isMobile ? { y: 500, opacity: 0 } : { x: 310, opacity: 0 }}
-              transition={{ type: "tween", duration: 0.20, ease: "easeOut" }}
-              style={{
-                position: "absolute", zIndex: 20,
-                ...(isMobile
-                  ? { left: 0, right: 0, bottom: 0, top: "auto", maxHeight: "72vh", borderRadius: "16px 16px 0 0", width: "100%" }
-                  : { right: 12, top: 12, bottom: 12, width: 300, borderRadius: 16 }
-                ),
-                background: "rgba(255,255,255,0.97)",
-                backdropFilter: "blur(16px)",
-                WebkitBackdropFilter: "blur(16px)",
-                boxShadow: "0 8px 40px rgba(15,23,42,0.18), 0 0 0 1px rgba(15,23,42,0.07)",
-                display: "flex", flexDirection: "column",
-                overflow: "hidden",
-              }}
-            >
-              {/* Drawer header: step badge + step name + close button */}
-              <div style={{ padding: "10px 14px 8px",
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                borderBottom: "1px solid rgba(15,23,42,0.06)", flexShrink: 0 }}>
-                <div style={{ ...accentSectionHeader, marginBottom: 0 }}>
-                  <span key={liveStep} className="rv-badge-pop" style={stepBadge}>
-                    {stepIndex(liveStep) + 1}
-                  </span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "#334155",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
-                    {STEP_SHORT[liveStep] ?? liveStep}
-                  </span>
-                </div>
-                <button onClick={() => setDrawerOpen(false)}
-                  style={{ background: "none", border: "none", cursor: "pointer",
-                    color: "#94a3b8", fontSize: 18, lineHeight: 1, padding: "2px 6px",
-                    borderRadius: 6 }}>×</button>
-              </div>
-
-              {/* Progress bar */}
-              <div style={{ height: 3, background: "#e2e8f0", flexShrink: 0 }}>
-                <div style={{ height: "100%",
-                  width: `${((stepIndex(liveStep) + 1) / STEPS.length) * 100}%`,
-                  background: "linear-gradient(90deg, #2563eb, #60a5fa)",
-                  transition: "width 0.4s ease" }} />
-              </div>
-
-              {/* Photo switcher — presentation mode with >1 photo */}
-              {presentationMode && (active?.photoSrcs?.length ?? 0) > 1 && (() => {
-                const srcs = active!.photoSrcs;
-                const idx = srcs.indexOf(active!.src);
-                const total = srcs.length;
-                return (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 14px 0", gap: 6 }}>
-                    <button
-                      onClick={() => switchToPhoto(srcs[(idx - 1 + total) % total])}
-                      className="rv-btn-small"
-                      style={{ padding: "4px 10px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.10)", background: "#fff", color: "#334155", flexShrink: 0 }}
-                    >‹</button>
-                    <span style={{ fontSize: 11, fontWeight: 500, color: "#64748b", textAlign: "center" as const }}>
-                      Photo {idx + 1} / {total}
-                    </span>
-                    <button
-                      onClick={() => switchToPhoto(srcs[(idx + 1) % total])}
-                      className="rv-btn-small"
-                      style={{ padding: "4px 10px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "1.5px solid rgba(15,23,42,0.10)", background: "#fff", color: "#334155", flexShrink: 0 }}
-                    >›</button>
-                  </div>
-                );
-              })()}
-
-              {/* Scrollable body */}
-              <div style={{ flex: 1, overflow: "auto", padding: "14px" }}>
-
-          {/* ── Edit / Settings tab switcher ── */}
-          {active && liveStep !== "START" && !presentationMode && (
-            <div style={{ display: "flex", gap: 0, flexShrink: 0,
-              background: "#f1f5f9", borderRadius: 10, padding: "3px", marginBottom: 10 }}>
-              {(["edit", "settings"] as const).map((tab) => (
-                <button key={tab} onClick={() => setUiTab(tab)} className="rv-tab-btn"
-                  style={{ ...tabBtnBase, position: "relative", background: "transparent",
-                    color: uiTab === tab ? "#1e293b" : "#94a3b8",
-                    fontWeight: uiTab === tab ? 600 : 500, zIndex: 1 }}>
-                  {uiTab === tab && (
-                    <motion.span layoutId="tab-indicator"
-                      style={{ position: "absolute", inset: 0, borderRadius: 7,
-                        background: "#ffffff", boxShadow: "0 1px 3px rgba(15,23,42,0.10)", zIndex: -1 }}
-                      transition={{ type: "spring", stiffness: 400, damping: 30 }} />
-                  )}
-                  {tab === "edit" ? "Edit" : "⚙ Settings"}
-                </button>
+                  className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                    i <= activeSteps.indexOf(liveStep) ? "bg-orange-500" : "bg-slate-200"
+                  }`}
+                />
               ))}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* ── START screen ── */}
-          {liveStep === "START" && (
-            <div style={sectionCard}>
-              <div style={sectionLabel}>New Project</div>
-              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", margin: "10px 0 6px", lineHeight: 1.2 }}>
-                Create a roof visualization
-              </h2>
-              <p style={{ fontSize: 13, color: "#64748b", marginBottom: 20, lineHeight: 1.6 }}>
-                Upload a job photo, trace the roof, and walk your customer through every installation layer.
-              </p>
-              <label style={fieldLabel}>Project name</label>
-              <input
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                style={inputStyle}
-                placeholder="e.g. 123 Oak Street"
-              />
-              <button style={primaryBtn} onClick={startProject}>
-                Start Project →
+        {screen === "PROJECT" && active && (
+          <div className="hidden sm:flex items-center rounded-lg border border-slate-200 overflow-hidden ml-2">
+            <button
+              onClick={() => switchWorkflowMode("quick")}
+              className={`px-3 py-1 text-xs font-bold cursor-pointer transition-colors ${
+                workflowMode === "quick"
+                  ? "bg-orange-500 text-white"
+                  : "bg-white text-slate-500 hover:bg-slate-50"
+              }`}
+            >
+              Quick
+            </button>
+            <button
+              onClick={() => switchWorkflowMode("advanced")}
+              className={`px-3 py-1 text-xs font-bold cursor-pointer transition-colors ${
+                workflowMode === "advanced"
+                  ? "bg-orange-500 text-white"
+                  : "bg-white text-slate-500 hover:bg-slate-50"
+              }`}
+            >
+              Advanced
+            </button>
+          </div>
+        )}
+
+        <div className="flex-1" />
+
+        {screen === "PROJECT" && (
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            className="rv-topbar-btn sm:hidden px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-bold cursor-pointer"
+          >
+            {sidebarOpen ? "Hide Panel" : "Show Panel"}
+          </button>
+        )}
+
+        {screen === "PROJECT" && hasClosedRoof && exportView === "LIVE" && (
+          <>
+            <button
+              onClick={toggleSlider}
+              className={`rv-topbar-btn px-3.5 py-1.5 rounded-xl border text-xs font-bold cursor-pointer ${
+                sliderX !== null
+                  ? "bg-orange-50 border-orange-300 text-orange-700"
+                  : "border-slate-200 bg-white hover:bg-slate-50"
+              }`}
+            >
+              Before/After
+            </button>
+            <button
+              onClick={() => setPresentationMode(true)}
+              className="rv-topbar-btn px-3.5 py-1.5 rounded-xl border border-slate-200 text-xs font-bold cursor-pointer bg-white hover:bg-slate-50"
+            >
+              Present
+            </button>
+          </>
+        )}
+
+        <button
+          onClick={startProject}
+          className="rv-btn-primary px-4 py-2 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-orange-500 to-orange-600 shadow-md cursor-pointer"
+        >
+          New Roof
+        </button>
+      </header>
+
+      {/* ── Body ────────────────────────────────── */}
+      {screen === "MENU" ? (
+        /* MENU screen */
+        <div className="flex-1 overflow-auto">
+          {photos.length === 0 ? (
+            /* Empty state */
+            <div className="flex flex-col items-center justify-center h-full text-center px-6">
+              <div className="w-16 h-16 rounded-2xl bg-orange-50 flex items-center justify-center mb-5">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ea580c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                  <polyline points="9 22 9 12 15 12 15 22" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-black text-slate-800 mb-2">No presentations yet</h2>
+              <p className="text-sm text-slate-500 mb-6 max-w-xs">Upload a photo of a house and create a step-by-step roofing presentation.</p>
+              <button
+                onClick={startProject}
+                className="rv-btn-primary px-6 py-3 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-orange-500 to-orange-600 shadow-lg cursor-pointer"
+              >
+                Start New Presentation
               </button>
             </div>
+          ) : (
+            /* Project grid */
+            <div className="p-6">
+              <h2 className="text-lg font-black text-slate-800 mb-4">Your Presentations</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {photos.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => openProject(p.id)}
+                    className="rv-project-card rv-fade-in-up text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 cursor-pointer"
+                  >
+                    <div className="text-sm font-black text-slate-800 truncate">{p.name || "Untitled"}</div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      {p.roofs.length} roof{p.roofs.length !== 1 ? "s" : ""} &middot; {STEP_TITLE[p.step]}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
+        </div>
+      ) : (
+        /* PROJECT screen */
+        <div className="flex flex-1 overflow-hidden">
+          {/* ── Sidebar ─────────────────────────── */}
+          <aside
+            className={`${
+              sidebarOpen ? "w-[420px]" : "w-0"
+            } bg-white border-r border-slate-100 overflow-y-auto overflow-x-hidden transition-all shrink-0 max-sm:absolute max-sm:inset-y-0 max-sm:left-0 max-sm:z-30 max-sm:shadow-xl`}
+          >
+            {/* Tab bar */}
+            <div className="flex border-b border-slate-100 sticky top-0 bg-white z-10">
+              <button
+                onClick={() => setActiveTab("edit")}
+                className={`rv-tab-btn flex-1 py-2.5 text-sm font-bold cursor-pointer ${
+                  activeTab === "edit"
+                    ? "text-orange-600 shadow-[inset_0_-2px_0_#ea580c]"
+                    : "text-slate-400 hover:text-slate-600"
+                }`}
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => setActiveTab("settings")}
+                className={`rv-tab-btn flex-1 py-2.5 text-sm font-bold cursor-pointer ${
+                  activeTab === "settings"
+                    ? "text-orange-600 shadow-[inset_0_-2px_0_#ea580c]"
+                    : "text-slate-400 hover:text-slate-600"
+                }`}
+              >
+                Settings
+              </button>
+            </div>
 
-          {/* ── ACTIVE PROJECT (Edit tab) ── */}
-          {liveStep !== "START" && uiTab === "edit" && (
-            <>
-              {/* Photo — current project only — hidden in presentation mode */}
-              {!presentationMode && <div style={sectionCard} className="rv-section-card">
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={accentSectionHeader}>
-                    <span style={sectionLabel}>
-                      Photo{(active?.photoSrcs?.length ?? 0) > 1 ? ` (${(active?.photoSrcs?.indexOf(active?.src) ?? 0) + 1}/${active?.photoSrcs?.length})` : ""}
-                    </span>
-                  </div>
-                  {active?.src && (
-                    <button
-                      className="rv-btn-small"
-                      onClick={removeCurrentPhoto}
-                      style={{ ...smallBtn, fontSize: 11, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)", padding: "4px 9px" }}
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
-
-                {active?.src ? (
-                  <div style={{ marginTop: 10, borderRadius: 10, overflow: "hidden", border: "1.5px solid rgba(15,23,42,0.08)" }}>
-                    <img src={active.src} alt={active.name} style={{ width: "100%", height: 120, objectFit: "cover", display: "block" }} />
-                  </div>
-                ) : (
-                  <label className="rv-upload-zone" style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    marginTop: 10,
-                    padding: "18px 16px",
-                    borderRadius: 10,
-                    border: "1.5px dashed rgba(234,88,12,0.28)",
-                    background: "rgba(234,88,12,0.03)",
-                    cursor: "pointer",
-                    gap: 6,
-                  }}>
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="rgba(234,88,12,0.6)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="3" width="18" height="18" rx="3"/>
-                      <circle cx="8.5" cy="8.5" r="1.5"/>
-                      <polyline points="21 15 16 10 5 21"/>
-                    </svg>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", letterSpacing: "0.04em" }}>Upload Photo</div>
-                    <div style={{ fontSize: 11, color: "#94a3b8" }}>PNG or JPG</div>
+            {activeTab === "edit" ? (
+              /* ── Edit tab ───────────────────────── */
+              <div className="p-3.5 space-y-3">
+                {/* Project name */}
+                {active && (
+                  <div className={sectionCard}>
+                    <label className="block text-xs font-bold text-slate-500 mb-1.5">Project name</label>
                     <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }}
-                      style={{ display: "none" }}
+                      value={active.name}
+                      onChange={(e) => patchActive((p) => ({ ...p, name: e.target.value }))}
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 font-black text-sm focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-400"
                     />
-                  </label>
+                  </div>
                 )}
 
-                {/* Thumbnail strip — shown when multiple photos exist */}
-                {(active?.photoSrcs?.length ?? 0) > 1 && (
-                  <div style={{ display: "flex", gap: 5, marginTop: 8, overflowX: "auto", paddingBottom: 2 }}>
-                    {active!.photoSrcs.map((s, i) => (
-                      <div
-                        key={i}
-                        onClick={() => switchToPhoto(s)}
-                        style={{
-                          width: 48, height: 34, borderRadius: 6, overflow: "hidden",
-                          cursor: "pointer", flexShrink: 0,
-                          border: s === active!.src ? "2px solid #ea580c" : "2px solid rgba(15,23,42,0.08)",
-                          opacity: s === active!.src ? 1 : 0.55,
-                          transition: "opacity 0.15s, border-color 0.15s",
+                {/* Upload photos */}
+                {active && (
+                  <div className={sectionCard}>
+                    <div className="text-sm font-black mb-2">Upload photos</div>
+                    <div className="rv-upload-zone border-2 border-dashed border-slate-200 rounded-xl p-4 text-center">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={(e) => {
+                          addFiles(e.target.files);
+                          e.currentTarget.value = "";
                         }}
-                      >
-                        <img src={s} alt={`Photo ${i + 1}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      </div>
-                    ))}
+                        className="block w-full text-sm text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-orange-50 file:text-orange-600 file:cursor-pointer"
+                      />
+                      <div className="text-xs text-slate-400 mt-2">PNG or JPG — drag &amp; drop or click</div>
+                    </div>
                   </div>
                 )}
 
-                {/* Add more photos */}
-                {active?.src && (
-                  <label className="rv-upload-zone" style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    marginTop: 8,
-                    padding: "8px 14px",
-                    borderRadius: 8,
-                    border: "1.5px dashed rgba(234,88,12,0.20)",
-                    background: "rgba(234,88,12,0.02)",
-                    cursor: "pointer",
-                    gap: 6,
-                  }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#2563eb" }}>+ Add more photos</div>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }}
-                      style={{ display: "none" }}
-                    />
-                  </label>
-                )}
-              </div>}
-
-              {/* Step navigation — checklist */}
-              {active && (
-                <div style={sectionCard}>
-                  {/* Checklist */}
-                  <div style={{ display: "grid", gap: 2, marginBottom: 14 }}>
-                    {STEPS.filter(s => s !== "START").map((step) => {
-                      const rel = relevantSteps(active.roofs);
-                      const isCurrent   = liveStep === step;
-                      const isCompleted = stepIndex(liveStep) > stepIndex(step);
-                      const isSkipped   = !rel.has(step) && !isCurrent && !isCompleted;
-                      return (
-                        <div
-                          key={step}
-                          className="rv-step-row"
-                          onClick={() => isCompleted ? jumpToStep(step) : undefined}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "5px 8px",
-                            borderRadius: 7,
-                            cursor: isCompleted ? "pointer" : "default",
-                            background: isCurrent ? "rgba(234,88,12,0.07)" : "transparent",
-                            opacity: isSkipped ? 0.38 : 1,
-                          }}
-                        >
-                          {/* Status icon */}
-                          <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            {isCompleted ? (
-                              <svg width="16" height="16" viewBox="0 0 16 16">
-                                <circle cx="8" cy="8" r="7" fill="#ea580c"/>
-                                <polyline points="4.5,8.5 7,11 11.5,5.5" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                              </svg>
-                            ) : isCurrent ? (
-                              <svg width="16" height="16" viewBox="0 0 16 16">
-                                <circle cx="8" cy="8" r="7" fill="none" stroke="#ea580c" strokeWidth="2"/>
-                                <circle cx="8" cy="8" r="3.5" fill="#ea580c"/>
-                              </svg>
-                            ) : isSkipped ? (
-                              <span style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1 }}>—</span>
-                            ) : (
-                              <svg width="16" height="16" viewBox="0 0 16 16">
-                                <circle cx="8" cy="8" r="7" fill="none" stroke="#cbd5e1" strokeWidth="1.5"/>
-                              </svg>
-                            )}
-                          </div>
-                          {/* Step name */}
-                          <span style={{
-                            fontSize: 12,
-                            fontWeight: isCurrent ? 600 : isCompleted ? 500 : 400,
-                            color: isCurrent ? "#c2410c" : isCompleted ? "#334155" : "#94a3b8",
-                            flex: 1,
-                          }}>
-                            {STEP_SHORT[step]}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Current step detail */}
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b", marginBottom: 5, paddingTop: 8, borderTop: "1px solid rgba(15,23,42,0.05)" }}>
-                    {STEP_TITLE[liveStep]}
-                  </div>
-                  {STEP_HINT[liveStep] && (
-                    <p style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, margin: "0 0 8px" }}>
-                      {STEP_HINT[liveStep]}
-                    </p>
-                  )}
-                  {STEP_TIP[liveStep] && (
-                    <div style={tipBox}>💡 {STEP_TIP[liveStep]}</div>
-                  )}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
-                    <button className="rv-btn-ghost" style={ghostBtn} onClick={goBack}
-                      disabled={stepIndex(liveStep) === 0}>← Back</button>
-                    <button
-                      className="rv-btn-primary"
-                      style={{ ...primaryBtn, margin: 0 }}
-                      onClick={goNext}
-                      disabled={!canGoNext()}
-                      title={!canGoNext() && liveStep === "TRACE" ? "Complete roof outline to continue" : undefined}
-                    >
-                      Continue →
-                    </button>
-                  </div>
-                  {liveStep === "EXPORT" && (
-                    <div style={{ marginTop: 12 }}>
-                      <button className="rv-btn-primary" style={greenBtn} onClick={exportPdfTwoPages}>
-                        ↓ Export PDF
-                      </button>
-                      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, textAlign: "center" }}>
-                        Page 1: Shingles &nbsp;·&nbsp; Page 2: Underlayments + metals
-                      </div>
-                      <button
-                        style={{ ...ghostBtn, width: "100%", marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, boxSizing: "border-box" as const }}
-                        onClick={() => { setShowShareModal((v) => !v); setShareEmail(""); setShareEmailSent(false); setShareErrorMsg(""); setShareStatus(""); }}
-                      >
-                        Share with Customer
-                      </button>
-                      {showShareModal && (() => {
-                        const projectName = active?.name || "Your Roof";
-                        const canSend = shareEmail.includes("@") && shareEmail.includes(".");
-                        const isBusy = shareEmailSending || shareStatus === "compressing" || shareStatus === "uploading";
-                        const statusLabel = shareStatus === "compressing" ? "Preparing photos…" : shareStatus === "uploading" ? "Uploading photos…" : shareStatus === "sending" ? "Sending email…" : "";
-                        return (
-                          <div style={{ marginTop: 10, padding: 14, background: "#f8fafc", borderRadius: 10, border: "1.5px solid rgba(234,88,12,0.18)" }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>Share with Customer</div>
-                            {shareEmailSent ? (
-                              <div style={{ textAlign: "center", padding: "14px 0" }}>
-                                <div style={{ fontSize: 22, marginBottom: 6 }}>✓</div>
-                                <div style={{ fontSize: 13, fontWeight: 700, color: "#16a34a" }}>Link sent to {shareEmail}</div>
-                                <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>The customer can open it on any device.</div>
-                              </div>
-                            ) : (
-                              <>
-                                {/* Email input + send */}
-                                <input
-                                  type="email"
-                                  placeholder="customer@email.com"
-                                  value={shareEmail}
-                                  onChange={(e) => { setShareEmail(e.target.value); setShareErrorMsg(""); }}
-                                  style={{ ...inputStyle, fontSize: 13, padding: "9px 12px", marginBottom: 6 }}
-                                />
-                                <button
-                                  style={{ ...primaryBtn, marginTop: 0, padding: "9px 14px", fontSize: 12, width: "100%", boxSizing: "border-box" as const, opacity: canSend && !isBusy ? 1 : 0.45 }}
-                                  disabled={!canSend || isBusy}
-                                  onClick={async () => {
-                                    setShareEmailSending(true);
-                                    setShareErrorMsg("");
-                                    try {
-                                      const urlMap = await prepareAllPhotoUrls();
-                                      const shareUrl = generateShareUrl(urlMap);
-                                      setShareStatus("sending");
-                                      const res = await fetch("/api/send-email", {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ to: shareEmail, shareUrl, projectName }),
-                                      });
-                                      const text = await res.text();
-                                      let body: { ok?: boolean; error?: string } = {};
-                                      try { body = JSON.parse(text); } catch { /* non-JSON */ }
-                                      if (!res.ok || body.error) {
-                                        setShareErrorMsg(`Send failed (${res.status}): ${body.error || text.slice(0, 120)}`);
-                                      } else {
-                                        setShareEmailSent(true);
-                                      }
-                                    } catch (e) {
-                                      setShareErrorMsg(`Network error: ${e}`);
-                                    } finally {
-                                      setShareEmailSending(false);
-                                      setShareStatus("");
-                                    }
-                                  }}
-                                >
-                                  {statusLabel || "Send Link"}
-                                </button>
-                                {shareErrorMsg && (
-                                  <div style={{ fontSize: 11, color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6, padding: "7px 10px", marginTop: 6, lineHeight: 1.4 }}>
-                                    {shareErrorMsg}
-                                  </div>
-                                )}
-
-                                {/* Divider */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
-                                  <div style={{ flex: 1, height: 1, background: "rgba(15,23,42,0.10)" }} />
-                                  <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 500 }}>or copy link</span>
-                                  <div style={{ flex: 1, height: 1, background: "rgba(15,23,42,0.10)" }} />
-                                </div>
-
-                                {/* Copy link button */}
-                                <button
-                                  style={{ ...primaryBtn, marginTop: 0, padding: "8px 14px", fontSize: 12, width: "100%", boxSizing: "border-box" as const, background: shareStatus === "copied" ? "linear-gradient(135deg,#16a34a,#15803d)" : "linear-gradient(135deg,#475569,#334155)", opacity: isBusy ? 0.45 : 1 }}
-                                  disabled={isBusy}
-                                  onClick={async () => {
-                                    setShareErrorMsg("");
-                                    const urlMap = await prepareAllPhotoUrls();
-                                    const shareUrl = generateShareUrl(urlMap);
-                                    try {
-                                      await navigator.clipboard.writeText(shareUrl);
-                                      setShareStatus("copied");
-                                      setAppStats(s => ({ ...s, linksShared: s.linksShared + 1 }));
-                                      setTimeout(() => setShareStatus(""), 2500);
-                                    } catch {
-                                      setShareErrorMsg("Clipboard unavailable — link: " + shareUrl.slice(0, 80));
-                                    }
-                                  }}
-                                >
-                                  {shareStatus === "copied" ? "Copied!" : statusLabel || "Copy Link"}
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Roofs — hidden in presentation mode */}
-              {active && !presentationMode && (
-                <div style={sectionCard}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div style={accentSectionHeader}>
-                      <span style={sectionLabel}>Roofs</span>
-                    </div>
-                    <button className="rv-btn-small" style={smallBtn} onClick={addRoof}>+ Add Roof</button>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-                    {active.roofs.map((r) => (
-                      <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 0,
-                        borderRadius: 99,
-                        border: r.id === active.activeRoofId
-                          ? "1.5px solid rgba(234,88,12,0.35)"
-                          : "1.5px solid rgba(15,23,42,0.10)",
-                        background: r.id === active.activeRoofId ? "rgba(234,88,12,0.08)" : "#fff",
-                        overflow: "hidden",
-                      }}>
+                {/* Photos list */}
+                {active && photos.length > 1 && (
+                  <div className={sectionCard}>
+                    <div className="text-sm font-black mb-2">Photos</div>
+                    <div className="space-y-1.5">
+                      {photos.map((p) => (
                         <button
-                          onClick={() => patchActive((p) => ({ ...p, activeRoofId: r.id }))}
-                          style={{
-                            padding: "5px 10px 5px 14px",
-                            fontSize: 12, fontWeight: 600,
-                            cursor: "pointer",
-                            background: "none", border: "none",
-                            color: r.id === active.activeRoofId ? "#ea580c" : "#475569",
-                          }}
+                          key={p.id}
+                          onClick={() => setActivePhotoId(p.id)}
+                          className={`${btnSmall} w-full text-left ${
+                            p.id === activePhotoId
+                              ? "bg-blue-50 border-blue-400 text-blue-700"
+                              : ""
+                          }`}
                         >
-                          {r.name}{r.closed ? " ✓" : ""}
+                          {p.name || "Untitled"} {!p.src ? "(no photo yet)" : ""}
                         </button>
-                        {active.roofs.length > 1 && (
-                          <button
-                            onClick={() => deleteRoof(r.id)}
-                            title="Delete roof"
-                            style={{
-                              padding: "5px 10px 5px 4px",
-                              fontSize: 13, lineHeight: 1,
-                              cursor: "pointer",
-                              background: "none", border: "none",
-                              color: r.id === active.activeRoofId ? "rgba(234,88,12,0.5)" : "rgba(71,85,105,0.4)",
-                            }}
-                          >×</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Step + navigation */}
+                {active && (
+                  <div className={sectionCard}>
+                    <div className="text-sm font-black">{STEP_TITLE[liveStep]}</div>
+
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        className="rv-btn-ghost flex-1 py-2.5 px-3 rounded-xl border border-slate-200 text-sm font-bold bg-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        onClick={goBack}
+                        disabled={!active || stepIndex(liveStep) === 0}
+                      >
+                        &larr; Back
+                      </button>
+                      <button
+                        className="rv-btn-primary flex-1 py-2.5 px-3 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-orange-500 to-orange-600 shadow-md cursor-pointer"
+                        onClick={goNext}
+                        disabled={!active || !canGoNext()}
+                      >
+                        Continue &rarr;
+                      </button>
+                    </div>
+
+                    {active && liveStep === "EXPORT" && (
+                      <div className="mt-3 space-y-2.5">
+                        {/* Material summary */}
+                        <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                          <div className="text-xs font-black text-slate-600 mb-2">Material Summary</div>
+                          <div className="space-y-1 text-xs text-slate-500">
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="w-4 h-4 rounded border border-slate-200"
+                                style={{ background: `linear-gradient(to bottom, ${shinglePalette(active.shingleColor).top}, ${shinglePalette(active.shingleColor).bot})` }}
+                              />
+                              <span className="font-bold">{active.shingleColor}</span>
+                            </div>
+                            <div>{active.roofs.filter((r) => r.closed).length} roof{active.roofs.filter((r) => r.closed).length !== 1 ? "s" : ""}</div>
+                            {(() => {
+                              const allLines = active.roofs.flatMap((r) => r.lines);
+                              const counts: Record<string, number> = {};
+                              allLines.forEach((l) => { counts[l.kind] = (counts[l.kind] || 0) + 1; });
+                              return Object.entries(counts).map(([k, n]) => (
+                                <div key={k}>{n} {k.toLowerCase()}{n !== 1 ? "s" : ""}</div>
+                              ));
+                            })()}
+                            {active.roofs[0] && (
+                              <div className="text-[10px] text-slate-400 mt-1">
+                                Metal: {active.roofs[0].gutterApronColor} apron, {active.roofs[0].dripEdgeColor} drip, {active.roofs[0].valleyMetalColor} valley
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <button
+                          className="rv-btn-green w-full py-2.5 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-green-500 to-green-600 shadow-md cursor-pointer"
+                          onClick={exportPdfTwoPages}
+                        >
+                          Export 2-Page PDF
+                        </button>
+                        <button
+                          className="rv-btn-ghost w-full py-2.5 rounded-xl text-sm font-bold border border-slate-200 bg-white cursor-pointer"
+                          onClick={handleCopyLink}
+                        >
+                          Copy Customer Link
+                        </button>
+                        <button
+                          className="rv-btn-ghost w-full py-2.5 rounded-xl text-sm font-bold border border-slate-200 bg-white cursor-pointer"
+                          onClick={() => setShowEmailDialog(true)}
+                        >
+                          Send Customer Link
+                        </button>
+                        <div className="text-xs text-slate-400">
+                          Page 1: Finished shingles &middot; Page 2: Underlayments + metals
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Roofs */}
+                {active && (
+                  <div className={sectionCard}>
+                    <div className="text-sm font-black">Roofs</div>
+                    <div className="text-xs text-slate-400 mt-1">Multiple roofs in the same photo supported.</div>
+
+                    <div className="flex gap-2 flex-wrap mt-3">
+                      <button
+                        className="rv-btn-green px-3 py-2 rounded-xl text-xs font-bold text-green-700 bg-green-50 border border-green-200 cursor-pointer"
+                        onClick={addRoof}
+                      >
+                        + Add Roof
+                      </button>
+                      <button
+                        className={btnSmall}
+                        onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}
+                      >
+                        {active.showGuidesDuringInstall ? "Hide guides" : "Show guides"}
+                      </button>
+                      <button
+                        className={btnSmall}
+                        onClick={() => patchActive((p) => ({ ...p, showEditHandles: !p.showEditHandles }))}
+                      >
+                        {active.showEditHandles ? "Hide handles" : "Edit handles"}
+                      </button>
+                    </div>
+
+                    {/* Roof list */}
+                    <div className="flex gap-2 flex-wrap mt-3">
+                      {active.roofs.map((r) => (
+                        <button
+                          key={r.id}
+                          onClick={() => patchActive((p) => ({ ...p, activeRoofId: r.id }))}
+                          className={`${btnSmall} ${
+                            r.id === active.activeRoofId
+                              ? "bg-blue-50 border-blue-400 text-blue-700"
+                              : ""
+                          }`}
+                        >
+                          {r.name} {r.closed ? "\u2713" : ""}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Drawing tools — TRACE step only */}
+                    {activeRoof && liveStep === "TRACE" && (
+                      <div className="mt-3 space-y-2">
+                        {!activeRoof.closed ? (
+                          <>
+                            <button
+                              className="rv-btn-primary w-full py-2.5 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-blue-500 to-blue-600 shadow-md cursor-pointer"
+                              onClick={() => { setTool("TRACE_ROOF"); setDraftLine(null); setDraftHole(null); }}
+                            >
+                              Start Tracing Roof Edge
+                            </button>
+                            <button
+                              className={`${btnSmall} w-full`}
+                              onClick={undoOutlinePoint}
+                              disabled={activeRoof.outline.length < 2}
+                            >
+                              Undo last point
+                            </button>
+                            <div className="text-xs text-slate-400">Tap the first dot to close the roof.</div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="text-xs font-black text-slate-700 mt-1">Draw lines + exclusions</div>
+
+                            <div className="grid gap-1.5">
+                              <button className="rv-btn-primary py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-500 to-blue-600 cursor-pointer" onClick={() => beginDraw("EAVE")}>Draw EAVES</button>
+                              <button className="rv-btn-primary py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-500 to-blue-600 cursor-pointer" onClick={() => beginDraw("RAKE")}>Draw RAKES</button>
+                              <button className="rv-btn-primary py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-500 to-blue-600 cursor-pointer" onClick={() => beginDraw("VALLEY")}>Draw VALLEYS</button>
+                              <button className="rv-btn-primary py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-500 to-blue-600 cursor-pointer" onClick={() => beginDraw("RIDGE")}>Draw RIDGES</button>
+                              <button className="rv-btn-primary py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-500 to-blue-600 cursor-pointer" onClick={() => beginDraw("HIP")}>Draw HIPS</button>
+
+                              <div className="h-1" />
+
+                              <button className="rv-btn-primary py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-500 to-blue-600 cursor-pointer" onClick={beginHole}>Draw Dormer / Exclusion (hole)</button>
+
+                              {tool === "TRACE_HOLE" ? (
+                                <div className="flex gap-2">
+                                  <button className={`${btnSmall} flex-1`} onClick={finishHole} disabled={!draftHole || draftHole.length < 6}>Finish hole</button>
+                                  <button className={`${btnSmall} flex-1`} onClick={undoHolePoint} disabled={!draftHole || draftHole.length < 2}>Undo point</button>
+                                </div>
+                              ) : (
+                                <div className="flex gap-2">
+                                  <button className={`${btnSmall} flex-1`} onClick={finishDraftLine} disabled={!draftLine || draftLine.points.length < 4}>Finish line</button>
+                                  <button className={`${btnSmall} flex-1`} onClick={undoDraftPoint} disabled={!draftLine || draftLine.points.length < 2}>Undo point</button>
+                                </div>
+                              )}
+
+                              <button className={`${btnSmall} w-full`} onClick={() => { setTool("NONE"); setDraftLine(null); setDraftHole(null); }}>Stop tool</button>
+                              <button className={`${btnSmall} w-full`} onClick={resetSelectedRoof}>Reset selected roof</button>
+
+                              <div className="text-xs text-slate-400 mt-1">
+                                Tip: dormers/exclusions: tap around the dormer, then tap the first dot to close.
+                              </div>
+                            </div>
+                          </>
                         )}
                       </div>
-                    ))}
+                    )}
                   </div>
-
-                  <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-                    <button
-                      style={{ ...smallBtn, flex: 1 }}
-                      onClick={() => patchActive((p) => ({ ...p, showGuidesDuringInstall: !p.showGuidesDuringInstall }))}
-                    >
-                      {active.showGuidesDuringInstall ? "Hide guides" : "Show guides"}
-                    </button>
-                    <button
-                      style={{ ...smallBtn, flex: 1 }}
-                      onClick={() => patchActive((p) => ({ ...p, showEditHandles: !p.showEditHandles }))}
-                    >
-                      {active.showEditHandles ? "Hide handles" : "Edit handles"}
-                    </button>
-                  </div>
-
-                  {/* Ice & Water brush tools */}
-                  {activeRoof && liveStep === "ICE_WATER" && (
-                    <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
-                      {/* Placement toggles */}
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 }}>Apply On</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                          {([
-                            ["Eaves", "iceWaterOnEaves"] as const,
-                            ["Valleys", "iceWaterOnValleys"] as const,
-                          ]).map(([label, key]) => {
-                            const on = activeRoof[key] !== false;
-                            return (
-                              <button
-                                key={key}
-                                onClick={() => patchActiveRoof((r) => ({ ...r, [key]: !on }))}
-                                style={{
-                                  ...smallBtn,
-                                  background: on ? "rgba(234,88,12,0.08)" : "#f8fafc",
-                                  color: on ? "#ea580c" : "#94a3b8",
-                                  borderColor: on ? "rgba(234,88,12,0.30)" : "rgba(15,23,42,0.12)",
-                                  fontWeight: 700,
-                                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                                }}
-                              >
-                                <span style={{ fontSize: 13, lineHeight: 1 }}>{on ? "✓" : "○"}</span>
-                                {label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <button
-                        style={{
-                          ...ghostBtn,
-                          width: "100%",
-                          background: tool === "BRUSH_ICE_WATER" ? "rgba(18,23,38,0.10)" : "#ffffff",
-                          border: `1.5px solid ${tool === "BRUSH_ICE_WATER" ? "rgba(18,23,38,0.45)" : "rgba(15,23,42,0.12)"}`,
-                          color: tool === "BRUSH_ICE_WATER" ? "#0f172a" : "#475569",
-                          fontWeight: tool === "BRUSH_ICE_WATER" ? 700 : 600,
-                          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                        }}
-                        onClick={() => {
-                          setTool(tool === "BRUSH_ICE_WATER" ? "NONE" : "BRUSH_ICE_WATER");
-                        }}
-                      >
-                        🖌 {tool === "BRUSH_ICE_WATER" ? "Painting — drag on canvas" : "Paint Custom Ice & Water"}
-                      </button>
-                      {tool === "BRUSH_ICE_WATER" && (
-                        <div style={{ marginTop: 6, background: "rgba(18,23,38,0.06)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "#334155" }}>
-                          Drag on the roof to paint. Stroke auto-straightens on release.
-                          <div style={{ marginTop: 6 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                              <span>Brush size</span>
-                              <span style={{ fontWeight: 700 }}>{activeRoof.iceWaterBrushSize ?? 30}px</span>
-                            </div>
-                            <input
-                              type="range" min={5} max={100} step={1}
-                              value={activeRoof.iceWaterBrushSize ?? 30}
-                              onChange={(e) => patchActiveRoof((r) => ({ ...r, iceWaterBrushSize: Number(e.target.value) }))}
-                              style={{ width: "100%", accentColor: "#0f172a" }}
-                            />
-                          </div>
-                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                            <button
-                              style={{ ...smallBtn, flex: 1, fontSize: 11 }}
-                              onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: (r.iceWaterBrush ?? []).slice(0, -1) }))}
-                              disabled={!(activeRoof.iceWaterBrush ?? []).length}
-                            >↩ Undo</button>
-                            <button
-                              style={{ ...smallBtn, flex: 1, fontSize: 11, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
-                              onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: [] }))}
-                              disabled={!(activeRoof.iceWaterBrush ?? []).length}
-                            >Clear all</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Trace tools */}
-                  {activeRoof && liveStep === "TRACE" && (
-                    <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(15,23,42,0.07)" }}>
-                      {!activeRoof.closed ? (
-                        /* ── Step A: outline the roof ── */
-                        <div style={{ display: "grid", gap: 8 }}>
-                          <div style={sectionLabel}>Step A — Outline the Roof</div>
-
-                          <button
-                            className={tool === "TRACE_ROOF" ? "rv-btn-tracing" : "rv-btn-ghost"}
-                            style={{
-                              ...ghostBtn,
-                              background: tool === "TRACE_ROOF" ? "rgba(234,88,12,0.10)" : "rgba(234,88,12,0.04)",
-                              border: `1.5px solid rgba(234,88,12,${tool === "TRACE_ROOF" ? "0.45" : "0.25"})`,
-                              color: "#c2410c",
-                              fontWeight: tool === "TRACE_ROOF" ? 700 : 600,
-                            }}
-                            onClick={() => { setTool("TRACE_ROOF"); setDraftLine(null); setDraftHole(null); }}
-                          >
-                            {tool === "TRACE_ROOF" ? "✦ Tracing — click the canvas" : "Start Tracing Roof Edge"}
-                          </button>
-                          <button style={ghostBtn} onClick={undoOutlinePoint} disabled={activeRoof.outline.length < 2}>
-                            Undo Last Point
-                          </button>
-                          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.55, background: "#f8fafc", borderRadius: 8, padding: "8px 10px" }}>
-                            Click around the roof edge on the photo. Click the <strong>first point again</strong> to close and finish the outline.
-                          </div>
-                        </div>
-                      ) : (
-                        /* ── Step B: label the edges ── */
-                        <div style={{ display: "grid", gap: 8 }}>
-                          <div style={sectionLabel}>Label Roof Edges</div>
-                          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
-                            AI labels your drawn edges automatically. Click any label to edit.
-                          </div>
-
-                          {/* Auto-Label primary CTA */}
-                          <button
-                            style={{ ...primaryBtn, fontSize: 13, display: "flex", alignItems: "center",
-                              justifyContent: "center", gap: 8 }}
-                            onClick={triggerAutoLabel}
-                            disabled={autoLabelState === "loading"}
-                          >
-                            {autoLabelState === "loading"
-                              ? <><span className="spinner" />Analyzing edges…</>
-                              : activeRoof.lines.length > 0
-                                ? <>↺ Re-run Auto-Label</>
-                                : <>⚡ Auto-Label Roof Edges</>}
-                            <span style={{ fontSize: 10, background: "rgba(16,185,129,0.12)", color: "#059669",
-                              border: "1px solid rgba(16,185,129,0.3)", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>AI</span>
-                          </button>
-
-                          {/* Run AI Judge button — above suggest buttons */}
-                          <button
-                            style={{ ...smallBtn, width: "100%", fontSize: 12, display: "flex",
-                              alignItems: "center", justifyContent: "center", gap: 6,
-                              color: "#6366f1", borderColor: "rgba(99,102,241,0.3)",
-                              background: "rgba(99,102,241,0.05)" }}
-                            onClick={() => runAiJudgeLocally(activeRoof, activeRoof.lines)}
-                          >
-                            🔍 Run AI Judge
-                            <span style={{ fontSize: 9, background: "rgba(99,102,241,0.12)", color: "#6366f1",
-                              border: "1px solid rgba(99,102,241,0.25)", borderRadius: 3,
-                              padding: "1px 4px", fontWeight: 700 }}>QC</span>
-                          </button>
-
-                          {/* Suggest Ridge / Suggest Valleys secondary buttons */}
-                          <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.4 }}>
-                            Facade photos may not show true ridges/valleys clearly.
-                          </div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
-                            <button
-                              style={{ ...smallBtn, fontSize: 11, display: "flex",
-                                alignItems: "center", justifyContent: "center", gap: 5,
-                                color: "#d97706", borderColor: "rgba(245,158,11,0.25)",
-                                background: "rgba(245,158,11,0.04)" }}
-                              onClick={triggerSuggestRidges}
-                            >
-                              ⬡ Suggest Ridge
-                            </button>
-                            <button
-                              style={{ ...smallBtn, fontSize: 11, display: "flex",
-                                alignItems: "center", justifyContent: "center", gap: 5,
-                                color: "#64748b", borderColor: "rgba(100,116,139,0.25)",
-                                background: "rgba(100,116,139,0.04)" }}
-                              onClick={triggerSuggestValleys}
-                            >
-                              ◈ Suggest Valley
-                            </button>
-                          </div>
-
-                          {/* AI Judge result card */}
-                          {aiJudgeResult && (() => {
-                            const { eave, rake, ridge, valley } = aiJudgeResult;
-                            const ridgeBadge = ridge.confidence === "high"
-                              ? { label: "High", color: "#059669", bg: "rgba(16,185,129,0.08)", border: "rgba(16,185,129,0.25)" }
-                              : ridge.confidence === "medium"
-                                ? { label: "Medium", color: "#d97706", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.25)" }
-                                : ridge.confidence === "low"
-                                  ? { label: "Low", color: "#dc2626", bg: "rgba(220,38,38,0.07)", border: "rgba(220,38,38,0.25)" }
-                                  : { label: "Not detected", color: "#94a3b8", bg: "rgba(15,23,42,0.03)", border: "rgba(15,23,42,0.10)" };
-                            const valleyBadge = valley.confidence === "labeled"
-                              ? { label: "Labeled", color: "#059669", bg: "rgba(16,185,129,0.08)", border: "rgba(16,185,129,0.25)" }
-                              : valley.confidence === "possible"
-                                ? { label: "Possible", color: "#d97706", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.25)" }
-                                : { label: "Not visible", color: "#94a3b8", bg: "rgba(15,23,42,0.03)", border: "rgba(15,23,42,0.10)" };
-                            return (
-                              <div style={{ background: "#f8fafc", border: "1px solid rgba(15,23,42,0.09)",
-                                borderRadius: 8, padding: "10px 12px", display: "grid", gap: 7 }}>
-                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                  <div style={{ fontSize: 11, fontWeight: 700, color: "#0f172a" }}>AI Judge</div>
-                                  <button style={{ ...smallBtn, padding: "1px 6px", fontSize: 10 }}
-                                    onClick={() => setAiJudgeResult(null)}>✕</button>
-                                </div>
-                                {/* Eave row */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
-                                  <span>{eave.count > 0 ? "✅" : "⚠️"}</span>
-                                  <span style={{ flex: 1, color: "#475569" }}>Eaves ({eave.count})</span>
-                                  <span style={{ color: eave.count > 0 ? "#059669" : "#dc2626", fontWeight: 600 }}>
-                                    {eave.count > 0 ? "OK" : "None found"}
-                                  </span>
-                                </div>
-                                {/* Rake row */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
-                                  <span>{rake.count > 0 ? "✅" : "⚠️"}</span>
-                                  <span style={{ flex: 1, color: "#475569" }}>Rakes ({rake.count})</span>
-                                  <span style={{ color: rake.count > 0 ? "#059669" : "#dc2626", fontWeight: 600 }}>
-                                    {rake.count > 0 ? "OK" : "None found"}
-                                  </span>
-                                </div>
-                                {/* Ridge row */}
-                                <div style={{ display: "grid", gap: 3 }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
-                                    <span>{ridge.confidence === "high" ? "✅" : ridge.confidence === "none" ? "—" : "⚠️"}</span>
-                                    <span style={{ flex: 1, color: "#475569" }}>Ridge</span>
-                                    <span style={{ fontSize: 9, fontWeight: 700, color: ridgeBadge.color,
-                                      background: ridgeBadge.bg, border: `1px solid ${ridgeBadge.border}`,
-                                      borderRadius: 3, padding: "1px 5px" }}>{ridgeBadge.label}</span>
-                                  </div>
-                                  {ridge.reasons.map((r, i) => (
-                                    <div key={i} style={{ fontSize: 10, color: "#94a3b8", paddingLeft: 20 }}>• {r}</div>
-                                  ))}
-                                  {(ridge.confidence === "medium" || ridge.confidence === "low") && ridge.hasCandidates && (
-                                    <button style={{ ...smallBtn, fontSize: 10, marginLeft: 18, alignSelf: "start",
-                                      color: "#d97706", borderColor: "rgba(245,158,11,0.3)", background: "rgba(245,158,11,0.05)" }}
-                                      onClick={triggerSuggestRidges}>⬡ Suggest Ridge</button>
-                                  )}
-                                </div>
-                                {/* Valley row */}
-                                <div style={{ display: "grid", gap: 3 }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
-                                    <span>{valley.confidence === "labeled" ? "✅" : valley.confidence === "none" ? "—" : "⚠️"}</span>
-                                    <span style={{ flex: 1, color: "#475569" }}>Valley</span>
-                                    <span style={{ fontSize: 9, fontWeight: 700, color: valleyBadge.color,
-                                      background: valleyBadge.bg, border: `1px solid ${valleyBadge.border}`,
-                                      borderRadius: 3, padding: "1px 5px" }}>{valleyBadge.label}</span>
-                                  </div>
-                                  {valley.reasons.map((r, i) => (
-                                    <div key={i} style={{ fontSize: 10, color: "#94a3b8", paddingLeft: 20 }}>• {r}</div>
-                                  ))}
-                                  {valley.confidence === "possible" && valley.hasCandidates && (
-                                    <button style={{ ...smallBtn, fontSize: 10, marginLeft: 18, alignSelf: "start",
-                                      color: "#64748b", borderColor: "rgba(100,116,139,0.3)", background: "rgba(100,116,139,0.05)" }}
-                                      onClick={triggerSuggestValleys}>◈ Suggest Valley</button>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })()}
-
-                          {autoLabelError && (
-                            <div style={{ fontSize: 11, color: "#dc2626" }}>{autoLabelError}</div>
-                          )}
-
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5 }}>
-                            {([
-                              ["EAVE",   "Bottom edge"],
-                              ["RAKE",   "Side edge"],
-                              ["VALLEY", "Valley"],
-                              ["RIDGE",  "Ridge (top)"],
-                              ["HIP",    "Hip"],
-                            ] as [LineKind, string][]).map(([kind, desc]) => (
-                              <button
-                                key={kind}
-                                style={{
-                                  ...lineKindBtn(kind),
-                                  background: tool === `DRAW_${kind}` ? lineKindBtn(kind).background : "rgba(15,23,42,0.03)",
-                                  opacity: tool === `DRAW_${kind}` ? 1 : 0.85,
-                                }}
-                                title={desc}
-                                onClick={() => beginDraw(kind)}
-                              >
-                                {kind}
-                              </button>
-                            ))}
-                            <button
-                              style={{ ...lineKindBtn("VALLEY"), background: "rgba(15,23,42,0.04)", borderColor: "rgba(15,23,42,0.12)", color: "#475569" }}
-                              onClick={beginHole}
-                            >
-                              DORMER
-                            </button>
-                          </div>
-
-                          {/* Active tool controls */}
-                          {(tool === "TRACE_HOLE" || tool.startsWith("DRAW_")) && (
-                            <div style={{ background: "rgba(234,88,12,0.04)", border: "1px solid rgba(234,88,12,0.15)", borderRadius: 8, padding: "8px 10px", display: "grid", gap: 6 }}>
-                              <div style={{ fontSize: 11, fontWeight: 600, color: "#1d4ed8" }}>
-                                {tool === "TRACE_HOLE" ? "Drawing dormer/exclusion" : `Drawing ${tool.replace("DRAW_", "")} line`}
-                              </div>
-                              <div style={{ fontSize: 11, color: "#64748b" }}>Click points on the canvas · Press <kbd style={{ background: "#e2e8f0", borderRadius: 4, padding: "1px 5px", fontFamily: "monospace" }}>Enter</kbd> or tap Finish to save</div>
-                              <div style={{ display: "flex", gap: 6 }}>
-                                {tool === "TRACE_HOLE" ? (
-                                  <button style={{ ...smallBtn, flex: 1 }} onClick={finishHole} disabled={!draftHole || draftHole.length < 6}>Finish hole</button>
-                                ) : (
-                                  <button style={{ ...smallBtn, flex: 1 }} onClick={finishDraftLine} disabled={!draftLine || draftLine.points.length < 4}>Finish line</button>
-                                )}
-                                <button style={{ ...smallBtn, flex: 1 }} onClick={tool === "TRACE_HOLE" ? undoHolePoint : undoDraftPoint}>Undo point</button>
-                                <button style={{ ...smallBtn }} onClick={() => { setTool("NONE"); setDraftLine(null); setDraftHole(null); }}>✕</button>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Lines drawn */}
-                          {activeRoof.lines.length > 0 && (
-                            <div style={{ display: "grid", gap: 4 }}>
-                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>Lines drawn</div>
-                              {activeRoof.lines.map((line, globalIdx) => (
-                                        <div key={line.id} style={{ display: "flex", alignItems: "center", gap: 6,
-                                          background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
-                                          <span style={{
-                                            width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
-                                            background: kindColor(line.kind),
-                                            display: "flex", alignItems: "center", justifyContent: "center",
-                                            fontSize: 11, fontWeight: 800, color: "#fff",
-                                          }}>{globalIdx + 1}</span>
-                                          <span style={{ fontSize: 11, color: "#475569", fontWeight: 600, flexShrink: 0 }}>
-                                            {line.kind}
-                                          </span>
-                                          {line.aiLabeled && (
-                                            <span style={{ fontSize: 9, background: "rgba(16,185,129,0.1)", color: "#059669",
-                                              border: "1px solid rgba(16,185,129,0.25)", borderRadius: 3,
-                                              padding: "1px 4px", fontWeight: 700, flexShrink: 0 }}>AI</span>
-                                          )}
-                                          {line.confidence !== undefined && (() => {
-                                            const c = line.confidence;
-                                            const label = c >= 0.8 ? "High" : c >= 0.6 ? "Med" : "Low";
-                                            const color = c >= 0.8 ? "#059669" : c >= 0.6 ? "#d97706" : "#dc2626";
-                                            const bg = c >= 0.8 ? "rgba(16,185,129,0.08)" : c >= 0.6 ? "rgba(245,158,11,0.08)" : "rgba(220,38,38,0.07)";
-                                            const border = c >= 0.8 ? "rgba(16,185,129,0.25)" : c >= 0.6 ? "rgba(245,158,11,0.25)" : "rgba(220,38,38,0.25)";
-                                            return (
-                                              <span style={{ fontSize: 9, background: bg, color,
-                                                border: `1px solid ${border}`, borderRadius: 3,
-                                                padding: "1px 4px", fontWeight: 700, flexShrink: 0 }}>{label}</span>
-                                            );
-                                          })()}
-                                          <select
-                                            value={line.kind}
-                                            style={{ fontSize: 11, border: "1px solid rgba(15,23,42,0.15)", borderRadius: 4, padding: "1px 4px", flex: 1 }}
-                                            onChange={e => patchActiveRoof(r => ({
-                                              ...r, lines: r.lines.map(li => li.id === line.id ? { ...li, kind: e.target.value as LineKind } : li)
-                                            }))}
-                                          >
-                                            {(["EAVE","RAKE","VALLEY","RIDGE","HIP"] as LineKind[]).map(k =>
-                                              <option key={k} value={k}>{k}</option>
-                                            )}
-                                          </select>
-                                          <button
-                                            title={line.locked ? "Unlock — allow re-label" : "Lock label"}
-                                            style={{ ...smallBtn, padding: "2px 6px", fontSize: 12,
-                                              color: line.locked ? "#d97706" : "#cbd5e1",
-                                              borderColor: line.locked ? "rgba(217,119,6,0.3)" : "rgba(15,23,42,0.08)" }}
-                                            onClick={() => patchActiveRoof(r => ({
-                                              ...r, lines: r.lines.map(li => li.id === line.id ? { ...li, locked: !li.locked } : li)
-                                            }))}
-                                          >
-                                            {line.locked ? "🔒" : "🔓"}
-                                          </button>
-                                          <button
-                                            style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
-                                              color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
-                                            onClick={() => deleteLine(line.id)}
-                                          >×</button>
-                                        </div>
-                                      ))}
-                            </div>
-                          )}
-
-                          {/* Ridge / Valley Suggestions */}
-                          {autoLabelSuggestions.length > 0 && (
-                            <div style={{ display: "grid", gap: 4 }}>
-                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>
-                                {autoLabelSuggestions[0]?.kind === "RIDGE" ? "Ridge Suggestions" : "Valley Suggestions"}
-                              </div>
-                              {autoLabelSuggestions.map((s, i) => {
-                                const c = s.confidence;
-                                const confLabel = c >= 0.8 ? "High" : c >= 0.6 ? "Med" : "Low";
-                                const confColor = c >= 0.8 ? "#059669" : c >= 0.6 ? "#d97706" : "#dc2626";
-                                const confBg = c >= 0.8 ? "rgba(16,185,129,0.08)" : c >= 0.6 ? "rgba(245,158,11,0.08)" : "rgba(220,38,38,0.07)";
-                                const confBorder = c >= 0.8 ? "rgba(16,185,129,0.25)" : c >= 0.6 ? "rgba(245,158,11,0.25)" : "rgba(220,38,38,0.25)";
-                                return (
-                                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 6,
-                                    background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
-                                    <span style={{ width: 8, height: 8, borderRadius: "50%",
-                                      background: kindColor(s.kind as LineKind), flexShrink: 0, display: "inline-block" }} />
-                                    <span style={{ fontSize: 11, fontWeight: 600, color: "#475569" }}>
-                                      {s.kind === "RIDGE" ? "Ridge" : "Valley"} {i + 1}
-                                    </span>
-                                    <span style={{ fontSize: 9, background: confBg, color: confColor,
-                                      border: `1px solid ${confBorder}`, borderRadius: 3,
-                                      padding: "1px 4px", fontWeight: 700, flexShrink: 0 }}>{confLabel}</span>
-                                    <span style={{ flex: 1 }} />
-                                    <button style={{ ...smallBtn, padding: "2px 7px", fontSize: 11 }}
-                                      onClick={() => adoptAutoLabelSuggestion(i)}>Adopt</button>
-                                    <button style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
-                                      color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
-                                      onClick={() => setAutoLabelSuggestions(prev => prev.filter((_, j) => j !== i))}>✕</button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-
-                          {/* Edge Length Totals */}
-                          {activeRoof.lines.length > 0 && (() => {
-                            const byKind = (k: LineKind) =>
-                              activeRoof.lines.filter(l => l.kind === k).reduce((s, l) => s + lineLength(l.points), 0);
-                            const rows = (["EAVE","RAKE","RIDGE","VALLEY","HIP"] as LineKind[])
-                              .map(k => ({ k, len: Math.round(byKind(k)) }))
-                              .filter(r => r.len > 0);
-                            if (!rows.length) return null;
-                            return (
-                              <div style={{ display: "grid", gap: 4 }}>
-                                <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Edge Lengths</div>
-                                {rows.map(({ k, len }) => (
-                                  <div key={k} style={{ display: "flex", justifyContent: "space-between",
-                                    fontSize: 11, padding: "2px 8px" }}>
-                                    <span style={{ color: kindColor(k), fontWeight: 600 }}>{k}</span>
-                                    <span style={{ color: "#475569" }}>{len} px</span>
-                                  </div>
-                                ))}
-                              </div>
-                            );
-                          })()}
-
-                          {/* Dormer holes */}
-                          {activeRoof.holes.length > 0 && (
-                            <div style={{ display: "grid", gap: 4 }}>
-                              <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>Dormer holes</div>
-                              {activeRoof.holes.map((_, i) => (
-                                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6,
-                                  background: "rgba(15,23,42,0.03)", borderRadius: 6, padding: "4px 8px" }}>
-                                  <span style={{ flex: 1, fontSize: 11, color: "#475569", fontWeight: 600 }}>
-                                    Dormer {i + 1}
-                                  </span>
-                                  <button
-                                    style={{ ...smallBtn, padding: "2px 7px", fontSize: 11,
-                                      color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
-                                    onClick={() => deleteHole(i)}
-                                  >×</button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* ── Clean Up Lines ── */}
-                          {!cleanupOpen ? (
-                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                              <button
-                                style={{ ...smallBtn, flex: 1, background: "linear-gradient(135deg,#eff6ff,#dbeafe)", borderColor: "#93c5fd", color: "#1d4ed8", fontWeight: 700 }}
-                                onClick={() => { setCleanupOpen(true); setCleanupLockedIds(new Set()); }}
-                              >
-                                ✦ Clean Up Lines
-                              </button>
-                              {cleanupUndoRoof && (
-                                <button
-                                  title="Undo last cleanup"
-                                  style={{ ...smallBtn, color: "#7c3aed", borderColor: "rgba(124,58,237,0.3)", flexShrink: 0 }}
-                                  onClick={() => {
-                                    if (!activeRoof || !cleanupUndoRoof) return;
-                                    patchActiveRoof(() => cleanupUndoRoof);
-                                    setCleanupUndoRoof(null);
-                                  }}
-                                >↩ Undo</button>
-                              )}
-                            </div>
-                          ) : (
-                            /* ── Cleanup panel (inline) ── */
-                            <div style={{ background: "#f0f9ff", border: "1.5px solid #93c5fd", borderRadius: 10, padding: "12px 12px 10px", display: "grid", gap: 10 }}>
-                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                <div style={{ fontSize: 12, fontWeight: 800, color: "#1e40af" }}>✦ Clean Up Lines</div>
-                                <button
-                                  style={{ ...smallBtn, padding: "2px 7px", fontSize: 11, color: "#475569" }}
-                                  onClick={() => setCleanupOpen(false)}
-                                >✕</button>
-                              </div>
-
-                              {/* Strength slider */}
-                              <div>
-                                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                                  <span style={{ fontSize: 11, fontWeight: 600, color: "#334155" }}>Strength</span>
-                                  <span style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8" }}>{Math.round(cleanupStrength * 100)}%</span>
-                                </div>
-                                <input
-                                  type="range" min={0} max={100}
-                                  value={Math.round(cleanupStrength * 100)}
-                                  onChange={(e) => setCleanupStrength(Number(e.target.value) / 100)}
-                                  style={{ width: "100%", accentColor: "#ea580c" }}
-                                />
-                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#94a3b8", marginTop: 1 }}>
-                                  <span>Conservative</span><span>Aggressive</span>
-                                </div>
-                              </div>
-
-                              {/* Angle snap toggle */}
-                              <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11, fontWeight: 600, color: "#334155", cursor: "pointer" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={cleanupSnapAngles}
-                                  onChange={(e) => setCleanupSnapAngles(e.target.checked)}
-                                  style={{ accentColor: "#ea580c", width: 14, height: 14 }}
-                                />
-                                Snap to 0° / 45° / 90°
-                              </label>
-
-                              {/* Lock lines */}
-                              {activeRoof && activeRoof.lines.length > 0 && (
-                                <div>
-                                  <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 5 }}>
-                                    Lock lines (skip cleanup)
-                                  </div>
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                    {activeRoof.lines.map((l, i) => (
-                                      <label key={l.id} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "3px 6px", borderRadius: 6, background: "rgba(255,255,255,0.6)" }}>
-                                        <input
-                                          type="checkbox"
-                                          checked={cleanupLockedIds.has(l.id)}
-                                          onChange={(e) => {
-                                            setCleanupLockedIds((prev) => {
-                                              const next = new Set(prev);
-                                              if (e.target.checked) next.add(l.id); else next.delete(l.id);
-                                              return next;
-                                            });
-                                          }}
-                                          style={{ accentColor: "#7c3aed", width: 13, height: 13 }}
-                                        />
-                                        <span style={{ flex: 1, fontSize: 11, color: "#475569", fontWeight: 500 }}>
-                                          {l.kind} {activeRoof.lines.filter((x) => x.kind === l.kind).indexOf(l) + 1}
-                                        </span>
-                                        <span style={{ width: 10, height: 10, borderRadius: "50%", background: kindColor(l.kind), flexShrink: 0, display: "inline-block" }} />
-                                      </label>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Preview hint */}
-                              <div style={{ fontSize: 10, color: "#60a5fa", fontStyle: "italic", lineHeight: 1.4 }}>
-                                Green lines show the result. Adjust strength, then Apply.
-                              </div>
-
-                              {/* Action buttons */}
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <button
-                                  style={{ ...smallBtn, flex: 1, color: "#475569" }}
-                                  onClick={() => setCleanupOpen(false)}
-                                >Cancel</button>
-                                <button
-                                  style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#2563eb,#1d4ed8)", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer" }}
-                                  onClick={() => {
-                                    if (!activeRoof || !cleanupPreview) return;
-                                    setCleanupUndoRoof({ ...activeRoof });
-                                    patchActiveRoof(() => cleanupPreview);
-                                    setCleanupOpen(false);
-                                  }}
-                                >Apply</button>
-                              </div>
-                            </div>
-                          )}
-
-
-                          <button
-                            style={{ ...smallBtn, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)", fontSize: 11 }}
-                            onClick={resetSelectedRoof}
-                          >
-                            Reset this roof outline
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                </div>
-              )}
-            </>
-          )}
-
-          {/* ── SETTINGS TAB ── */}
-          {uiTab === "settings" && active && !presentationMode && (
-            <div style={{ padding: "4px 0 16px" }}>
-
-              {/* Roof selector */}
-              <div style={{ marginBottom: 16 }}>
-                <label style={fieldLabel}>Editing roof</label>
-                <select
-                  value={active.activeRoofId}
-                  onChange={(e) => patchActive((p) => ({ ...p, activeRoofId: e.target.value }))}
-                  style={selectStyle}
-                >
-                  {active.roofs.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name}</option>
-                  ))}
-                </select>
+                )}
               </div>
+            ) : (
+              /* ── Settings tab ───────────────────── */
+              <div className="p-3.5 space-y-3">
+                {active && activeRoof && (
+                  <>
+                    {/* Shingle section */}
+                    <div className={sectionCard}>
+                      <div className="text-sm font-black mb-3">Shingle</div>
 
-              {activeRoof && (
-                <div style={{ display: "grid", gap: 16 }}>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Manufacturer</label>
+                      <select
+                        value={manufacturer}
+                        onChange={(e) => setManufacturer(e.target.value)}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 font-bold text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                      >
+                        <option value="gaf">GAF</option>
+                        <option value="owens">Owens Corning</option>
+                        <option value="certainteed">CertainTeed</option>
+                        <option value="tamko">TAMKO</option>
+                        <option value="iko">IKO</option>
+                        <option value="atlas">Atlas</option>
+                        <option value="malarkey">Malarkey</option>
+                        <option value="pabco">PABCO</option>
+                        <option value="generic">Generic</option>
+                      </select>
 
-                  {/* Ice & Water Placement */}
-                  <div>
-                    <div style={fieldLabel}>Ice & Water Placement</div>
-                    <div style={{ display: "grid", gap: 8 }}>
-                      {([
-                        ["On Eaves", "iceWaterOnEaves"],
-                        ["On Valleys", "iceWaterOnValleys"],
-                      ] as [string, "iceWaterOnEaves" | "iceWaterOnValleys"][]).map(([label, key]) => (
-                        <label key={key} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                          <input
-                            type="checkbox"
-                            checked={(activeRoof as any)[key] !== false}
-                            onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: e.target.checked }))}
-                            style={{ accentColor: "#ea580c", width: 14, height: 14 }}
-                          />
-                          <span style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>{label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
+                      <label className="block text-xs font-bold text-slate-500 mt-3 mb-1">Color</label>
+                      <select
+                        value={active.shingleColor}
+                        onChange={(e) => patchActive((p) => ({ ...p, shingleColor: e.target.value as ShingleColor }))}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 font-bold text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                      >
+                        {(["Barkwood","Charcoal","WeatheredWood","PewterGray","OysterGray","Slate","Black"] as ShingleColor[]).map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
 
-                  {/* Ice & Water Brush */}
-                  <div>
-                    <div style={fieldLabel}>Ice & Water Brush</div>
-                    <label style={{ display: "block", marginBottom: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-                        <span>Brush size</span>
-                        <span style={{ fontWeight: 700, color: "#334155" }}>{activeRoof.iceWaterBrushSize ?? 30}px</span>
-                      </div>
-                      <input
-                        type="range" min={5} max={100} step={1}
-                        value={activeRoof.iceWaterBrushSize ?? 30}
-                        onChange={(e) => patchActiveRoof((r) => ({ ...r, iceWaterBrushSize: Number(e.target.value) }))}
-                        style={{ width: "100%", accentColor: "#ea580c" }}
-                      />
-                    </label>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button
-                        style={{ ...smallBtn, flex: 1 }}
-                        onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: (r.iceWaterBrush ?? []).slice(0, -1) }))}
-                        disabled={!(activeRoof.iceWaterBrush ?? []).length}
-                      >↩ Undo stroke</button>
-                      <button
-                        style={{ ...smallBtn, flex: 1, color: "#dc2626", borderColor: "rgba(220,38,38,0.22)" }}
-                        onClick={() => patchActiveRoof((r) => ({ ...r, iceWaterBrush: [] }))}
-                        disabled={!(activeRoof.iceWaterBrush ?? []).length}
-                      >Clear all</button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label style={fieldLabel}>Shingle</label>
-                    {/* Hidden manufacturer select — keeps tests passing */}
-                    <select
-                      aria-label="manufacturer-hidden"
-                      style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 1, height: 1 }}
-                      value={active.shingleSelection.manufacturerId}
-                      onChange={(e) => {
-                        const mfrId = e.target.value;
-                        const mfr = SHINGLE_CATALOG[mfrId as keyof typeof SHINGLE_CATALOG];
-                        const lineId = Object.keys(mfr.lines)[0];
-                        const line = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[lineId];
-                        const colorId = Object.keys(line.colors)[0];
-                        patchActive((p) => ({ ...p, shingleSelection: { manufacturerId: mfrId, lineId, colorId } }));
-                      }}
-                    >
-                      {Object.entries(SHINGLE_CATALOG).map(([id, mfr]) => (
-                        <option key={id} value={id}>{mfr.name}</option>
-                      ))}
-                    </select>
-                    {/* Visual manufacturer chips */}
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-                      {Object.entries(SHINGLE_CATALOG).map(([id, mfr]) => {
-                        const isSel = active.shingleSelection.manufacturerId === id;
-                        return (
-                          <button key={id} style={{
-                            padding: "4px 10px", borderRadius: 99, fontSize: 11, fontWeight: isSel ? 700 : 500,
-                            cursor: "pointer", border: `1.5px solid ${isSel ? "rgba(234,88,12,0.45)" : "rgba(15,23,42,0.12)"}`,
-                            background: isSel ? "rgba(234,88,12,0.10)" : "#f8fafc",
-                            color: isSel ? "#c2410c" : "#475569",
-                          }} onClick={() => {
-                            const mfr2 = SHINGLE_CATALOG[id as keyof typeof SHINGLE_CATALOG];
-                            const lineId = Object.keys(mfr2.lines)[0];
-                            const line2 = (mfr2.lines as Record<string, { colors: Record<string, unknown> }>)[lineId];
-                            const colorId = Object.keys(line2.colors)[0];
-                            patchActive((p) => ({ ...p, shingleSelection: { manufacturerId: id, lineId, colorId } }));
-                          }}>
-                            {mfr.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {/* Visual product line chips */}
-                    {(() => {
-                      const mfr = SHINGLE_CATALOG[active.shingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
-                      if (!mfr) return null;
-                      return (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10 }}>
-                          {Object.entries(mfr.lines).map(([id, line]) => {
-                            const isSel = active.shingleSelection.lineId === id;
-                            return (
-                              <button key={id} style={{
-                                padding: "4px 10px", borderRadius: 99, fontSize: 11, fontWeight: isSel ? 700 : 500,
-                                cursor: "pointer", border: `1.5px solid ${isSel ? "rgba(234,88,12,0.45)" : "rgba(15,23,42,0.12)"}`,
-                                background: isSel ? "rgba(234,88,12,0.10)" : "#f8fafc",
-                                color: isSel ? "#c2410c" : "#475569",
-                              }} onClick={() => {
-                                const line2 = (mfr.lines as Record<string, { colors: Record<string, unknown> }>)[id];
-                                const colorId = Object.keys(line2.colors)[0];
-                                patchActive((p) => ({ ...p, shingleSelection: { ...p.shingleSelection, lineId: id, colorId } }));
-                              }}>
-                                {(line as { name: string }).name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
-                    {/* 4-column color swatch grid */}
-                    {(() => {
-                      const mfr = SHINGLE_CATALOG[active.shingleSelection.manufacturerId as keyof typeof SHINGLE_CATALOG];
-                      const line = mfr && (mfr.lines as Record<string, { colors: Record<string, { name: string; top: string; bot: string }> }>)[active.shingleSelection.lineId];
-                      if (!line) return null;
-                      const colorEntry = line.colors[active.shingleSelection.colorId];
-                      return (
-                        <>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5 }}>
-                            {Object.entries(line.colors).map(([id, color]) => {
-                              const isSel = active.shingleSelection.colorId === id;
-                              return (
-                                <button
-                                  key={id}
-                                  title={color.name}
-                                  className="rv-swatch"
-                                  style={{
-                                    height: 34, borderRadius: 7, border: "2px solid",
-                                    borderColor: isSel ? "#ea580c" : "transparent",
-                                    background: `linear-gradient(160deg, ${color.top} 0%, ${color.bot} 100%)`,
-                                    boxShadow: isSel ? "0 0 0 3px rgba(234,88,12,0.25)" : "inset 0 1px 3px rgba(0,0,0,0.2)",
-                                  }}
-                                  onClick={() => patchActive((p) => ({ ...p, shingleSelection: { ...p.shingleSelection, colorId: id } }))}
-                                />
-                              );
-                            })}
-                          </div>
-                          <div style={{ fontSize: 11, color: "#64748b", marginTop: 5 }}>
-                            {colorEntry?.name ?? ""}
-                          </div>
-                        </>
-                      );
-                    })()}
-                    <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
-                      Colors are approximations. Verify final selections with manufacturer samples.
-                    </div>
-                    {/* Ground Photo Perspective slider */}
-                    <div style={{ marginTop: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", ...fieldLabel as object, marginBottom: 2 }}>
-                        <span>Ground Photo Perspective</span>
-                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{((activeRoof?.perspectiveStrength ?? 0) * 100).toFixed(0)}%</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={0.4}
-                        step={0.01}
-                        value={activeRoof?.perspectiveStrength ?? 0}
-                        onChange={(e) => patchActiveRoof((r) => ({ ...r, perspectiveStrength: Number(e.target.value) }))}
-                        style={{ width: "100%", accentColor: "#ea580c" }}
-                      />
-                      <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1, lineHeight: 1.3 }}>
-                        Compress top courses, expand bottom — matches ground-level photo perspective.
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Pro-Start placement */}
-                  <div>
-                    <div style={fieldLabel}>Pro-Start Placement</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                      {([
-                        [false, "Eaves Only"],
-                        [true,  "Eaves + Rakes"],
-                      ] as [boolean, string][]).map(([val, label]) => (
-                        <button
-                          key={label}
-                          onClick={() => patchActiveRoof((r) => ({ ...r, proStartOnRakes: val }))}
-                          style={{
-                            ...smallBtn,
-                            background: activeRoof.proStartOnRakes === val ? "rgba(234,88,12,0.10)" : "#fff",
-                            borderColor: activeRoof.proStartOnRakes === val ? "rgba(234,88,12,0.40)" : "rgba(15,23,42,0.10)",
-                            color: activeRoof.proStartOnRakes === val ? "#c2410c" : "#475569",
-                            fontWeight: activeRoof.proStartOnRakes === val ? 700 : 600,
-                          }}
-                        >{label}</button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div style={fieldLabel}>Metal Colors</div>
-                    <div style={{ display: "grid", gap: 8 }}>
-                      {([
-                        ["Gutter Apron", "gutterApronColor"],
-                        ["Drip Edge", "dripEdgeColor"],
-                        ["Valley Metal", "valleyMetalColor"],
-                      ] as const).map(([label, key]) => (
-                        <label key={key} style={{ display: "block" }}>
-                          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>{label}</div>
-                          <select
-                            value={(activeRoof as any)[key]}
-                            onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: e.target.value as MetalColor }))}
-                            style={selectStyle}
-                          >
-                            {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-                          </select>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div style={fieldLabel}>Product Widths</div>
-                    <div style={{ display: "grid", gap: 10 }}>
-                      {([
-                        ["Gutter apron", "gutterApronW", 4, 24],
-                        ["Drip edge", "dripEdgeW", 4, 24],
-                        ["Ice & water (eaves)", "iceWaterEaveW", 10, 120],
-                        ["Ice & water (valleys)", "iceWaterValleyW", 6, 72],
-                        ["Valley metal", "valleyMetalW", 4, 35],
-                        ["Pro-start", "proStartW", 6, 45],
-                        ["Ridge vent", "ridgeVentW", 6, 45],
-                        ["Cap shingles", "capW", 4, 30],
-                      ] as const).map(([label, key, min, max]) => (
-                        <label key={key} style={{ display: "block" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-                            <span>{label}</span>
-                            <span style={{ fontWeight: 700, color: "#334155" }}>{(activeRoof as any)[key]}px</span>
-                          </div>
-                          <input
-                            type="range"
-                            min={min}
-                            max={max}
-                            step={1}
-                            value={(activeRoof as any)[key]}
-                            onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: Number(e.target.value) } as any))}
-                            style={{ width: "100%", accentColor: "#ea580c" }}
-                          />
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div style={fieldLabel}>Shingle Scale</div>
-                    <label style={{ display: "block" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-                        <span>Size</span>
-                        <span style={{ fontWeight: 700, color: "#334155" }}>{activeRoof.shingleScale.toFixed(2)}</span>
-                      </div>
+                      <label className="block text-xs font-bold text-slate-500 mt-3 mb-1">
+                        Scale: {activeRoof.shingleScale.toFixed(2)}
+                      </label>
                       <input
                         type="range"
                         min={0.12}
@@ -5779,361 +1574,149 @@ export default function Page() {
                         step={0.01}
                         value={activeRoof.shingleScale}
                         onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleScale: Number(e.target.value) }))}
-                        style={{ width: "100%", accentColor: "#ea580c" }}
+                        className="w-full"
                       />
-                    </label>
-                  </div>
+                    </div>
 
-                  <div>
-                    <div style={fieldLabel}>Shingle Rotation</div>
-                    <label style={{ display: "block" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginBottom: 4 }}>
-                        <span>Angle (degrees)</span>
-                        <span style={{ fontWeight: 700, color: "#334155" }}>{(activeRoof.shingleRotation ?? 0).toFixed(0)}°</span>
+                    {/* Metal Colors section */}
+                    <div className={sectionCard}>
+                      <div className="text-sm font-black mb-3">Metal Colors</div>
+
+                      <div className="space-y-3">
+                        <div>
+                          <div className="text-xs font-bold text-slate-500 mb-1">Gutter Apron</div>
+                          <select
+                            value={activeRoof.gutterApronColor}
+                            onChange={(e) => patchActiveRoof((r) => ({ ...r, gutterApronColor: e.target.value as MetalColor }))}
+                            className="w-full p-2.5 rounded-xl border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-orange-300"
+                          >
+                            {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </div>
+
+                        <div>
+                          <div className="text-xs font-bold text-slate-500 mb-1">Drip Edge</div>
+                          <select
+                            value={activeRoof.dripEdgeColor}
+                            onChange={(e) => patchActiveRoof((r) => ({ ...r, dripEdgeColor: e.target.value as MetalColor }))}
+                            className="w-full p-2.5 rounded-xl border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-orange-300"
+                          >
+                            {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </div>
+
+                        <div>
+                          <div className="text-xs font-bold text-slate-500 mb-1">Valley Metal</div>
+                          <select
+                            value={activeRoof.valleyMetalColor}
+                            onChange={(e) => patchActiveRoof((r) => ({ ...r, valleyMetalColor: e.target.value as MetalColor }))}
+                            className="w-full p-2.5 rounded-xl border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-orange-300"
+                          >
+                            {metalOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </div>
                       </div>
-                      <input
-                        type="range"
-                        min={-45}
-                        max={45}
-                        step={1}
-                        value={activeRoof.shingleRotation ?? 0}
-                        onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleRotation: Number(e.target.value) }))}
-                        style={{ width: "100%", accentColor: "#ea580c" }}
-                      />
-                    </label>
-                    <button
-                      style={{ ...smallBtn, marginTop: 6, width: "100%", fontSize: 11 }}
-                      onClick={() => {
-                        const firstEave = activeRoof.lines.find((l) => l.kind === "EAVE");
-                        if (!firstEave || firstEave.points.length < 4) {
-                          patchActiveRoof((r) => ({ ...r, shingleRotation: 0 }));
-                          return;
-                        }
-                        const angle = Math.atan2(
-                          firstEave.points[3] - firstEave.points[1],
-                          firstEave.points[2] - firstEave.points[0]
-                        ) * 180 / Math.PI;
-                        patchActiveRoof((r) => ({ ...r, shingleRotation: Math.round(angle) }));
-                      }}
-                    >
-                      Auto-align to Eave Line
-                    </button>
-                  </div>
-                </div>
-              )}
+                    </div>
 
-            </div>
-          )}
+                    {/* Product Widths section */}
+                    <div className={sectionCard}>
+                      <div className="text-sm font-black mb-3">Product Widths</div>
 
-          {/* ── Account / Company Branding ── */}
-          <div style={{ borderTop: "1px solid rgba(15,23,42,0.07)", marginTop: 4 }}>
-            <button
-              onClick={() => setAccountOpen(v => !v)}
-              style={{
-                width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-                padding: "13px 18px", background: "none", border: "none", cursor: "pointer",
-                fontSize: 12, fontWeight: 700, color: "#64748b",
-                letterSpacing: "0.06em", textTransform: "uppercase",
+                      <div className="space-y-2.5">
+                        {([
+                          ["Gutter apron", "gutterApronW", 4, 24],
+                          ["Drip edge", "dripEdgeW", 4, 24],
+                          ["Ice & water (eaves)", "iceWaterEaveW", 10, 90],
+                          ["Ice & water (valleys)", "iceWaterValleyW", 6, 70],
+                          ["Valley metal", "valleyMetalW", 4, 35],
+                          ["Pro-start", "proStartW", 6, 45],
+                          ["Ridge vent", "ridgeVentW", 6, 45],
+                          ["Cap shingles", "capW", 4, 30],
+                        ] as const).map(([label, key, min, max]) => (
+                          <label key={key} className="block text-xs font-bold text-slate-500">
+                            {label}: {(activeRoof as any)[key]}
+                            <input
+                              type="range"
+                              min={min}
+                              max={max}
+                              step={1}
+                              value={(activeRoof as any)[key]}
+                              onChange={(e) => patchActiveRoof((r) => ({ ...r, [key]: Number(e.target.value) } as any))}
+                              className="w-full"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </aside>
+
+          {/* ── Canvas ──────────────────────────── */}
+          <main ref={containerRef} className="flex-1 bg-[#0f172a] relative overflow-hidden">
+            <Stage
+              ref={stageRef}
+              width={w}
+              height={h}
+              onMouseDown={onStageDown}
+              onTouchStart={onStageDown}
+              onWheel={onWheel}
+              draggable={!!active}
+              scaleX={active?.stageScale ?? 1}
+              scaleY={active?.stageScale ?? 1}
+              x={active?.stagePos?.x ?? 0}
+              y={active?.stagePos?.y ?? 0}
+              onDragEnd={(e) => {
+                if (!active) return;
+                patchActive((p) => ({ ...p, stagePos: { x: e.target.x(), y: e.target.y() } }));
               }}
+              style={{ touchAction: "none" }}
             >
-              <span>⚙ Company Profile</span>
-              <span style={{ fontSize: 10, opacity: 0.6 }}>{accountOpen ? "▲" : "▼"}</span>
-            </button>
-            {accountOpen && (
-              <div style={{ padding: "0 18px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
-                {/* Activity stats */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 4 }}>
-                  {[
-                    { label: "Presentations", value: appStats.presentationsStarted },
-                    { label: "PDFs Exported", value: appStats.pdfsExported },
-                    { label: "Links Shared", value: appStats.linksShared },
-                  ].map(({ label, value }) => (
-                    <div key={label} style={{
-                      background: "rgba(15,23,42,0.03)", borderRadius: 10, padding: "8px 6px",
-                      textAlign: "center", border: "1px solid rgba(15,23,42,0.07)",
-                    }}>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: "#ea580c", lineHeight: 1 }}>{value}</div>
-                      <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 600, marginTop: 3, letterSpacing: "0.03em", textTransform: "uppercase" }}>{label}</div>
-                    </div>
-                  ))}
-                </div>
-                {/* Company name */}
-                <label style={{ display: "block" }}>
-                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4, fontWeight: 600 }}>Company Name</div>
-                  <input
-                    type="text"
-                    placeholder="e.g. Smith Roofing LLC"
-                    value={companyProfile.name}
-                    onChange={e => setCompanyProfile(p => ({ ...p, name: e.target.value }))}
-                    style={{ display: "block", width: "100%", padding: "8px 11px", borderRadius: 8, border: "1.5px solid rgba(15,23,42,0.12)", fontSize: 12, fontWeight: 500, background: "#fff", color: "#0f172a", boxSizing: "border-box", outline: "none" }}
+              <Layer>
+                {!photoImg && liveStep !== "START" && (
+                  <Text
+                    text="Upload a photo to begin"
+                    x={0}
+                    y={h / 2 - 12}
+                    width={w}
+                    align="center"
+                    fill="rgba(255,255,255,0.68)"
+                    fontSize={18}
                   />
-                </label>
-                {/* Rep name */}
-                <label style={{ display: "block" }}>
-                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4, fontWeight: 600 }}>Rep Name</div>
-                  <input
-                    type="text"
-                    placeholder="e.g. John Smith"
-                    value={companyProfile.repName}
-                    onChange={e => setCompanyProfile(p => ({ ...p, repName: e.target.value }))}
-                    style={{ display: "block", width: "100%", padding: "8px 11px", borderRadius: 8, border: "1.5px solid rgba(15,23,42,0.12)", fontSize: 12, fontWeight: 500, background: "#fff", color: "#0f172a", boxSizing: "border-box", outline: "none" }}
-                  />
-                </label>
-                {/* Phone */}
-                <label style={{ display: "block" }}>
-                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4, fontWeight: 600 }}>Phone</div>
-                  <input
-                    type="text"
-                    placeholder="e.g. (555) 123-4567"
-                    value={companyProfile.phone}
-                    onChange={e => setCompanyProfile(p => ({ ...p, phone: e.target.value }))}
-                    style={{ display: "block", width: "100%", padding: "8px 11px", borderRadius: 8, border: "1.5px solid rgba(15,23,42,0.12)", fontSize: 12, fontWeight: 500, background: "#fff", color: "#0f172a", boxSizing: "border-box", outline: "none" }}
-                  />
-                </label>
-                {/* Logo upload */}
-                <div>
-                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6, fontWeight: 600 }}>Company Logo</div>
-                  {companyProfile.logo ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <img src={companyProfile.logo} alt="logo" style={{ height: 36, maxWidth: 120, objectFit: "contain", borderRadius: 6, border: "1px solid rgba(15,23,42,0.10)", background: "#f8fafc", padding: 4 }} />
-                      <button
-                        onClick={() => setCompanyProfile(p => ({ ...p, logo: "" }))}
-                        style={{ fontSize: 11, color: "#ef4444", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}
-                      >Remove</button>
-                    </div>
-                  ) : (
-                    <label style={{
-                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                      padding: "9px 14px", borderRadius: 8,
-                      border: "1.5px dashed rgba(15,23,42,0.16)", cursor: "pointer",
-                      background: "rgba(15,23,42,0.02)", fontSize: 12, color: "#64748b", fontWeight: 500,
-                    }}>
-                      <span>↑ Upload Logo</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        style={{ display: "none" }}
-                        onChange={e => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          const reader = new FileReader();
-                          reader.onload = () => setCompanyProfile(p => ({ ...p, logo: reader.result as string }));
-                          reader.readAsDataURL(file);
-                        }}
-                      />
-                    </label>
-                  )}
-                </div>
-                {/* Info */}
-                <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.5, paddingTop: 2 }}>
-                  Your company name, rep name, and phone appear in PDF proposals. Logo appears in the PDF header.
-                </div>
-              </div>
-            )}
-          </div>
-              </div>
-            </motion.aside>
-          )}
-        </AnimatePresence>
-      )}
-
-      {/* Drawer "open" tab — shown when drawer is closed */}
-      {screen !== "CUSTOMER_VIEW" && !isCustomerView && !presentationMode && !drawerOpen && (
-        <button
-          onClick={() => setDrawerOpen(true)}
-          style={{
-            position: "absolute", zIndex: 20,
-            background: "#ffffff", border: "none", cursor: "pointer",
-            ...(isMobile
-              ? { bottom: 0, left: "50%", transform: "translateX(-50%)", width: 56, height: 28, borderRadius: "10px 10px 0 0", boxShadow: "0 -2px 10px rgba(15,23,42,0.10), 0 0 0 1px rgba(15,23,42,0.06)" }
-              : { right: 0, top: "50%", transform: "translateY(-50%)", width: 28, height: 56, borderRadius: "10px 0 0 10px", boxShadow: "-2px 0 10px rgba(15,23,42,0.10), 0 0 0 1px rgba(15,23,42,0.06)" }
-            ),
-            display: "flex", alignItems: "center", justifyContent: "center",
-            color: "#64748b", fontSize: 14,
-          }}
-        >{isMobile ? "▲" : "‹"}</button>
-      )}
-
-      {/* ── CANVAS ── */}
-      <main ref={containerRef} style={{
-        background: screen === "CUSTOMER_VIEW"
-          ? "#e8edf2"
-          : presentationMode
-            ? "#060c16"
-            : "#1e293b",
-        backgroundImage: screen === "CUSTOMER_VIEW"
-          ? "none"
-          : presentationMode
-            ? "radial-gradient(ellipse at 35% 45%, rgba(30,58,95,0.70) 0%, rgba(6,12,22,0) 65%), radial-gradient(ellipse at 75% 65%, rgba(120,53,15,0.18) 0%, rgba(6,12,22,0) 55%)"
-            : "radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)",
-        backgroundSize: presentationMode ? "auto" : "28px 28px",
-        position: "relative",
-        overflow: "hidden",
-        // In customer view: fill all remaining flex space and center the fixed-size Stage
-        ...(isCustomerView ? { flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" } : {}),
-        ...(screen === "CUSTOMER_VIEW" ? { order: 1, flex: "1 1 0", minWidth: 0, minHeight: 0 } : {}),
-      }}>
-        {/* ── Presentation: cinematic step title ── */}
-        {presentationMode && (liveStep !== "START" && presentationStepNum > 0 || finalLookMode) && (
-          <div key={finalLookMode ? "final" : liveStep} className="rv-fade-in" style={{
-            position: "absolute", top: 20, left: "50%", transform: "translateX(-50%)",
-            zIndex: 30, pointerEvents: "none", whiteSpace: "nowrap",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 0,
-          }}>
-            <div style={{
-              background: "rgba(6,12,22,0.78)", backdropFilter: "blur(18px) saturate(1.3)",
-              borderRadius: 99, padding: "9px 24px",
-              border: "1px solid rgba(255,255,255,0.07)",
-              display: "flex", alignItems: "center", gap: 10,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.40)",
-            }}>
-              <span style={{ fontSize: 10, fontWeight: 800, color: "#ea580c", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                {finalLookMode ? "✦" : `Chapter ${currentChapterIdx + 1} / ${PRESENTATION_CHAPTERS.length}`}
-              </span>
-              <span style={{ width: 1, height: 11, background: "rgba(255,255,255,0.15)", display: "inline-block" }} />
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9", letterSpacing: "0.01em" }}>
-                {finalLookMode ? "Final Look" : (PRESENTATION_CHAPTERS[currentChapterIdx]?.label ?? (STEP_LABELS[liveStep] ?? liveStep))}
-              </span>
-            </div>
-          </div>
-        )}
-        {/* ── Presentation: cross-fade veil on step change ── */}
-        {presentationMode && (
-          <div style={{
-            position: "absolute", inset: 0,
-            background: "linear-gradient(135deg, rgba(6,12,22,0.95), rgba(30,58,95,0.85))",
-            pointerEvents: "none", zIndex: 25,
-            opacity: stepFlash ? 1 : 0, transition: stepFlash ? "opacity 0.05s ease" : "opacity 0.55s ease",
-          }} />
-        )}
-        <div>
-        <Stage
-          key={stageKey}
-          ref={stageRef}
-          width={stageW}
-          height={stageH}
-          onMouseDown={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
-          onMouseMove={screen !== "CUSTOMER_VIEW" ? onStageMove : undefined}
-          onMouseUp={screen !== "CUSTOMER_VIEW" ? onStageUp : undefined}
-          onTouchStart={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
-          onTouchMove={screen !== "CUSTOMER_VIEW" ? onStageMove : undefined}
-          onTouchEnd={screen !== "CUSTOMER_VIEW" ? onStageUp : undefined}
-          onWheel={screen !== "CUSTOMER_VIEW" ? onWheel : undefined}
-          draggable={!!active && screen !== "CUSTOMER_VIEW" && tool !== "BRUSH_ICE_WATER" && !baMode}
-          scaleX={active?.stageScale ?? 1}
-          scaleY={active?.stageScale ?? 1}
-          x={active?.stagePos?.x ?? 0}
-          y={active?.stagePos?.y ?? 0}
-          onDragEnd={(e) => {
-            if (!active) return;
-            patchActive((p) => ({ ...p, stagePos: { x: e.target.x(), y: e.target.y() } }));
-          }}
-          style={{ touchAction: "none" }}
-        >
-          <Layer>
-            {/* Dev overlay: show measured dimensions in customer view */}
-            {isCustomerView && process.env.NODE_ENV === "development" && (
-              <Text text={`${stageW}×${stageH}`} x={8} y={8} fontSize={12} fill="rgba(255,255,255,0.55)" listening={false} />
-            )}
-            {/* Customer view: light background covers entire world space */}
-            {screen === "CUSTOMER_VIEW" && (
-              <Rect x={-50000} y={-50000} width={200000} height={200000} fill="#e8edf2" />
-            )}
-
-            {!photoImg && liveStep !== "START" && screen !== "CUSTOMER_VIEW" && (
-              <>
-                <Text
-                  text="Upload a photo to begin"
-                  x={0}
-                  y={stageH / 2 - 22}
-                  width={stageW}
-                  align="center"
-                  fill="rgba(255,255,255,0.55)"
-                  fontSize={17}
-                  fontStyle="600"
-                />
-                <Text
-                  text="Use the Photo panel on the left"
-                  x={0}
-                  y={stageH / 2 + 6}
-                  width={stageW}
-                  align="center"
-                  fill="rgba(255,255,255,0.28)"
-                  fontSize={13}
-                />
-              </>
-            )}
-
-            {/* ── PHOTO GROUP: photo + all geometry overlays in photo-space ─────── */}
-            {photoImg && (
-              <Group x={photoTx.offX} y={photoTx.offY} scaleX={photoTx.scale} scaleY={photoTx.scale}>
-
-                {/* Photo at natural size */}
-                <KonvaImage image={photoImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} />
-
-                {/* Draft visuals — hidden in presentation mode */}
-                {!presentationMode && active?.step === "TRACE" && draftLine && (
-                  <Line points={draftLine.points} stroke="rgba(255,255,255,0.9)" strokeWidth={3} strokeScaleEnabled={false} dash={[8, 6]} lineCap="round" lineJoin="round" />
-                )}
-                {!presentationMode && active?.step === "TRACE" && draftHole && draftHole.length >= 2 && (
-                  <Line points={draftHole} stroke="rgba(255,255,255,0.9)" strokeWidth={3} strokeScaleEnabled={false} dash={[6, 6]} lineCap="round" lineJoin="round" />
                 )}
 
-                {/* Guide lines — hidden in presentation mode */}
-                {!presentationMode && active && showGuides && active.roofs.flatMap((r) => {
+                {photoImg && <KonvaImage image={photoImg} width={w} height={h} />}
+
+                {/* Draft visuals */}
+                {active?.step === "TRACE" && draftLine && (
+                  <Line points={draftLine.points} stroke="rgba(255,255,255,0.9)" strokeWidth={3} dash={[8, 6]} lineCap="round" lineJoin="round" />
+                )}
+                {active?.step === "TRACE" && draftHole && draftHole.length >= 2 && (
+                  <Line points={draftHole} stroke="rgba(255,255,255,0.9)" strokeWidth={3} dash={[6, 6]} lineCap="round" lineJoin="round" />
+                )}
+
+                {/* Guide lines */}
+                {active && showGuides && active.roofs.flatMap((r) => {
                   const all = [...r.lines];
                   if (r.id === activeRoof?.id && draftLine && draftLine.points.length >= 4) all.push({ ...draftLine, id: "draft" });
-                  const baseOpacity = cleanupPreview ? 0.18 : (active.step === "TRACE" ? 0.95 : 0.45);
                   return all.map((l) => (
-                    <React.Fragment key={`guide-${r.id}-${l.id}`}>
-                      <Line
-                        points={l.points}
-                        stroke="#000"
-                        strokeWidth={7}
-                        strokeScaleEnabled={false}
-                        dash={[10, 7]}
-                        lineCap="round"
-                        lineJoin="round"
-                        opacity={baseOpacity * 0.35}
-                      />
-                      <Line
-                        points={l.points}
-                        stroke={kindColor(l.kind)}
-                        strokeWidth={4}
-                        strokeScaleEnabled={false}
-                        dash={[10, 7]}
-                        lineCap="round"
-                        lineJoin="round"
-                        opacity={baseOpacity}
-                      />
-                    </React.Fragment>
+                    <Line
+                      key={`guide-${r.id}-${l.id}`}
+                      points={l.points}
+                      stroke={kindColor(l.kind)}
+                      strokeWidth={3}
+                      dash={[10, 7]}
+                      lineCap="round"
+                      lineJoin="round"
+                      opacity={active.step === "TRACE" ? 0.95 : 0.45}
+                    />
                   ));
                 })}
 
-                {/* Line number labels on canvas — TRACE step only */}
-                {!presentationMode && active && active.step === "TRACE" && active.roofs.flatMap((r) =>
-                  r.lines.map((line, globalIdx) => {
-                    if (line.points.length < 4) return null;
-                    const xs = line.points.filter((_, i) => i % 2 === 0);
-                    const ys = line.points.filter((_, i) => i % 2 === 1);
-                    const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
-                    const my = ys.reduce((a, b) => a + b, 0) / ys.length;
-                    const label = String(globalIdx + 1);
-                    const col = kindColor(line.kind);
-                    const R = 11;
-                    return (
-                      <React.Fragment key={`lnum-${r.id}-${line.id}`}>
-                        <Circle x={mx} y={my} radius={R + 1} fill="rgba(0,0,0,0.45)" listening={false} />
-                        <Circle x={mx} y={my} radius={R} fill={col} listening={false} />
-                        <Text x={mx - R} y={my - 7} width={R * 2} text={label}
-                          fontSize={11} fontStyle="bold" fill="#fff" align="center" listening={false} />
-                      </React.Fragment>
-                    );
-                  })
-                )}
-
-                {/* Roof outlines — hidden in presentation mode */}
-                {!presentationMode && active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.map((r) =>
+                {/* Roof outlines */}
+                {active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.map((r) =>
                   r.outline.length >= 2 ? (
                     <Line
                       key={`outline-${r.id}`}
@@ -6141,99 +1724,12 @@ export default function Page() {
                       closed={r.closed}
                       stroke={r.id === active.activeRoofId ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.55)"}
                       strokeWidth={r.id === active.activeRoofId ? 2.5 : 2}
-                      strokeScaleEnabled={false}
-                      opacity={cleanupPreview && r.id === active.activeRoofId ? 0.18 : 1}
                     />
                   ) : null
                 )}
 
-                {/* ── AI Outline Overlay ── hidden in presentation mode */}
-                {!presentationMode && active?.step === "TRACE" && aiState === "preview" && (() => {
-                  const dispPoly = aiShowRaw ? aiPolygonRaw : aiPolygon;
-                  if (!dispPoly || dispPoly.length < 4) return null;
-                  const isRaw = aiShowRaw;
-                  return (
-                    <>
-                      <Line
-                        points={dispPoly}
-                        closed={true}
-                        fill={isRaw ? "rgba(239,68,68,0.06)" : "rgba(16,185,129,0.08)"}
-                        stroke={isRaw ? "rgba(239,68,68,0.80)" : "rgba(16,185,129,0.92)"}
-                        strokeWidth={2.5}
-                        strokeScaleEnabled={false}
-                        dash={isRaw ? [5, 7] : [9, 5]}
-                        lineCap="round"
-                        lineJoin="round"
-                        listening={false}
-                        shadowColor={isRaw ? "rgba(239,68,68,0.4)" : "rgba(16,185,129,0.5)"}
-                        shadowBlur={8}
-                      />
-                      {Array.from({ length: dispPoly.length / 2 }).map((_, i) => (
-                        <Circle
-                          key={i}
-                          x={dispPoly[i * 2]}
-                          y={dispPoly[i * 2 + 1]}
-                          radius={5 / photoTx.scale}
-                          fill={isRaw ? "#ef4444" : "#10b981"}
-                          stroke="#fff"
-                          strokeWidth={1.5}
-                          strokeScaleEnabled={false}
-                          listening={false}
-                        />
-                      ))}
-                    </>
-                  );
-                })()}
-
-                {/* ── Auto-Label Suggestion Overlay ── hidden in presentation mode */}
-                {!presentationMode && active?.step === "TRACE" && autoLabelSuggestions.map((s, i) => (
-                  <Line
-                    key={`ailabel-${i}`}
-                    points={s.points}
-                    stroke={s.kind === "RIDGE" ? "rgba(245,158,11,0.92)" : "rgba(100,116,139,0.92)"}
-                    strokeWidth={3}
-                    strokeScaleEnabled={false}
-                    dash={[12, 6]}
-                    lineCap="round"
-                    lineJoin="round"
-                    listening={false}
-                    shadowColor={s.kind === "RIDGE" ? "rgba(245,158,11,0.4)" : "rgba(100,116,139,0.4)"}
-                    shadowBlur={8}
-                  />
-                ))}
-
-                {/* ── Cleanup preview overlay ── hidden in presentation mode */}
-                {!presentationMode && cleanupPreview && activeRoof && active?.step === "TRACE" && (
-                  <>
-                    {/* After: cleaned outline */}
-                    {cleanupPreview.outline.length >= 4 && (
-                      <Line
-                        points={cleanupPreview.outline}
-                        closed={cleanupPreview.closed}
-                        stroke="rgba(74,222,128,0.95)"
-                        strokeWidth={2.5}
-                        strokeScaleEnabled={false}
-                        lineCap="round"
-                        lineJoin="round"
-                      />
-                    )}
-                    {/* After: cleaned lines */}
-                    {cleanupPreview.lines.map((l) => (
-                      <Line
-                        key={`cp-after-${l.id}`}
-                        points={l.points}
-                        stroke="rgba(74,222,128,0.95)"
-                        strokeWidth={4}
-                        strokeScaleEnabled={false}
-                        lineCap="round"
-                        lineJoin="round"
-                      />
-                    ))}
-                  </>
-                )}
-
-                {/* Hole outlines — hidden in presentation mode */}
-                {!presentationMode && active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.flatMap((r) =>
+                {/* Hole outlines */}
+                {active && (active.step === "TRACE" || active.showGuidesDuringInstall) && active.roofs.flatMap((r) =>
                   r.holes.map((holePts, i) => (
                     <Line
                       key={`hole-${r.id}-${i}`}
@@ -6242,7 +1738,6 @@ export default function Page() {
                       stroke="rgba(255,255,255,0.82)"
                       dash={[8, 6]}
                       strokeWidth={2}
-                      strokeScaleEnabled={false}
                       lineCap="round"
                       lineJoin="round"
                       opacity={0.9}
@@ -6250,7 +1745,7 @@ export default function Page() {
                   ))
                 )}
 
-                {/* Install overlays per roof */}
+                {/* Install overlays per roof (clipped by slider when active) */}
                 {active && active.roofs.map((r) => {
                   if (!r.closed || r.outline.length < 6) return null;
 
@@ -6260,84 +1755,56 @@ export default function Page() {
                   const ridges = r.lines.filter((l) => l.kind === "RIDGE");
                   const hips = r.lines.filter((l) => l.kind === "HIP");
 
-                  // Shingle eave alignment — compute in photo-space, use stage-space equivalent for offset
-                  const eaveYsPhoto = eaves.flatMap((l) => l.points.filter((_, idx) => idx % 2 === 1));
-                  const eaveYPhoto = eaveYsPhoto.length > 0 ? eaveYsPhoto.reduce((a, b) => a + b, 0) / eaveYsPhoto.length : 0;
-                  const eaveY = photoTx.offY + eaveYPhoto * photoTx.scale; // equiv. stage-space Y for alignment
-                  const courseH = 11;
-                  const effectivePatternScale = r.shingleScale / photoTx.scale;
-                  const shingleOffsetY = ((-(eaveY + 5000) / r.shingleScale % courseH) + courseH) % courseH;
+                  const roofClip = (ctx: any) => {
+                    if (stageSliderX !== null) {
+                      // Intersect roof outline clip with slider right-half
+                      ctx.beginPath();
+                      ctx.rect(stageSliderX, -10000, 20000, 20000);
+                      ctx.clip();
+                    }
+                    clipPolygonPath(ctx, r.outline);
+                  };
 
                   return (
-                    <Group key={`install-${r.id}`} clipFunc={(ctx) => clipPolygonPath(ctx, r.outline)}>
+                    <Group key={`install-${r.id}`} clipFunc={roofClip}>
                       {/* Tearoff (decking) */}
                       {atLeast(currentStep, "TEAROFF") && deckingImg && (
-                        <KonvaImage image={deckingImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} opacity={0.92} />
+                        <KonvaImage image={deckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
                       )}
-
-                      {/* Subtle structure guides — faint valley/hip/ridge lines visible during install */}
-                      {atLeast(currentStep, "TEAROFF") && !atLeast(currentStep, "SHINGLES") && (
-                        <>
-                          {valleys.map((l) => (
-                            <Line key={`guide-v-${r.id}-${l.id}`} points={l.points} stroke="rgba(255,255,255,0.13)" strokeWidth={3} strokeScaleEnabled={false} dash={[10, 8]} lineCap="round" lineJoin="round" />
-                          ))}
-                          {ridges.map((l) => (
-                            <Line key={`guide-r-${r.id}-${l.id}`} points={l.points} stroke="rgba(255,255,255,0.10)" strokeWidth={2} strokeScaleEnabled={false} dash={[8, 7]} lineCap="round" lineJoin="round" />
-                          ))}
-                          {hips.map((l) => (
-                            <Line key={`guide-h-${r.id}-${l.id}`} points={l.points} stroke="rgba(255,255,255,0.11)" strokeWidth={2} strokeScaleEnabled={false} dash={[9, 7]} lineCap="round" lineJoin="round" />
-                          ))}
-                        </>
-                      )}
-
-                      {/*
-                        IMPORTANT FIX: draw order + step gating
-                        - Synthetic should ONLY show during SYNTHETIC step window (>=SYNTHETIC and <SHINGLES)
-                        - Ice & Water should ALWAYS show when step >= ICE_WATER (and it draws ON TOP of synthetic)
-                        - Metals and starter strips draw on top of underlayments
-                      */}
 
                       {/* Synthetic (field) — only before shingles */}
                       {stepIndex(currentStep) >= stepIndex("SYNTHETIC") &&
                         stepIndex(currentStep) < stepIndex("SHINGLES") &&
                         syntheticImg && (
-                          <KonvaImage image={syntheticImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} opacity={0.86} />
+                          <KonvaImage image={syntheticImg} x={0} y={0} width={w} height={h} opacity={0.86} />
                         )}
 
                       {/* Ice & water — always visible once reached */}
                       {atLeast(currentStep, "ICE_WATER") && (
                         <>
-                          {(r.iceWaterOnEaves !== false) && eaves.map((l) => (
-                            <Group key={`iwe-${r.id}-${l.id}`}>
-                              <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterEaveW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                              <Line points={l.points} stroke="rgba(255,255,255,0.07)" strokeWidth={r.iceWaterEaveW * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                            </Group>
+                          {eaves.map((l) => (
+                            <Line
+                              key={`iwe-${r.id}-${l.id}`}
+                              points={l.points}
+                              stroke="rgba(18,23,38,0.92)"
+                              strokeWidth={r.iceWaterEaveW}
+                              lineCap="round"
+                              lineJoin="round"
+                              opacity={0.92}
+                            />
                           ))}
-                          {(r.iceWaterOnValleys !== false) && valleys.map((l) => (
-                            <Group key={`iwv-${r.id}-${l.id}`}>
-                              <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterValleyW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                              <Line points={l.points} stroke="rgba(255,255,255,0.07)" strokeWidth={r.iceWaterValleyW * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                            </Group>
-                          ))}
-                          {(r.iceWaterBrush ?? []).map((stroke) => (
-                            <Group key={`iwb-${r.id}-${stroke.id}`} listening={false}>
-                              <Line points={stroke.points} stroke="#111827" strokeWidth={stroke.size} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                              <Line points={stroke.points} stroke="rgba(255,255,255,0.07)" strokeWidth={stroke.size * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                            </Group>
+                          {valleys.map((l) => (
+                            <Line
+                              key={`iwv-${r.id}-${l.id}`}
+                              points={l.points}
+                              stroke="rgba(18,23,38,0.92)"
+                              strokeWidth={r.iceWaterValleyW}
+                              lineCap="round"
+                              lineJoin="round"
+                              opacity={0.92}
+                            />
                           ))}
                         </>
-                      )}
-                      {/* Live brush stroke preview while painting */}
-                      {tool === "BRUSH_ICE_WATER" && brushDraft && brushDraft.points.length >= 4 && r.id === active?.activeRoofId && (
-                        <Line
-                          points={brushDraft.points}
-                          stroke="#111827"
-                          strokeWidth={brushDraft.size}
-                          strokeScaleEnabled={false}
-                          lineCap="round"
-                          lineJoin="round"
-                          listening={false}
-                        />
                       )}
 
                       {/* GUTTER APRON (eaves) */}
@@ -6350,164 +1817,40 @@ export default function Page() {
                         <ShinyMetalStroke key={`drip-${r.id}-${l.id}`} points={l.points} width={r.dripEdgeW} color={r.dripEdgeColor} />
                       ))}
 
-                      {/* VALLEY METAL (valleys) — Galvanized: narrow strip; W-Valley (colored): wider channel */}
+                      {/* VALLEY METAL (valleys) */}
                       {atLeast(currentStep, "VALLEY_METAL") && valleys.map((l) => (
-                        <ShinyMetalStroke
-                          key={`vm-${r.id}-${l.id}`}
-                          points={l.points}
-                          width={r.valleyMetalColor === "Galvanized" ? r.valleyMetalW : r.valleyMetalW * 2.5}
-                          color={r.valleyMetalColor}
-                          opacity={0.995}
-                        />
+                        <ShinyMetalStroke key={`vm-${r.id}-${l.id}`} points={l.points} width={r.valleyMetalW} color={r.valleyMetalColor} opacity={0.995} />
                       ))}
 
-                      {/* PRO-START (eaves always; rakes optional based on proStartOnRakes) */}
+                      {/* PRO-START (eaves + rakes ONLY) */}
                       {atLeast(currentStep, "PRO_START") && (
                         <>
                           {eaves.map((l) => (
                             <StarterStroke key={`ps-e-${r.id}-${l.id}`} points={l.points} width={r.proStartW} />
                           ))}
-                          {r.proStartOnRakes && rakes.map((l) => (
+                          {rakes.map((l) => (
                             <StarterStroke key={`ps-r-${r.id}-${l.id}`} points={l.points} width={r.proStartW} />
                           ))}
                         </>
                       )}
 
-                      {/* SHINGLES — with optional ground-photo perspective warp + course depth */}
-                      {atLeast(currentStep, "SHINGLES") && activeShinglesImg && (() => {
-                        const perspStr = r.perspectiveStrength ?? 0;
-                        const courseC = getCourseShadowCanvas();
-
-                        if (perspStr <= 0) {
-                          // ── Normal flat render ──────────────────────────────
-                          return (
-                            <>
-                              <Rect
-                                x={-5000} y={-5000} width={12000} height={12000}
-                                opacity={0.98}
-                                fillPatternImage={activeShinglesImg}
-                                fillPatternRepeat="repeat"
-                                fillPatternScaleX={effectivePatternScale}
-                                fillPatternScaleY={effectivePatternScale}
-                                fillPatternOffsetY={shingleOffsetY}
-                                fillPatternRotation={r.shingleRotation ?? 0}
-                              />
-                              {/* Course depth shadow */}
-                              {courseC && (
-                                <Rect
-                                  x={-5000} y={-5000} width={12000} height={12000}
-                                  fillPatternImage={courseC as unknown as HTMLImageElement}
-                                  fillPatternRepeat="repeat"
-                                  fillPatternScaleX={effectivePatternScale}
-                                  fillPatternScaleY={effectivePatternScale}
-                                  fillPatternOffsetY={shingleOffsetY}
-                                  fillPatternRotation={r.shingleRotation ?? 0}
-                                  listening={false}
-                                />
-                              )}
-                              <Rect x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} fill="rgba(0,0,0,0.06)" />
-                            </>
-                          );
-                        }
-
-                        // ── Perspective banding (N horizontal strips, each with slightly different scaleY) ──
-                        const xs = r.outline.filter((_, i) => i % 2 === 0);
-                        const ys = r.outline.filter((_, i) => i % 2 === 1);
-                        if (!xs.length) return null;
-                        const bandTop = Math.min(...ys), bandBot = Math.max(...ys);
-                        const totalH = bandBot - bandTop || 1;
-                        const N = 5;
-                        const bandH = totalH / N;
-
-                        return (
-                          <>
-                            {Array.from({ length: N }, (_, i) => {
-                              // t=0 at top (far from camera), t=1 at bottom (near camera)
-                              const t = (i + 0.5) / N;
-                              const bandScaleY = effectivePatternScale * (1 + perspStr * (2 * t - 1));
-                              const bY = bandTop + i * bandH;
-                              return (
-                                <Group
-                                  key={`pb-${r.id}-${i}`}
-                                  clipFunc={(ctx: any) => { ctx.rect(-5000, bY, 12000, bandH + 1); }}
-                                  listening={false}
-                                >
-                                  <Rect
-                                    x={-5000} y={-5000} width={12000} height={12000}
-                                    opacity={0.98}
-                                    fillPatternImage={activeShinglesImg}
-                                    fillPatternRepeat="repeat"
-                                    fillPatternScaleX={effectivePatternScale}
-                                    fillPatternScaleY={bandScaleY}
-                                    fillPatternOffsetY={shingleOffsetY}
-                                    fillPatternRotation={r.shingleRotation ?? 0}
-                                  />
-                                  {courseC && (
-                                    <Rect
-                                      x={-5000} y={-5000} width={12000} height={12000}
-                                      fillPatternImage={courseC as unknown as HTMLImageElement}
-                                      fillPatternRepeat="repeat"
-                                      fillPatternScaleX={effectivePatternScale}
-                                      fillPatternScaleY={bandScaleY}
-                                      fillPatternOffsetY={shingleOffsetY}
-                                      fillPatternRotation={r.shingleRotation ?? 0}
-                                      listening={false}
-                                    />
-                                  )}
-                                </Group>
-                              );
-                            })}
-                            <Rect x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} fill="rgba(0,0,0,0.06)" />
-                          </>
-                        );
-                      })()}
-
-                      {/* ── Shingle surface overlays: directional light, grain noise, vignette ──
-                          Always-on when shingles are visible. */}
-                      {atLeast(currentStep, "SHINGLES") && (() => {
-                        const xs = r.outline.filter((_, i) => i % 2 === 0);
-                        const ys = r.outline.filter((_, i) => i % 2 === 1);
-                        if (!xs.length) return null;
-                        const bx = Math.min(...xs), bxMax = Math.max(...xs);
-                        const by = Math.min(...ys), byMax = Math.max(...ys);
-                        const bw = bxMax - bx || 1;
-                        const bh = byMax - by || 1;
-                        const noiseC = getShingleNoiseCanvas();
-                        return (
-                          <Group listening={false}>
-                            {/* Directional light: highlight top-left, shadow bottom-right */}
-                            <Rect
-                              x={bx} y={by} width={bw} height={bh}
-                              fillLinearGradientStartPoint={{ x: 0, y: 0 }}
-                              fillLinearGradientEndPoint={{ x: bw * 0.7, y: bh }}
-                              fillLinearGradientColorStops={[0, "rgba(255,255,255,0.07)", 0.45, "rgba(0,0,0,0)", 1, "rgba(0,0,0,0.13)"]}
-                              listening={false}
-                            />
-                            {/* Fine grain noise */}
-                            {noiseC && (
-                              <Rect
-                                x={-5000} y={-5000} width={12000} height={12000}
-                                opacity={0.04}
-                                fillPatternImage={noiseC as unknown as HTMLImageElement}
-                                fillPatternRepeat="repeat"
-                                fillPatternScaleX={0.55}
-                                fillPatternScaleY={0.55}
-                                listening={false}
-                              />
-                            )}
-                            {/* Perimeter vignette */}
-                            <Rect
-                              x={bx} y={by} width={bw} height={bh}
-                              fillRadialGradientStartPoint={{ x: bw / 2, y: bh / 2 }}
-                              fillRadialGradientStartRadius={0}
-                              fillRadialGradientEndPoint={{ x: bw / 2, y: bh / 2 }}
-                              fillRadialGradientEndRadius={Math.max(bw, bh) * 0.75}
-                              fillRadialGradientColorStops={[0, "rgba(0,0,0,0)", 0.65, "rgba(0,0,0,0)", 1, "rgba(0,0,0,0.12)"]}
-                              listening={false}
-                            />
-                          </Group>
-                        );
-                      })()}
+                      {/* SHINGLES */}
+                      {atLeast(currentStep, "SHINGLES") && shinglesImg && (
+                        <>
+                          <Rect
+                            x={-5000}
+                            y={-5000}
+                            width={12000}
+                            height={12000}
+                            opacity={0.98}
+                            fillPatternImage={shinglesImg}
+                            fillPatternRepeat="repeat"
+                            fillPatternScaleX={r.shingleScale}
+                            fillPatternScaleY={r.shingleScale}
+                          />
+                          <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
+                        </>
+                      )}
 
                       {/* RIDGE VENT */}
                       {atLeast(currentStep, "RIDGE_VENT") && ridges.map((l) => (
@@ -6515,64 +1858,38 @@ export default function Page() {
                       ))}
 
                       {/* CAP SHINGLES */}
-                      {atLeast(currentStep, "CAP_SHINGLES") && activeShinglesImg && ridges.map((l) => (
-                        <CapBand key={`cap-${r.id}-${l.id}`} points={l.points} width={r.capW} clipStrokeWidth={r.capW / photoTx.scale} shinglesImg={activeShinglesImg} patternScale={effectivePatternScale} />
+                      {atLeast(currentStep, "CAP_SHINGLES") && shinglesImg && ridges.map((l) => (
+                        <CapBand key={`cap-${r.id}-${l.id}`} points={l.points} width={r.capW} shinglesImg={shinglesImg} patternScale={r.shingleScale} />
                       ))}
 
-                      {/* Valley seam / W-Valley on top of shingles */}
-                      {atLeast(currentStep, "SHINGLES") && valleys.map((l) =>
-                        r.valleyMetalColor === "Galvanized" ? (
-                          /* Galvanized open valley: subtle crease visible through shingles */
-                          <Group key={`vline-${r.id}-${l.id}`}>
-                            <Line points={l.points} stroke="rgba(0,0,0,0.12)"      strokeWidth={5}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                            <Line points={l.points} stroke="rgba(220,225,230,0.28)" strokeWidth={2.5} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                            <Line points={l.points} stroke="rgba(255,255,255,0.12)" strokeWidth={1}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                          </Group>
-                        ) : (
-                          /* W-Valley: colored metal channel sits ON TOP of shingles — shingles woven around it */
-                          <ShinyMetalStroke
-                            key={`vline-${r.id}-${l.id}`}
-                            points={l.points}
-                            width={r.valleyMetalW * 2.5}
-                            color={r.valleyMetalColor}
-                            opacity={0.99}
-                          />
-                        )
-                      )}
-
-                      {/* Hip seam — subtle crease visible through shingles */}
-                      {atLeast(currentStep, "SHINGLES") && hips.map((l) => (
-                        <Group key={`hline-${r.id}-${l.id}`}>
-                          <Line points={l.points} stroke="rgba(0,0,0,0.30)"      strokeWidth={5}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                          <Line points={l.points} stroke="rgba(210,215,220,0.55)" strokeWidth={2.5} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                      {/* keep valley line after shingles */}
+                      {atLeast(currentStep, "SHINGLES") && valleys.map((l) => (
+                        <Group key={`vline-${r.id}-${l.id}`}>
+                          <Line points={l.points} stroke="rgba(255,255,255,0.70)" strokeWidth={2} lineCap="round" lineJoin="round" opacity={0.9} />
+                          <Line points={l.points} stroke="rgba(0,0,0,0.45)" strokeWidth={1} lineCap="round" lineJoin="round" opacity={0.9} />
                         </Group>
                       ))}
 
-                      {/* Ridge fold — crease tinted to match shingle color so it blends naturally */}
-                      {atLeast(currentStep, "SHINGLES") && !atLeast(currentStep, "CAP_SHINGLES") && (() => {
-                        const [rr, rg, rb] = resolveShingleRGB(active.shingleSelection);
-                        return ridges.map((l) => (
-                          <Group key={`ridgefold-${r.id}-${l.id}`}>
-                            <Line points={l.points} stroke="rgba(0,0,0,0.22)"                    strokeWidth={5}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                            <Line points={l.points} stroke={`rgba(${rr},${rg},${rb},0.55)`}      strokeWidth={2.5} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                            <Line points={l.points} stroke={`rgba(${rr+30},${rg+30},${rb+30},0.22)`} strokeWidth={1} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                          </Group>
-                        ));
-                      })()}
+                      {/* keep hip line after shingles */}
+                      {atLeast(currentStep, "SHINGLES") && hips.map((l) => (
+                        <Group key={`hline-${r.id}-${l.id}`}>
+                          <Line points={l.points} stroke="rgba(255,255,255,0.70)" strokeWidth={2} lineCap="round" lineJoin="round" opacity={0.9} />
+                          <Line points={l.points} stroke="rgba(0,0,0,0.45)" strokeWidth={1} lineCap="round" lineJoin="round" opacity={0.9} />
+                        </Group>
+                      ))}
 
                       {/* dormer holes reveal original photo */}
                       {photoImg && r.holes.map((holePts, idx) => (
                         <Group key={`hole-reveal-${r.id}-${idx}`} clipFunc={(ctx) => clipPolygonPath(ctx, holePts)}>
-                          <KonvaImage image={photoImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} />
+                          <KonvaImage image={photoImg} width={w} height={h} />
                         </Group>
                       ))}
                     </Group>
                   );
                 })}
 
-                {/* edit handles — hidden in presentation mode */}
-                {!presentationMode &&
-                  active &&
+                {/* edit handles */}
+                {active &&
                   active.step === "TRACE" &&
                   active.showEditHandles &&
                   activeRoof?.closed &&
@@ -6582,317 +1899,250 @@ export default function Page() {
                       key={`pt-${idx}`}
                       x={activeRoof.outline[idx * 2]}
                       y={activeRoof.outline[idx * 2 + 1]}
-                      radius={10 / photoTx.scale}
+                      radius={10}
                       fill="rgba(255,255,255,0.90)"
                       stroke="rgba(15,23,42,0.45)"
                       strokeWidth={2}
-                      strokeScaleEnabled={false}
                       draggable
                       onDragMove={(e) => updateOutlinePoint(idx, e.target.x(), e.target.y())}
                     />
                   ))}
+              </Layer>
+            </Stage>
 
-              </Group>
-            )}
-            {/* ── END PHOTO GROUP ── */}
-
-            {/* ── Facade roof region mask (stage-space) ── hidden in presentation mode */}
-            {!presentationMode && active?.step === "TRACE" && edgePanel && edgeMode === "facade" && (
-              <>
-                {/* Dimmed band below the roof region */}
-                <Rect
-                  x={0} y={Math.round(stageH * edgeRoofRegionFraction)}
-                  width={stageW} height={stageH - Math.round(stageH * edgeRoofRegionFraction)}
-                  fill="rgba(0,0,0,0.35)"
-                  listening={false}
-                />
-                {/* Dashed boundary line */}
-                <Line
-                  points={[0, Math.round(stageH * edgeRoofRegionFraction), stageW, Math.round(stageH * edgeRoofRegionFraction)]}
-                  stroke="rgba(56,189,248,0.9)"
-                  strokeWidth={2}
-                  dash={[10, 6]}
-                  lineCap="round"
-                  listening={false}
-                />
-              </>
-            )}
-
-            {/* ── Edge Detection overlays (stage-space) ── hidden in presentation mode */}
-            {!presentationMode && active?.step === "TRACE" && edgePanel && showDetectedLayer && displaySegs.length > 0 && (
-              <>
-                {displaySegs.map((s) => (
-                  <Line
-                    key={`edge-${s.id}`}
-                    points={[s.x1, s.y1, s.x2, s.y2]}
-                    stroke={
-                      s.label === "eaveCandidate"        ? "rgba(59,130,246,0.90)"  :
-                      s.label === "ridgeCandidate"       ? "rgba(249,115,22,0.90)"  :
-                      s.label === "valleyCandidate"      ? "rgba(168,85,247,0.90)"  :
-                      s.label === "rakeCandidateLeft"    ? "rgba(20,184,166,0.90)"  :
-                      s.label === "rakeCandidateRight"   ? "rgba(132,204,22,0.90)"  :
-                      s.label === "rakeCandidate"        ? "rgba(16,185,129,0.85)"  :
-                      "rgba(250,204,21,0.75)"
-                    }
-                    strokeWidth={2}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                ))}
-              </>
-            )}
-            {/* Edge-add draft line — hidden in presentation mode */}
-            {!presentationMode && active?.step === "TRACE" && edgeTool === "ADD_EDGE" && edgeAddDraft && (
-              <Circle x={edgeAddDraft[0]} y={edgeAddDraft[1]} radius={5} fill="rgba(250,204,21,0.9)" />
-            )}
-            {/* Plane suggestion polygons — hidden in presentation mode */}
-            {!presentationMode && active?.step === "TRACE" && planeSuggs.map((ps) => {
-              const isHovered = ps.id === hoveredSuggId;
-              return (
-                <Line
-                  key={`plane-${ps.id}`}
-                  points={ps.polygon}
-                  closed
-                  stroke={isHovered ? "rgba(59,130,246,1)" : "rgba(59,130,246,0.55)"}
-                  strokeWidth={isHovered ? 3 : 2}
-                  fill={isHovered ? "rgba(59,130,246,0.18)" : "rgba(59,130,246,0.07)"}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-              );
-            })}
-
-            {/* Auto-detect overlay — stage-space, hidden in presentation mode */}
-            {!presentationMode && autoSuggest && active?.step === "TRACE" && (
-              <>
-                <Line
-                  points={autoSuggest.outline}
-                  closed
-                  stroke="rgba(245,158,11,0.85)"
-                  strokeWidth={2.5}
-                  dash={[8, 5]}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-                {autoSuggest.lines.map((l, i) => (
-                  <Line
-                    key={`suggest-${i}`}
-                    points={l.points}
-                    stroke={kindColor(l.kind)}
-                    strokeWidth={2}
-                    dash={[10, 6]}
-                    lineCap="round"
-                    opacity={0.75}
-                  />
-                ))}
-              </>
-            )}
-            {/* ── Before/After slider overlay ── */}
-            {baMode && photoImg && active?.src && (
-              <>
-                <Group clipFunc={(ctx) => { ctx.rect(-10000, -10000, splitWorldX + 10000, 30000); }} listening={false}>
-                  <Group x={photoTx.offX} y={photoTx.offY} scaleX={photoTx.scale} scaleY={photoTx.scale}>
-                    <KonvaImage image={photoImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} />
-                  </Group>
-                </Group>
-                <Line
-                  points={[splitWorldX, -10000, splitWorldX, 30000]}
-                  stroke="rgba(255,255,255,0.9)" strokeWidth={2}
-                  strokeScaleEnabled={false} listening={false}
-                />
-                <Circle
-                  x={splitWorldX}
-                  y={photoTx.offY + (photoTx.imgH ?? 0) * photoTx.scale / 2}
-                  radius={18 / (active?.stageScale ?? 1)}
-                  fill="white" opacity={0.95}
-                  stroke="rgba(0,0,0,0.15)" strokeWidth={1}
-                  strokeScaleEnabled={false} listening={false}
-                />
-                <Text
-                  x={splitWorldX - 90 / (active?.stageScale ?? 1)}
-                  y={photoTx.offY + 14 / (active?.stageScale ?? 1)}
-                  text="BEFORE" fontSize={11 / (active?.stageScale ?? 1)}
-                  fontStyle="bold" fill="rgba(255,255,255,0.75)" listening={false}
-                />
-                <Text
-                  x={splitWorldX + 14 / (active?.stageScale ?? 1)}
-                  y={photoTx.offY + 14 / (active?.stageScale ?? 1)}
-                  text="AFTER" fontSize={11 / (active?.stageScale ?? 1)}
-                  fontStyle="bold" fill="rgba(255,255,255,0.75)" listening={false}
-                />
-              </>
-            )}
-          </Layer>
-        </Stage>
-        </div>{/* end CSS-scale wrapper */}
-
-              {/* ── Cinematic presentation bottom strip ── */}
-              {presentationMode && !isCustomerView && (
-                <div style={{
-                  position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 50,
-                  background: "linear-gradient(to top, rgba(6,12,22,0.96) 0%, rgba(6,12,22,0.70) 60%, transparent 100%)",
-                  padding: `20px 28px max(20px, env(safe-area-inset-bottom))`,
-                  display: "flex", flexDirection: "column", alignItems: "center", gap: 14,
-                }}>
-                  {/* 5-Chapter progress pills */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {PRESENTATION_CHAPTERS.map((ch, i) => {
-                      const isActive = i === currentChapterIdx;
-                      const isPast = i < currentChapterIdx;
-                      return (
-                        <button
-                          key={ch.id}
-                          onClick={() => {
-                            if (ch.steps.length === 0) { setFinalLookMode(true); return; }
-                            // Jump to first step of the chapter that's relevant
-                            const rel = active ? relevantSteps(active.roofs) : new Set<Step>();
-                            const target = ch.steps.find(s => rel.has(s));
-                            if (target) { setFinalLookMode(false); jumpToStep(target); }
-                          }}
-                          title={ch.label}
-                          style={{
-                            height: 24, borderRadius: 99, border: "none", cursor: "pointer",
-                            padding: isActive ? "0 14px" : "0 8px",
-                            fontSize: 10, fontWeight: 700, letterSpacing: "0.05em",
-                            flexShrink: 0,
-                            background: isPast ? "rgba(22,163,74,0.55)" : isActive ? "#ea580c" : "rgba(255,255,255,0.09)",
-                            color: (isPast || isActive) ? "#ffffff" : "rgba(255,255,255,0.35)",
-                            transition: "all 0.3s ease",
-                            boxShadow: isActive ? "0 0 10px rgba(234,88,12,0.55)" : "none",
-                            minWidth: isActive ? 80 : 24,
-                            textTransform: "uppercase",
-                            overflow: "hidden", whiteSpace: "nowrap",
-                          }}
-                        >{isActive || !isMobile ? ch.shortLabel : ""}</button>
-                      );
-                    })}
-                  </div>
-                  {/* Controls row */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", maxWidth: 520 }}>
-                    {/* Back */}
-                    <button
-                      onClick={() => {
-                        if (finalLookMode) { setFinalLookMode(false); return; }
-                        goBack();
-                      }}
-                      disabled={!finalLookMode && presentationStepNum <= 1}
-                      style={{
-                        padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600,
-                        border: "1px solid rgba(255,255,255,0.12)",
-                        background: "rgba(255,255,255,0.07)",
-                        color: (!finalLookMode && presentationStepNum <= 1) ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.82)",
-                        cursor: (!finalLookMode && presentationStepNum <= 1) ? "default" : "pointer",
-                        transition: "background 0.15s, color 0.15s", flexShrink: 0,
-                      }}
-                    >← Back</button>
-                    {/* Center: photo switcher or Before/After */}
-                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                      {(active?.photoSrcs?.length ?? 0) > 1 ? (() => {
-                        const srcs = active!.photoSrcs;
-                        const idx = srcs.indexOf(active!.src);
-                        const total = srcs.length;
-                        return (
-                          <>
-                            <button onClick={() => switchToPhoto(srcs[(idx - 1 + total) % total])}
-                              style={{ padding: "6px 12px", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)" }}>‹</button>
-                            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.40)", fontWeight: 600, letterSpacing: "0.05em" }}>PHOTO {idx+1} / {total}</span>
-                            <button onClick={() => switchToPhoto(srcs[(idx + 1) % total])}
-                              style={{ padding: "6px 12px", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)" }}>›</button>
-                          </>
-                        );
-                      })() : (
-                        <button
-                          onClick={() => setBaMode(v => !v)}
-                          title="Before / After"
-                          style={{
-                            padding: "6px 14px", borderRadius: 8, fontSize: 11, fontWeight: 600,
-                            border: "1px solid rgba(255,255,255,0.12)",
-                            background: baMode ? "rgba(234,88,12,0.18)" : "rgba(255,255,255,0.06)",
-                            color: baMode ? "#fb923c" : "rgba(255,255,255,0.45)",
-                            cursor: "pointer", letterSpacing: "0.04em",
-                            transition: "background 0.15s, color 0.15s",
-                          }}
-                        >◧ BEFORE / AFTER</button>
-                      )}
-                    </div>
-                    {/* Next / Final Look / Exit */}
-                    {finalLookMode ? (
-                      <button
-                        onClick={() => {
-                          setFinalLookMode(false); setPresentationMode(false); setUiTab("edit");
-                          if (document.fullscreenElement && document.exitFullscreen) {
-                            document.exitFullscreen().catch(() => {});
-                          }
-                        }}
-                        style={{
-                          padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600,
-                          border: "1px solid rgba(255,255,255,0.12)", cursor: "pointer", flexShrink: 0,
-                          background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.70)",
-                        }}
-                      >✕ Exit</button>
-                    ) : canGoNext() ? (
-                      <button
-                        onClick={() => {
-                          // When at the last step before EXPORT, enter Final Look instead
-                          const rel = active ? relevantSteps(active.roofs) : new Set<Step>();
-                          let nextIdx = stepIndex(active?.step ?? "START") + 1;
-                          while (nextIdx < STEPS.length && !rel.has(STEPS[nextIdx])) nextIdx++;
-                          if (nextIdx >= STEPS.length || STEPS[nextIdx] === "EXPORT") {
-                            setFinalLookMode(true);
-                            setStepFlash(true); setTimeout(() => setStepFlash(false), 80);
-                          } else {
-                            goNext();
-                          }
-                        }}
-                        style={{
-                          padding: "10px 26px", borderRadius: 10, fontSize: 13, fontWeight: 700,
-                          border: "none", cursor: "pointer", flexShrink: 0,
-                          background: "linear-gradient(135deg, #ea580c 0%, #c2410c 100%)",
-                          color: "#ffffff",
-                          boxShadow: "0 4px 16px rgba(234,88,12,0.50)",
-                          transition: "transform 0.12s ease, box-shadow 0.12s ease",
-                        }}
-                      >Next →</button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setPresentationMode(false); setUiTab("edit");
-                          if (document.fullscreenElement && document.exitFullscreen) {
-                            document.exitFullscreen().catch(() => {});
-                          }
-                        }}
-                        style={{
-                          padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600,
-                          border: "1px solid rgba(255,255,255,0.12)", cursor: "pointer", flexShrink: 0,
-                          background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.70)",
-                        }}
-                      >✕ Exit</button>
-                    )}
-                  </div>
+            {/* Before/After slider divider */}
+            {sliderX !== null && exportView === "LIVE" && (
+              <div
+                className="absolute top-0 bottom-0 z-10"
+                style={{ left: sliderX - 16, width: 32, cursor: "ew-resize", touchAction: "none" }}
+                onPointerDown={onSliderPointerDown}
+                onPointerMove={onSliderPointerMove}
+                onPointerUp={onSliderPointerUp}
+              >
+                {/* Vertical line */}
+                <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-white shadow-lg" style={{ transform: "translateX(-50%)" }} />
+                {/* Knob */}
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white shadow-lg flex items-center justify-center border-2 border-slate-200">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M4 3L1 7L4 11" stroke="#475569" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M10 3L13 7L10 11" stroke="#475569" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
                 </div>
-              )}
-      </main>
+                {/* Labels */}
+                <div className="absolute left-1/2 bottom-4 -translate-x-1/2 flex gap-10 text-[10px] font-bold whitespace-nowrap pointer-events-none">
+                  <span className="text-white/70 -translate-x-3">Before</span>
+                  <span className="text-white/70 translate-x-3">After</span>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      )}
+
+      {/* ── Presentation Mode ──────────────────── */}
       <AnimatePresence>
-        {toastVisible && (
-          <motion.div key="toast"
-            initial={{ opacity: 0, y: 24, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 12, scale: 0.95 }}
-            transition={{ type: "spring", stiffness: 380, damping: 28 }}
-            style={{
-              position: "fixed", bottom: 28, left: "50%",
-              transform: "translateX(-50%)", zIndex: 9999,
-              background: "rgba(15,23,42,0.90)", backdropFilter: "blur(10px)",
-              color: "#ffffff", fontSize: 13, fontWeight: 500,
-              padding: "10px 18px", borderRadius: 10,
-              boxShadow: "0 8px 28px rgba(0,0,0,0.22), 0 0 0 1px rgba(255,255,255,0.08)",
-              pointerEvents: "none", whiteSpace: "nowrap" as const,
-            }}>
-            {toastMsg}
+        {presentationMode && active && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-40 bg-black flex flex-col"
+          >
+            {/* Canvas fills the screen */}
+            <div ref={presentationMode ? containerRef : undefined} className="flex-1 relative overflow-hidden">
+              <Stage
+                ref={presentationMode ? stageRef : undefined}
+                width={w}
+                height={h}
+                onWheel={onWheel}
+                draggable
+                scaleX={active.stageScale}
+                scaleY={active.stageScale}
+                x={active.stagePos.x}
+                y={active.stagePos.y}
+                onDragEnd={(e) => {
+                  patchActive((p) => ({ ...p, stagePos: { x: e.target.x(), y: e.target.y() } }));
+                }}
+                style={{ touchAction: "none" }}
+              >
+                <Layer>
+                  {photoImg && <KonvaImage image={photoImg} width={w} height={h} />}
+
+                  {/* Reuse all roof rendering — same as main canvas */}
+                  {active.roofs.map((r) => {
+                    if (!r.closed || r.outline.length < 6) return null;
+                    const eaves = r.lines.filter((l) => l.kind === "EAVE");
+                    const rakes = r.lines.filter((l) => l.kind === "RAKE");
+                    const valleys = r.lines.filter((l) => l.kind === "VALLEY");
+                    const ridges = r.lines.filter((l) => l.kind === "RIDGE");
+                    const hips = r.lines.filter((l) => l.kind === "HIP");
+
+                    return (
+                      <Group key={`pres-${r.id}`} clipFunc={(ctx) => clipPolygonPath(ctx, r.outline)}>
+                        {atLeast(currentStep, "TEAROFF") && deckingImg && (
+                          <KonvaImage image={deckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
+                        )}
+                        {stepIndex(currentStep) >= stepIndex("SYNTHETIC") && stepIndex(currentStep) < stepIndex("SHINGLES") && syntheticImg && (
+                          <KonvaImage image={syntheticImg} x={0} y={0} width={w} height={h} opacity={0.86} />
+                        )}
+                        {atLeast(currentStep, "ICE_WATER") && (
+                          <>
+                            {eaves.map((l) => <Line key={`piwe-${r.id}-${l.id}`} points={l.points} stroke="rgba(18,23,38,0.92)" strokeWidth={r.iceWaterEaveW} lineCap="round" lineJoin="round" opacity={0.92} />)}
+                            {valleys.map((l) => <Line key={`piwv-${r.id}-${l.id}`} points={l.points} stroke="rgba(18,23,38,0.92)" strokeWidth={r.iceWaterValleyW} lineCap="round" lineJoin="round" opacity={0.92} />)}
+                          </>
+                        )}
+                        {atLeast(currentStep, "GUTTER_APRON") && eaves.map((l) => <ShinyMetalStroke key={`pa-${r.id}-${l.id}`} points={l.points} width={r.gutterApronW} color={r.gutterApronColor} />)}
+                        {atLeast(currentStep, "DRIP_EDGE") && rakes.map((l) => <ShinyMetalStroke key={`pd-${r.id}-${l.id}`} points={l.points} width={r.dripEdgeW} color={r.dripEdgeColor} />)}
+                        {atLeast(currentStep, "VALLEY_METAL") && valleys.map((l) => <ShinyMetalStroke key={`pvm-${r.id}-${l.id}`} points={l.points} width={r.valleyMetalW} color={r.valleyMetalColor} opacity={0.995} />)}
+                        {atLeast(currentStep, "PRO_START") && (
+                          <>
+                            {eaves.map((l) => <StarterStroke key={`pps-e-${r.id}-${l.id}`} points={l.points} width={r.proStartW} />)}
+                            {rakes.map((l) => <StarterStroke key={`pps-r-${r.id}-${l.id}`} points={l.points} width={r.proStartW} />)}
+                          </>
+                        )}
+                        {atLeast(currentStep, "SHINGLES") && shinglesImg && (
+                          <>
+                            <Rect x={-5000} y={-5000} width={12000} height={12000} opacity={0.98} fillPatternImage={shinglesImg} fillPatternRepeat="repeat" fillPatternScaleX={r.shingleScale} fillPatternScaleY={r.shingleScale} />
+                            <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
+                          </>
+                        )}
+                        {atLeast(currentStep, "RIDGE_VENT") && ridges.map((l) => <RidgeVentStroke key={`prv-${r.id}-${l.id}`} points={l.points} width={r.ridgeVentW} />)}
+                        {atLeast(currentStep, "CAP_SHINGLES") && shinglesImg && ridges.map((l) => <CapBand key={`pcap-${r.id}-${l.id}`} points={l.points} width={r.capW} shinglesImg={shinglesImg} patternScale={r.shingleScale} />)}
+                        {atLeast(currentStep, "SHINGLES") && valleys.map((l) => (
+                          <Group key={`pvl-${r.id}-${l.id}`}>
+                            <Line points={l.points} stroke="rgba(255,255,255,0.70)" strokeWidth={2} lineCap="round" lineJoin="round" opacity={0.9} />
+                            <Line points={l.points} stroke="rgba(0,0,0,0.45)" strokeWidth={1} lineCap="round" lineJoin="round" opacity={0.9} />
+                          </Group>
+                        ))}
+                        {atLeast(currentStep, "SHINGLES") && hips.map((l) => (
+                          <Group key={`phl-${r.id}-${l.id}`}>
+                            <Line points={l.points} stroke="rgba(255,255,255,0.70)" strokeWidth={2} lineCap="round" lineJoin="round" opacity={0.9} />
+                            <Line points={l.points} stroke="rgba(0,0,0,0.45)" strokeWidth={1} lineCap="round" lineJoin="round" opacity={0.9} />
+                          </Group>
+                        ))}
+                        {photoImg && r.holes.map((holePts, idx) => (
+                          <Group key={`phr-${r.id}-${idx}`} clipFunc={(ctx) => clipPolygonPath(ctx, holePts)}>
+                            <KonvaImage image={photoImg} width={w} height={h} />
+                          </Group>
+                        ))}
+                      </Group>
+                    );
+                  })}
+                </Layer>
+              </Stage>
+            </div>
+
+            {/* Floating step title */}
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={liveStep}
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="rv-float-ctrl absolute top-6 left-1/2 -translate-x-1/2 px-5 py-2.5 rounded-xl bg-black/70 backdrop-blur-sm text-white text-sm font-bold shadow-lg"
+              >
+                {STEP_TITLE[liveStep]}
+              </motion.div>
+            </AnimatePresence>
+
+            {/* Exit button */}
+            <button
+              onClick={() => setPresentationMode(false)}
+              className="rv-float-ctrl absolute top-5 right-5 px-4 py-2 rounded-xl bg-white/90 backdrop-blur-sm text-slate-800 text-xs font-bold shadow-lg cursor-pointer hover:bg-white"
+            >
+              Exit Presentation
+            </button>
+
+            {/* Navigation arrows */}
+            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4">
+              <button
+                onClick={goBack}
+                disabled={stepIndex(liveStep) === 0}
+                className="rv-float-ctrl px-5 py-3 rounded-xl bg-white/90 backdrop-blur-sm text-slate-800 font-bold shadow-lg cursor-pointer hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed text-lg"
+              >
+                &larr;
+              </button>
+              <span className="text-white/70 text-sm font-bold">
+                {stepIndex(liveStep) + 1} / {STEPS.length}
+              </span>
+              <button
+                onClick={goNext}
+                disabled={!canGoNext()}
+                className="rv-float-ctrl px-5 py-3 rounded-xl bg-white/90 backdrop-blur-sm text-slate-800 font-bold shadow-lg cursor-pointer hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed text-lg"
+              >
+                &rarr;
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
-      </div>
+
+      {/* ── Email Dialog ──────────────────────── */}
+      <AnimatePresence>
+        {showEmailDialog && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+            onClick={() => { if (!emailSending) setShowEmailDialog(false); }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="text-sm font-black text-slate-800 mb-4">Send Customer Link</div>
+              <label className="block text-xs font-bold text-slate-500 mb-1.5">Email address</label>
+              <input
+                type="email"
+                value={emailTo}
+                onChange={(e) => setEmailTo(e.target.value)}
+                placeholder="customer@example.com"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-400"
+                disabled={emailSending}
+                autoFocus
+              />
+              <div className="flex gap-2 mt-4">
+                <button
+                  className="rv-btn-ghost flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-bold bg-white cursor-pointer"
+                  onClick={() => { setShowEmailDialog(false); setEmailTo(""); }}
+                  disabled={emailSending}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="rv-btn-primary flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-orange-500 to-orange-600 shadow-md cursor-pointer disabled:opacity-40"
+                  onClick={handleSendEmail}
+                  disabled={emailSending || !emailTo.trim()}
+                >
+                  {emailSending ? "Sending..." : "Send"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Toast ───────────────────────────────── */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className={`fixed bottom-6 right-6 px-5 py-3 rounded-xl shadow-lg text-sm font-bold z-50 ${
+              toast.type === "success"
+                ? "bg-green-600 text-white"
+                : "bg-red-600 text-white"
+            }`}
+          >
+            {toast.msg}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
