@@ -80,7 +80,12 @@ type Tool =
   | "DRAW_RAKE"
   | "DRAW_VALLEY"
   | "DRAW_RIDGE"
-  | "DRAW_HIP";
+  | "DRAW_HIP"
+  | "SET_PLANE";
+
+type PhotoPerspective = "TOP_DOWN" | "OBLIQUE";
+type Point2D = { x: number; y: number };
+type ObliquePlane = { tl: Point2D; tr: Point2D; br: Point2D; bl: Point2D };
 
 type Polyline = { id: string; kind: LineKind; points: number[] };
 
@@ -137,6 +142,9 @@ type PhotoProject = {
 
   stageScale: number;
   stagePos: { x: number; y: number };
+
+  photoPerspective: PhotoPerspective;
+  obliquePlane: ObliquePlane | null;
 };
 
 type ExportView = "LIVE" | "PDF_SHINGLES" | "PDF_UNDERLAY";
@@ -234,6 +242,93 @@ function defaultRoof(name: string): Roof {
   };
 }
 
+/* ---------- Perspective warp ---------- */
+function lerp2d(a: Point2D, b: Point2D, t: number): Point2D {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+function bilinearQuad(plane: ObliquePlane, u: number, v: number): Point2D {
+  const top = lerp2d(plane.tl, plane.tr, u);
+  const bot = lerp2d(plane.bl, plane.br, u);
+  return lerp2d(top, bot, v);
+}
+
+function generateWarpedTexture(
+  srcCanvas: HTMLCanvasElement,
+  plane: ObliquePlane,
+  outW: number,
+  outH: number,
+  gridN = 16
+): string {
+  const out = document.createElement("canvas");
+  out.width = outW;
+  out.height = outH;
+  const ctx = out.getContext("2d")!;
+
+  const sW = srcCanvas.width;
+  const sH = srcCanvas.height;
+
+  for (let row = 0; row < gridN; row++) {
+    for (let col = 0; col < gridN; col++) {
+      const u0 = col / gridN, u1 = (col + 1) / gridN;
+      const v0 = row / gridN, v1 = (row + 1) / gridN;
+
+      // Source rect corners (normalized to srcCanvas)
+      const sx0 = u0 * sW, sx1 = u1 * sW;
+      const sy0 = v0 * sH, sy1 = v1 * sH;
+
+      // Destination corners via bilinear mapping
+      const d00 = bilinearQuad(plane, u0, v0);
+      const d10 = bilinearQuad(plane, u1, v0);
+      const d01 = bilinearQuad(plane, u0, v1);
+      const d11 = bilinearQuad(plane, u1, v1);
+
+      // Triangle 1: top-left triangle (d00, d10, d01)
+      drawTriangle(ctx, srcCanvas, sx0, sy0, sx1, sy0, sx0, sy1, d00.x, d00.y, d10.x, d10.y, d01.x, d01.y);
+      // Triangle 2: bottom-right triangle (d10, d11, d01)
+      drawTriangle(ctx, srcCanvas, sx1, sy0, sx1, sy1, sx0, sy1, d10.x, d10.y, d11.x, d11.y, d01.x, d01.y);
+    }
+  }
+
+  return out.toDataURL("image/png");
+}
+
+function drawTriangle(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLCanvasElement,
+  // source triangle
+  sx0: number, sy0: number, sx1: number, sy1: number, sx2: number, sy2: number,
+  // destination triangle
+  dx0: number, dy0: number, dx1: number, dy1: number, dx2: number, dy2: number
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(dx0, dy0);
+  ctx.lineTo(dx1, dy1);
+  ctx.lineTo(dx2, dy2);
+  ctx.closePath();
+  ctx.clip();
+
+  // Compute affine transform: source → destination
+  // [sx0, sy0, 1] → [dx0, dy0]
+  // [sx1, sy1, 1] → [dx1, dy1]
+  // [sx2, sy2, 1] → [dx2, dy2]
+  const denom = (sx0 * (sy1 - sy2) + sx1 * (sy2 - sy0) + sx2 * (sy0 - sy1));
+  if (Math.abs(denom) < 1e-10) { ctx.restore(); return; }
+
+  const a = (dx0 * (sy1 - sy2) + dx1 * (sy2 - sy0) + dx2 * (sy0 - sy1)) / denom;
+  const b = (dx0 * (sx2 - sx1) + dx1 * (sx0 - sx2) + dx2 * (sx1 - sx0)) / denom;
+  const eVal = (dx0 * (sx1 * sy2 - sx2 * sy1) + dx1 * (sx2 * sy0 - sx0 * sy2) + dx2 * (sx0 * sy1 - sx1 * sy0)) / denom;
+
+  const c = (dy0 * (sy1 - sy2) + dy1 * (sy2 - sy0) + dy2 * (sy0 - sy1)) / denom;
+  const d = (dy0 * (sx2 - sx1) + dy1 * (sx0 - sx2) + dy2 * (sx1 - sx0)) / denom;
+  const f = (dy0 * (sx1 * sy2 - sx2 * sy1) + dy1 * (sx2 * sy0 - sx0 * sy2) + dy2 * (sx0 * sy1 - sx1 * sy0)) / denom;
+
+  ctx.setTransform(a, c, b, d, eVal, f);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+
 /* ---------- Procedural textures ---------- */
 function addNoise(
   ctx: CanvasRenderingContext2D,
@@ -285,7 +380,7 @@ function shinglePalette(c: ShingleColor) {
   }
 }
 
-function makeDeckingTexture(w: number, h: number) {
+function makeDeckingCanvas(w: number, h: number): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = Math.max(1200, Math.floor(w));
   c.height = Math.max(1200, Math.floor(h));
@@ -315,10 +410,14 @@ function makeDeckingTexture(w: number, h: number) {
 
   addNoise(ctx, W, H, 180000, 0.004, 0.05);
   vignette(ctx, W, H, 0.06);
-  return c.toDataURL("image/png");
+  return c;
 }
 
-function makeSyntheticTexture(w: number, h: number) {
+function makeDeckingTexture(w: number, h: number) {
+  return makeDeckingCanvas(w, h).toDataURL("image/png");
+}
+
+function makeSyntheticCanvas(w: number, h: number): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = Math.max(1200, Math.floor(w));
   c.height = Math.max(1200, Math.floor(h));
@@ -362,10 +461,14 @@ function makeSyntheticTexture(w: number, h: number) {
   ctx.globalAlpha = 1;
   addNoise(ctx, W, H, 200000, 0.003, 0.04);
   vignette(ctx, W, H, 0.06);
-  return c.toDataURL("image/png");
+  return c;
 }
 
-function makeShingleTexture(w: number, h: number, color: ShingleColor) {
+function makeSyntheticTexture(w: number, h: number) {
+  return makeSyntheticCanvas(w, h).toDataURL("image/png");
+}
+
+function makeShingleCanvas(w: number, h: number, color: ShingleColor): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = Math.max(1400, Math.floor(w));
   c.height = Math.max(1400, Math.floor(h));
@@ -432,7 +535,11 @@ function makeShingleTexture(w: number, h: number, color: ShingleColor) {
   ctx.globalAlpha = 1;
   addNoise(ctx, W, H, 420000, 0.003, 0.06);
   vignette(ctx, W, H, 0.09);
-  return c.toDataURL("image/png");
+  return c;
+}
+
+function makeShingleTexture(w: number, h: number, color: ShingleColor) {
+  return makeShingleCanvas(w, h, color).toDataURL("image/png");
 }
 
 /* ---------- strokes ---------- */
@@ -646,6 +753,7 @@ export default function Page() {
   const [draftLine, setDraftLine] = useState<Polyline | null>(null);
   const [draftHole, setDraftHole] = useState<number[] | null>(null);
   const [exportView, setExportView] = useState<ExportView>("LIVE");
+  const [planeDraftCorners, setPlaneDraftCorners] = useState<Point2D[]>([]);
 
   /* ── Helpers ─────────────────────────────── */
   function patchActive(updater: (p: PhotoProject) => PhotoProject) {
@@ -711,6 +819,8 @@ export default function Page() {
       showEditHandles: false,
       stageScale: 1,
       stagePos: { x: 0, y: 0 },
+      photoPerspective: "TOP_DOWN",
+      obliquePlane: null,
     };
     setPhotos((prev) => [...prev, item]);
     setActivePhotoId(id);
@@ -761,6 +871,8 @@ export default function Page() {
             showEditHandles: false,
             stageScale: 1,
             stagePos: { x: 0, y: 0 },
+            photoPerspective: "TOP_DOWN",
+            obliquePlane: null,
           };
           next.unshift(item);
           return next;
@@ -1008,6 +1120,21 @@ export default function Page() {
       setDraftLine((d) => (d ? { ...d, points: [...d.points, pos.x, pos.y] } : d));
       return;
     }
+
+    if (tool === "SET_PLANE") {
+      const newCorners = [...planeDraftCorners, { x: pos.x, y: pos.y }];
+      if (newCorners.length >= 4) {
+        patchActive((p) => ({
+          ...p,
+          obliquePlane: { tl: newCorners[0], tr: newCorners[1], br: newCorners[2], bl: newCorners[3] },
+        }));
+        setPlaneDraftCorners([]);
+        setTool("NONE");
+      } else {
+        setPlaneDraftCorners(newCorners);
+      }
+      return;
+    }
   }
 
   function updateOutlinePoint(i: number, x: number, y: number) {
@@ -1041,6 +1168,30 @@ export default function Page() {
     return makeShingleTexture(texW, texH, active.shingleColor);
   }, [active?.id, active?.src, active?.shingleColor, texW, texH]);
   const shinglesImg = useHtmlImage(shingleSrc);
+
+  /* ── Warped textures (OBLIQUE perspective) ── */
+  const isOblique = active?.photoPerspective === "OBLIQUE" && !!active?.obliquePlane;
+
+  const warpedDeckingSrc = useMemo(() => {
+    if (!active?.obliquePlane || active.photoPerspective !== "OBLIQUE" || !active.src || typeof window === "undefined") return "";
+    const canvas = makeDeckingCanvas(texW, texH);
+    return generateWarpedTexture(canvas, active.obliquePlane, w, h);
+  }, [active?.id, active?.src, active?.photoPerspective, active?.obliquePlane, texW, texH, w, h]);
+  const warpedDeckingImg = useHtmlImage(warpedDeckingSrc);
+
+  const warpedSyntheticSrc = useMemo(() => {
+    if (!active?.obliquePlane || active.photoPerspective !== "OBLIQUE" || !active.src || typeof window === "undefined") return "";
+    const canvas = makeSyntheticCanvas(texW, texH);
+    return generateWarpedTexture(canvas, active.obliquePlane, w, h);
+  }, [active?.id, active?.src, active?.photoPerspective, active?.obliquePlane, texW, texH, w, h]);
+  const warpedSyntheticImg = useHtmlImage(warpedSyntheticSrc);
+
+  const warpedShinglesSrc = useMemo(() => {
+    if (!active?.obliquePlane || active.photoPerspective !== "OBLIQUE" || !active.src || typeof window === "undefined") return "";
+    const canvas = makeShingleCanvas(texW, texH, active.shingleColor);
+    return generateWarpedTexture(canvas, active.obliquePlane, w, h);
+  }, [active?.id, active?.src, active?.photoPerspective, active?.obliquePlane, active?.shingleColor, texW, texH, w, h]);
+  const warpedShinglesImg = useHtmlImage(warpedShinglesSrc);
 
   const metalOptions: MetalColor[] = ["Aluminum", "White", "Black", "Bronze", "Brown", "Gray"];
 
@@ -1106,8 +1257,13 @@ export default function Page() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setPhotos(parsed);
-          setActivePhotoId(parsed[0].id);
+          const migrated = parsed.map((p: any) => ({
+            ...p,
+            photoPerspective: p.photoPerspective ?? "TOP_DOWN",
+            obliquePlane: p.obliquePlane ?? null,
+          }));
+          setPhotos(migrated);
+          setActivePhotoId(migrated[0].id);
         }
       }
     } catch {
@@ -1422,6 +1578,106 @@ export default function Page() {
                   </div>
                 )}
 
+                {/* Photo Type */}
+                {active && active.src && (
+                  <div className={`${sectionCard} ${!active.photoPerspective ? "ring-2 ring-orange-400" : ""}`}>
+                    <div className="text-sm font-black mb-1">Photo Type</div>
+                    <div className="text-xs text-slate-400 mb-3">Select how this photo was taken. Textures will render accordingly.</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => patchActive((p) => ({ ...p, photoPerspective: "TOP_DOWN", obliquePlane: null }))}
+                        className={`py-3 px-2 rounded-xl text-xs font-bold cursor-pointer transition-all border-2 text-center ${
+                          active.photoPerspective === "TOP_DOWN"
+                            ? "bg-blue-50 border-blue-500 text-blue-700 shadow-md"
+                            : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
+                        }`}
+                      >
+                        <div className="text-2xl mb-1">&#x1F6F0;&#xFE0F;</div>
+                        <div className="font-black text-sm">On the Roof</div>
+                        <div className="text-[10px] font-normal mt-1 opacity-70 leading-tight">Satellite, drone, or<br/>standing on the roof</div>
+                      </button>
+                      <button
+                        onClick={() => patchActive((p) => ({ ...p, photoPerspective: "OBLIQUE" }))}
+                        className={`py-3 px-2 rounded-xl text-xs font-bold cursor-pointer transition-all border-2 text-center ${
+                          active.photoPerspective === "OBLIQUE"
+                            ? "bg-blue-50 border-blue-500 text-blue-700 shadow-md"
+                            : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
+                        }`}
+                      >
+                        <div className="text-2xl mb-1">&#x1F4F7;</div>
+                        <div className="font-black text-sm">From the Ground</div>
+                        <div className="text-[10px] font-normal mt-1 opacity-70 leading-tight">Standing on the ground<br/>looking up at the roof</div>
+                      </button>
+                    </div>
+
+                    {active.photoPerspective === "OBLIQUE" && (
+                      <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+                        <div className="text-xs text-slate-500 font-bold">Perspective Plane</div>
+                        <div className="text-xs text-slate-400">
+                          Define 4 corners on the roof so shingles and underlayments match the camera angle.
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            className="rv-btn-primary flex-1 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-purple-500 to-purple-600 cursor-pointer"
+                            onClick={() => { setTool("SET_PLANE"); setPlaneDraftCorners([]); }}
+                          >
+                            Set Corners
+                          </button>
+                          <button
+                            className={`${btnSmall} flex-1`}
+                            onClick={() => patchActive((p) => ({ ...p, obliquePlane: null }))}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                        <button
+                          className={`${btnSmall} w-full`}
+                          onClick={() => {
+                            if (!activeRoof?.closed || activeRoof.outline.length < 6) return;
+                            const pts = activeRoof.outline;
+                            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                            for (let i = 0; i < pts.length; i += 2) {
+                              if (pts[i] < minX) minX = pts[i];
+                              if (pts[i] > maxX) maxX = pts[i];
+                              if (pts[i + 1] < minY) minY = pts[i + 1];
+                              if (pts[i + 1] > maxY) maxY = pts[i + 1];
+                            }
+                            patchActive((p) => ({
+                              ...p,
+                              obliquePlane: {
+                                tl: { x: minX, y: minY },
+                                tr: { x: maxX, y: minY },
+                                br: { x: maxX, y: maxY },
+                                bl: { x: minX, y: maxY },
+                              },
+                            }));
+                          }}
+                        >
+                          Auto-Fit to Roof Outline
+                        </button>
+
+                        {tool === "SET_PLANE" && (
+                          <div className="text-xs text-purple-600 font-bold bg-purple-50 border border-purple-200 rounded-lg p-2">
+                            Click on the canvas to place corner: {["Top-Left", "Top-Right", "Bottom-Right", "Bottom-Left"][planeDraftCorners.length] ?? "done"} ({planeDraftCorners.length}/4)
+                          </div>
+                        )}
+
+                        {!active.obliquePlane && tool !== "SET_PLANE" && (
+                          <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                            Set 4 corners so textures warp to match the photo angle.
+                          </div>
+                        )}
+
+                        {active.obliquePlane && (
+                          <div className="text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg p-2">
+                            Plane set. Drag the purple handles on the canvas to fine-tune.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Roofs */}
                 {active && (
                   <div className={sectionCard}>
@@ -1648,6 +1904,7 @@ export default function Page() {
                         ))}
                       </div>
                     </div>
+
                   </>
                 )}
               </div>
@@ -1768,15 +2025,18 @@ export default function Page() {
                   return (
                     <Group key={`install-${r.id}`} clipFunc={roofClip}>
                       {/* Tearoff (decking) */}
-                      {atLeast(currentStep, "TEAROFF") && deckingImg && (
-                        <KonvaImage image={deckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
+                      {atLeast(currentStep, "TEAROFF") && (
+                        isOblique && warpedDeckingImg
+                          ? <KonvaImage image={warpedDeckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
+                          : deckingImg && <KonvaImage image={deckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
                       )}
 
                       {/* Synthetic (field) — only before shingles */}
                       {stepIndex(currentStep) >= stepIndex("SYNTHETIC") &&
-                        stepIndex(currentStep) < stepIndex("SHINGLES") &&
-                        syntheticImg && (
-                          <KonvaImage image={syntheticImg} x={0} y={0} width={w} height={h} opacity={0.86} />
+                        stepIndex(currentStep) < stepIndex("SHINGLES") && (
+                          isOblique && warpedSyntheticImg
+                            ? <KonvaImage image={warpedSyntheticImg} x={0} y={0} width={w} height={h} opacity={0.86} />
+                            : syntheticImg && <KonvaImage image={syntheticImg} x={0} y={0} width={w} height={h} opacity={0.86} />
                         )}
 
                       {/* Ice & water — always visible once reached */}
@@ -1835,21 +2095,26 @@ export default function Page() {
                       )}
 
                       {/* SHINGLES */}
-                      {atLeast(currentStep, "SHINGLES") && shinglesImg && (
-                        <>
-                          <Rect
-                            x={-5000}
-                            y={-5000}
-                            width={12000}
-                            height={12000}
-                            opacity={0.98}
-                            fillPatternImage={shinglesImg}
-                            fillPatternRepeat="repeat"
-                            fillPatternScaleX={r.shingleScale}
-                            fillPatternScaleY={r.shingleScale}
-                          />
-                          <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
-                        </>
+                      {atLeast(currentStep, "SHINGLES") && (
+                        isOblique && warpedShinglesImg
+                          ? <>
+                              <KonvaImage image={warpedShinglesImg} x={0} y={0} width={w} height={h} opacity={0.98} />
+                              <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
+                            </>
+                          : shinglesImg && <>
+                              <Rect
+                                x={-5000}
+                                y={-5000}
+                                width={12000}
+                                height={12000}
+                                opacity={0.98}
+                                fillPatternImage={shinglesImg}
+                                fillPatternRepeat="repeat"
+                                fillPatternScaleX={r.shingleScale}
+                                fillPatternScaleY={r.shingleScale}
+                              />
+                              <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
+                            </>
                       )}
 
                       {/* RIDGE VENT */}
@@ -1907,6 +2172,69 @@ export default function Page() {
                       onDragMove={(e) => updateOutlinePoint(idx, e.target.x(), e.target.y())}
                     />
                   ))}
+
+                {/* Perspective plane corner handles */}
+                {active?.obliquePlane && (
+                  <>
+                    {(["tl", "tr", "br", "bl"] as const).map((corner) => {
+                      const pt = active.obliquePlane![corner];
+                      return (
+                        <React.Fragment key={`plane-${corner}`}>
+                          <Circle
+                            x={pt.x}
+                            y={pt.y}
+                            radius={8}
+                            fill="rgba(147,51,234,0.85)"
+                            stroke="rgba(255,255,255,0.9)"
+                            strokeWidth={2}
+                            draggable
+                            onDragMove={(e) => {
+                              const nx = e.target.x(), ny = e.target.y();
+                              patchActive((p) => ({
+                                ...p,
+                                obliquePlane: p.obliquePlane ? { ...p.obliquePlane, [corner]: { x: nx, y: ny } } : null,
+                              }));
+                            }}
+                          />
+                          <Text
+                            x={pt.x + 10}
+                            y={pt.y - 6}
+                            text={corner.toUpperCase()}
+                            fontSize={11}
+                            fontStyle="bold"
+                            fill="rgba(147,51,234,0.95)"
+                          />
+                        </React.Fragment>
+                      );
+                    })}
+                    {/* Connect plane corners with dashed outline */}
+                    <Line
+                      points={[
+                        active.obliquePlane.tl.x, active.obliquePlane.tl.y,
+                        active.obliquePlane.tr.x, active.obliquePlane.tr.y,
+                        active.obliquePlane.br.x, active.obliquePlane.br.y,
+                        active.obliquePlane.bl.x, active.obliquePlane.bl.y,
+                      ]}
+                      closed
+                      stroke="rgba(147,51,234,0.5)"
+                      strokeWidth={2}
+                      dash={[6, 4]}
+                    />
+                  </>
+                )}
+
+                {/* Draft corners while placing plane */}
+                {tool === "SET_PLANE" && planeDraftCorners.map((pt, i) => (
+                  <Circle
+                    key={`draft-plane-${i}`}
+                    x={pt.x}
+                    y={pt.y}
+                    radius={7}
+                    fill="rgba(147,51,234,0.7)"
+                    stroke="white"
+                    strokeWidth={2}
+                  />
+                ))}
               </Layer>
             </Stage>
 
@@ -1979,11 +2307,15 @@ export default function Page() {
 
                     return (
                       <Group key={`pres-${r.id}`} clipFunc={(ctx) => clipPolygonPath(ctx, r.outline)}>
-                        {atLeast(currentStep, "TEAROFF") && deckingImg && (
-                          <KonvaImage image={deckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
+                        {atLeast(currentStep, "TEAROFF") && (
+                          isOblique && warpedDeckingImg
+                            ? <KonvaImage image={warpedDeckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
+                            : deckingImg && <KonvaImage image={deckingImg} x={0} y={0} width={w} height={h} opacity={0.92} />
                         )}
-                        {stepIndex(currentStep) >= stepIndex("SYNTHETIC") && stepIndex(currentStep) < stepIndex("SHINGLES") && syntheticImg && (
-                          <KonvaImage image={syntheticImg} x={0} y={0} width={w} height={h} opacity={0.86} />
+                        {stepIndex(currentStep) >= stepIndex("SYNTHETIC") && stepIndex(currentStep) < stepIndex("SHINGLES") && (
+                          isOblique && warpedSyntheticImg
+                            ? <KonvaImage image={warpedSyntheticImg} x={0} y={0} width={w} height={h} opacity={0.86} />
+                            : syntheticImg && <KonvaImage image={syntheticImg} x={0} y={0} width={w} height={h} opacity={0.86} />
                         )}
                         {atLeast(currentStep, "ICE_WATER") && (
                           <>
@@ -2000,11 +2332,16 @@ export default function Page() {
                             {rakes.map((l) => <StarterStroke key={`pps-r-${r.id}-${l.id}`} points={l.points} width={r.proStartW} />)}
                           </>
                         )}
-                        {atLeast(currentStep, "SHINGLES") && shinglesImg && (
-                          <>
-                            <Rect x={-5000} y={-5000} width={12000} height={12000} opacity={0.98} fillPatternImage={shinglesImg} fillPatternRepeat="repeat" fillPatternScaleX={r.shingleScale} fillPatternScaleY={r.shingleScale} />
-                            <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
-                          </>
+                        {atLeast(currentStep, "SHINGLES") && (
+                          isOblique && warpedShinglesImg
+                            ? <>
+                                <KonvaImage image={warpedShinglesImg} x={0} y={0} width={w} height={h} opacity={0.98} />
+                                <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
+                              </>
+                            : shinglesImg && <>
+                                <Rect x={-5000} y={-5000} width={12000} height={12000} opacity={0.98} fillPatternImage={shinglesImg} fillPatternRepeat="repeat" fillPatternScaleX={r.shingleScale} fillPatternScaleY={r.shingleScale} />
+                                <Rect x={0} y={0} width={w} height={h} fill="rgba(0,0,0,0.06)" />
+                              </>
                         )}
                         {atLeast(currentStep, "RIDGE_VENT") && ridges.map((l) => <RidgeVentStroke key={`prv-${r.id}-${l.id}`} points={l.points} width={r.ridgeVentW} />)}
                         {atLeast(currentStep, "CAP_SHINGLES") && shinglesImg && ridges.map((l) => <CapBand key={`pcap-${r.id}-${l.id}`} points={l.points} width={r.capW} shinglesImg={shinglesImg} patternScale={r.shingleScale} />)}
