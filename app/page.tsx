@@ -2637,10 +2637,12 @@ export default function Page() {
   function goBack() {
     if (!active) return;
     const idx = stepIndex(active.step);
-    if (idx <= 0) return;
+    // TRACE (index 1) is the first user-facing step — never go below it
+    if (idx <= 1) return;
     const rel = relevantSteps(active.roofs);
     let prevIdx = idx - 1;
-    while (prevIdx > 0 && !rel.has(STEPS[prevIdx])) prevIdx--;
+    while (prevIdx > 1 && !rel.has(STEPS[prevIdx])) prevIdx--;
+    if (prevIdx < 1) prevIdx = 1; // clamp to TRACE
     const prev = STEPS[prevIdx];
     patchActive((p) => ({ ...p, step: prev }));
     setTool("NONE");
@@ -4085,11 +4087,11 @@ export default function Page() {
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
             <button
               onClick={goBack}
-              disabled={stepIndex(liveStep) === 0}
+              disabled={stepIndex(liveStep) <= 1}
               style={{ padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
-                cursor: stepIndex(liveStep) === 0 ? "default" : "pointer",
+                cursor: stepIndex(liveStep) <= 1 ? "default" : "pointer",
                 border: "1.5px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.08)",
-                color: stepIndex(liveStep) === 0 ? "rgba(255,255,255,0.25)" : "#e2e8f0" }}
+                color: stepIndex(liveStep) <= 1 ? "rgba(255,255,255,0.25)" : "#e2e8f0" }}
             >← Back</button>
             <button
               onClick={goNext}
@@ -4852,7 +4854,7 @@ export default function Page() {
                   )}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
                     <button className="rv-btn-ghost" style={ghostBtn} onClick={goBack}
-                      disabled={stepIndex(liveStep) === 0}>← Back</button>
+                      disabled={stepIndex(liveStep) <= 1}>← Back</button>
                     <button
                       className="rv-btn-primary"
                       style={{ ...primaryBtn, margin: 0 }}
