@@ -125,6 +125,19 @@ type ShingleSelection = {
   colorId: string;
 };
 
+type RoofingMaterial = "asphalt" | "metal";
+type MetalProfile = "standing_seam" | "exposed_fastener";
+type MetalRoofColor = "matte_black" | "charcoal" | "bronze" | "evergreen" | "light_stone" | "copper";
+
+const METAL_COLORS: Record<MetalRoofColor, { name: string; hex: string; highlight: string; rgb: [number, number, number] }> = {
+  matte_black:  { name: "Matte Black",  hex: "#1a1a1e", highlight: "#2a2a30", rgb: [26, 26, 30] },
+  charcoal:     { name: "Charcoal",     hex: "#3d3f47", highlight: "#52545e", rgb: [61, 63, 71] },
+  bronze:       { name: "Bronze",       hex: "#5c4028", highlight: "#7a5838", rgb: [92, 64, 40] },
+  evergreen:    { name: "Evergreen",    hex: "#1e3a2a", highlight: "#2d5040", rgb: [30, 58, 42] },
+  light_stone:  { name: "Light Stone",  hex: "#c8bfae", highlight: "#ddd6c8", rgb: [200, 191, 174] },
+  copper:       { name: "Copper",       hex: "#8b5a2b", highlight: "#a86e3a", rgb: [139, 90, 43] },
+};
+
 type Roof = {
   id: string;
   name: string;
@@ -171,6 +184,10 @@ type PhotoProject = {
 
   roofs: Roof[];
   activeRoofId: string;
+
+  roofingMaterial: RoofingMaterial;
+  metalProfile: MetalProfile;
+  metalColor: MetalRoofColor;
 
   shingleColor: ShingleColor;
   shingleSelection: ShingleSelection;
@@ -1075,6 +1092,72 @@ function makeShingleTexture(_w: number, _h: number, palette: { top: string; bot:
   return c.toDataURL("image/png");
 }
 
+// ── Metal roof texture ─────────────────────────────────────────────────────
+function makeMetalTexture(profile: MetalProfile, color: MetalRoofColor): string {
+  const W = 2400, H = 2400;
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d")!;
+  const mc = METAL_COLORS[color];
+
+  // Base fill
+  ctx.fillStyle = mc.hex;
+  ctx.fillRect(0, 0, W, H);
+
+  if (profile === "standing_seam") {
+    // Standing seam: clean vertical panels with raised seam ribs
+    const panelW = 48; // panel width in texture pixels
+    for (let x = 0; x < W; x += panelW) {
+      // Subtle panel gradient — slight tonal shift across each panel
+      const grad = ctx.createLinearGradient(x, 0, x + panelW, 0);
+      grad.addColorStop(0, mc.hex);
+      grad.addColorStop(0.3, mc.highlight);
+      grad.addColorStop(0.7, mc.highlight);
+      grad.addColorStop(1, mc.hex);
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, 0, panelW, H);
+
+      // Seam rib — dark line + highlight
+      ctx.fillStyle = "rgba(0,0,0,0.25)";
+      ctx.fillRect(x, 0, 2, H);
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(x + 2, 0, 1, H);
+    }
+  } else {
+    // Exposed fastener: corrugated / ribbed panels
+    const ribW = 20;
+    for (let x = 0; x < W; x += ribW) {
+      // Alternating rib / valley pattern
+      const isRib = Math.floor(x / ribW) % 2 === 0;
+      if (isRib) {
+        ctx.fillStyle = mc.highlight;
+        ctx.fillRect(x, 0, ribW, H);
+        // Highlight on top of rib
+        ctx.fillStyle = "rgba(255,255,255,0.06)";
+        ctx.fillRect(x + 2, 0, ribW - 4, H);
+      } else {
+        ctx.fillStyle = mc.hex;
+        ctx.fillRect(x, 0, ribW, H);
+        // Shadow in valley
+        ctx.fillStyle = "rgba(0,0,0,0.08)";
+        ctx.fillRect(x, 0, ribW, H);
+      }
+      // Crease lines
+      ctx.fillStyle = "rgba(0,0,0,0.15)";
+      ctx.fillRect(x, 0, 1, H);
+    }
+    // Horizontal screw rows every ~96px
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    for (let y = 48; y < H; y += 96) {
+      ctx.fillRect(0, y, W, 1);
+    }
+  }
+
+  // Subtle noise for realism
+  addNoise(ctx, W, H, 15000, 0.002, 0.015);
+  return c.toDataURL("image/png");
+}
+
 // ── Photo-derived shingle texture ──────────────────────────────────────────
 // Samples the uploaded photo in a mosaic of patches, adds shingle course lines,
 // contrast/desaturation normalization, noise, and vignette.
@@ -1572,6 +1655,9 @@ export default function Page() {
   const [customerStep, setCustomerStep] = useState<Step>("TEAROFF");
   const [customerShingleColor, setCustomerShingleColor] = useState<ShingleColor>("Barkwood");
   const [customerShingleSelection, setCustomerShingleSelection] = useState<ShingleSelection>({ manufacturerId: "gaf", lineId: "hdz", colorId: "charcoal" });
+  const [customerRoofingMaterial, setCustomerRoofingMaterial] = useState<RoofingMaterial>("asphalt");
+  const [customerMetalProfile, setCustomerMetalProfile] = useState<MetalProfile>("standing_seam");
+  const [customerMetalColor, setCustomerMetalColor] = useState<MetalRoofColor>("charcoal");
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
   const [shareEmailSending, setShareEmailSending] = useState(false);
@@ -1600,6 +1686,9 @@ export default function Page() {
         step: customerStep,
         roofs: photoData.roofs,
         activeRoofId: photoData.roofs[0]?.id ?? "",
+        roofingMaterial: customerRoofingMaterial,
+        metalProfile: customerMetalProfile,
+        metalColor: customerMetalColor,
         shingleColor: customerShingleColor,
         shingleSelection: customerShingleSelection,
         textureColorStrength: 100,
@@ -1684,6 +1773,11 @@ export default function Page() {
   const [baMode, setBaMode] = useState(false);
   const [baSplit, setBaSplit] = useState(0.5);
   const baDragging = useRef(false);
+
+  // Customer view Before/After slider
+  const [customerBaMode, setCustomerBaMode] = useState(false);
+  const [customerBaSplit, setCustomerBaSplit] = useState(0.5);
+  const customerBaDragging = useRef(false);
   const [isCustomerView, setIsCustomerView] = useState(false);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile>({ name: "", phone: "", repName: "", logo: "" });
   const [appStats, setAppStats] = useState<AppStats>({ presentationsStarted: 0, pdfsExported: 0, linksShared: 0 });
@@ -1874,6 +1968,12 @@ export default function Page() {
           ? { manufacturerId: rawMs.m, lineId: rawMs.l, colorId: rawMs.c }
           : shingleColorToSelection(shingleColor);
         setCustomerShingleSelection(initSel);
+        // Decode metal roofing info from share URL
+        if (raw.rm === "metal") {
+          setCustomerRoofingMaterial("metal");
+          setCustomerMetalProfile((raw.mp ?? "standing_seam") as MetalProfile);
+          setCustomerMetalColor((raw.mc ?? "charcoal") as MetalRoofColor);
+        }
         setCustomerStep("TEAROFF");
       } catch {
         // Decode failed — show blank customer view rather than exposing the editor
@@ -1906,6 +2006,9 @@ export default function Page() {
             photoSrcs: p.photoSrcs ?? (p.src ? [p.src] : []),
             photoStates: p.photoStates ?? {},
             viewType: p.viewType ?? "ground",
+            roofingMaterial: p.roofingMaterial ?? "asphalt",
+            metalProfile: p.metalProfile ?? "standing_seam",
+            metalColor: p.metalColor ?? "charcoal",
 
             shingleSelection: p.shingleSelection ?? shingleColorToSelection(p.shingleColor ?? "Barkwood"),
             textureColorStrength: p.textureColorStrength ?? 100,
@@ -2438,6 +2541,9 @@ export default function Page() {
       step: "TRACE",
       roofs: [roof1],
       activeRoofId: roof1.id,
+      roofingMaterial: "asphalt" as RoofingMaterial,
+      metalProfile: "standing_seam" as MetalProfile,
+      metalColor: "charcoal" as MetalRoofColor,
       shingleColor: "Barkwood",
       shingleSelection: { manufacturerId: "gaf", lineId: "hdz", colorId: "barkwood" },
       textureColorStrength: 100,
@@ -3143,6 +3249,25 @@ export default function Page() {
     setBrushDraft(null);
   }
 
+  // ── Customer view Before/After slider handlers ──
+  function onCustomerBaDown(e: any) {
+    const stage = e.target.getStage();
+    const rawPos = stage?.getPointerPosition();
+    if (rawPos && Math.abs(rawPos.x - customerBaSplit * w) < 30) {
+      customerBaDragging.current = true;
+    }
+  }
+  function onCustomerBaMove() {
+    if (!customerBaDragging.current) return;
+    const stage = stageRef.current;
+    if (!stage) return;
+    const rawPos = stage.getPointerPosition();
+    if (rawPos) setCustomerBaSplit(Math.max(0.05, Math.min(0.95, rawPos.x / w)));
+  }
+  function onCustomerBaUp() {
+    customerBaDragging.current = false;
+  }
+
   function updateOutlinePoint(i: number, photoX: number, photoY: number) {
     if (!activeRoof) return;
     patchActiveRoof((r) => {
@@ -3244,6 +3369,15 @@ export default function Page() {
 
   const activeShinglesImg = shinglesImg;
 
+  // ── Metal roof texture ──
+  const metalTexSrc = useMemo(() => {
+    if (!active || typeof window === "undefined") return "";
+    if ((active.roofingMaterial ?? "asphalt") !== "metal") return "";
+    return makeMetalTexture(active.metalProfile ?? "standing_seam", active.metalColor ?? "charcoal");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.roofingMaterial, active?.metalProfile, active?.metalColor]);
+  const metalImg = useHtmlImage(metalTexSrc);
+
   const metalOptions: MetalColor[] = ["Galvanized", "Aluminum", "White", "Black", "Bronze", "Brown", "Gray"];
 
   // export view overrides rendering step
@@ -3340,12 +3474,18 @@ export default function Page() {
       r: encodeRoofs(allStates[src]?.roofs ?? []),
     }));
 
-    const shareData = {
+    const shareData: Record<string, unknown> = {
       n: active.name,
       c: active.shingleColor,
       ms: { m: active.shingleSelection.manufacturerId, l: active.shingleSelection.lineId, c: active.shingleSelection.colorId },
       photos,
     };
+    // Include metal roofing info if metal is selected
+    if ((active.roofingMaterial ?? "asphalt") === "metal") {
+      shareData.rm = "metal";
+      shareData.mp = active.metalProfile ?? "standing_seam";
+      shareData.mc = active.metalColor ?? "charcoal";
+    }
 
     const json = JSON.stringify(shareData);
     const encoded = btoa(unescape(encodeURIComponent(json)))
@@ -3799,6 +3939,9 @@ export default function Page() {
   // Before/After slider: split position in world (photo) coordinates
   const splitWorldX = w > 0
     ? (baSplit * w - (active?.stagePos?.x ?? 0)) / (active?.stageScale ?? 1)
+    : 9999;
+  const customerSplitWorldX = w > 0
+    ? (customerBaSplit * w - (active?.stagePos?.x ?? 0)) / (active?.stageScale ?? 1)
     : 9999;
 
   // ── MENU SCREEN ────────────────────────────────────────────────────────────
@@ -4352,6 +4495,20 @@ export default function Page() {
             })}
           </div>
 
+          {/* Compare toggle */}
+          <div style={{ borderTop: "1px solid #f1f5f9", padding: "8px 14px", flexShrink: 0 }}>
+            <button
+              onClick={() => { setCustomerBaMode(!customerBaMode); setCustomerBaSplit(0.5); }}
+              style={{
+                width: "100%", padding: "8px 0", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                border: customerBaMode ? "1.5px solid rgba(234,88,12,0.4)" : "1.5px solid #e2e8f0",
+                background: customerBaMode ? "rgba(234,88,12,0.08)" : "#f8fafc",
+                color: customerBaMode ? "#c2410c" : "#475569",
+                cursor: "pointer",
+              }}
+            >◧ {customerBaMode ? "Exit Compare" : "Before / After"}</button>
+          </div>
+
           {/* Prev / Next navigation */}
           <div style={{ borderTop: "1px solid #f1f5f9", padding: "10px 14px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
             <button
@@ -4480,6 +4637,20 @@ export default function Page() {
                 </button>
               );
             })}
+          </div>
+
+          {/* Compare toggle — mobile */}
+          <div style={{ display: "flex", padding: "4px 12px 2px" }}>
+            <button
+              onClick={() => { setCustomerBaMode(!customerBaMode); setCustomerBaSplit(0.5); }}
+              style={{
+                flex: 1, padding: "7px 0", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                border: customerBaMode ? "1.5px solid rgba(234,88,12,0.4)" : "1.5px solid #e2e8f0",
+                background: customerBaMode ? "rgba(234,88,12,0.08)" : "#f8fafc",
+                color: customerBaMode ? "#c2410c" : "#475569",
+                cursor: "pointer",
+              }}
+            >◧ {customerBaMode ? "Exit Compare" : "Before / After"}</button>
           </div>
 
           {/* Prev / Next + optional photo switcher */}
@@ -5686,6 +5857,68 @@ export default function Page() {
                 </select>
               </div>
 
+              {/* Roofing Material selector */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={fieldLabel}>Roofing Material</label>
+                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                  {(["asphalt", "metal"] as RoofingMaterial[]).map((mat) => (
+                    <button
+                      key={mat}
+                      onClick={() => patchActive((p) => ({ ...p, roofingMaterial: mat }))}
+                      style={{
+                        flex: 1, padding: "7px 0", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                        border: (active.roofingMaterial ?? "asphalt") === mat ? "1.5px solid rgba(234,88,12,0.45)" : "1.5px solid #e2e8f0",
+                        background: (active.roofingMaterial ?? "asphalt") === mat ? "rgba(234,88,12,0.08)" : "#f8fafc",
+                        color: (active.roofingMaterial ?? "asphalt") === mat ? "#c2410c" : "#64748b",
+                        cursor: "pointer",
+                      }}
+                    >{mat === "asphalt" ? "Asphalt Shingle" : "Metal"}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Metal options — only when metal selected */}
+              {(active.roofingMaterial ?? "asphalt") === "metal" && (
+                <div style={{ marginBottom: 16, display: "grid", gap: 12 }}>
+                  <div>
+                    <label style={fieldLabel}>Metal Profile</label>
+                    <select
+                      value={active.metalProfile ?? "standing_seam"}
+                      onChange={(e) => patchActive((p) => ({ ...p, metalProfile: e.target.value as MetalProfile }))}
+                      style={selectStyle}
+                    >
+                      <option value="standing_seam">Standing Seam</option>
+                      <option value="exposed_fastener">Exposed Fastener</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={fieldLabel}>Metal Color</label>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                      {(Object.entries(METAL_COLORS) as [MetalRoofColor, typeof METAL_COLORS[MetalRoofColor]][]).map(([id, mc]) => {
+                        const isSel = (active.metalColor ?? "charcoal") === id;
+                        return (
+                          <div
+                            key={id}
+                            onClick={() => patchActive((p) => ({ ...p, metalColor: id }))}
+                            title={mc.name}
+                            style={{
+                              width: 30, height: 30, borderRadius: "50%",
+                              background: mc.hex, cursor: "pointer",
+                              border: isSel ? "2.5px solid #ea580c" : "2px solid rgba(15,23,42,0.15)",
+                              boxShadow: isSel ? "0 0 0 2px rgba(234,88,12,0.3)" : "none",
+                              transition: "box-shadow 0.15s",
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#334155", marginTop: 4 }}>
+                      {METAL_COLORS[active.metalColor ?? "charcoal"]?.name ?? "Charcoal"}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {activeRoof && (
                 <div style={{ display: "grid", gap: 16 }}>
 
@@ -6188,12 +6421,12 @@ export default function Page() {
           ref={stageRef}
           width={stageW}
           height={stageH}
-          onMouseDown={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
-          onMouseMove={screen !== "CUSTOMER_VIEW" ? onStageMove : undefined}
-          onMouseUp={screen !== "CUSTOMER_VIEW" ? onStageUp : undefined}
-          onTouchStart={screen !== "CUSTOMER_VIEW" ? onStageDown : undefined}
-          onTouchMove={screen !== "CUSTOMER_VIEW" ? onStageMove : undefined}
-          onTouchEnd={screen !== "CUSTOMER_VIEW" ? onStageUp : undefined}
+          onMouseDown={screen !== "CUSTOMER_VIEW" ? onStageDown : customerBaMode ? onCustomerBaDown : undefined}
+          onMouseMove={screen !== "CUSTOMER_VIEW" ? onStageMove : customerBaMode ? onCustomerBaMove : undefined}
+          onMouseUp={screen !== "CUSTOMER_VIEW" ? onStageUp : customerBaMode ? onCustomerBaUp : undefined}
+          onTouchStart={screen !== "CUSTOMER_VIEW" ? onStageDown : customerBaMode ? onCustomerBaDown : undefined}
+          onTouchMove={screen !== "CUSTOMER_VIEW" ? onStageMove : customerBaMode ? onCustomerBaMove : undefined}
+          onTouchEnd={screen !== "CUSTOMER_VIEW" ? onStageUp : customerBaMode ? onCustomerBaUp : undefined}
           onWheel={screen !== "CUSTOMER_VIEW" ? onWheel : undefined}
           draggable={!!active && screen !== "CUSTOMER_VIEW" && tool !== "BRUSH_ICE_WATER" && !baMode}
           scaleX={active?.stageScale ?? 1}
@@ -6647,8 +6880,42 @@ export default function Page() {
                         </>
                       )}
 
+                      {/* METAL ROOF — rendered instead of shingles when material is metal */}
+                      {atLeast(currentStep, "SHINGLES") && (active.roofingMaterial ?? "asphalt") === "metal" && metalImg && (
+                        <>
+                          <Rect
+                            x={-5000} y={-5000} width={12000} height={12000}
+                            opacity={0.98}
+                            fillPatternImage={metalImg}
+                            fillPatternRepeat="repeat"
+                            fillPatternScaleX={effectivePatternScale}
+                            fillPatternScaleY={effectivePatternScale}
+                            fillPatternRotation={r.shingleRotation ?? 0}
+                          />
+                          {/* Subtle directional light overlay */}
+                          {(() => {
+                            const xs = r.outline.filter((_, i) => i % 2 === 0);
+                            const ys = r.outline.filter((_, i) => i % 2 === 1);
+                            if (!xs.length) return null;
+                            const bx = Math.min(...xs), bxMax = Math.max(...xs);
+                            const by = Math.min(...ys), byMax = Math.max(...ys);
+                            const bw = bxMax - bx || 1;
+                            const bh = byMax - by || 1;
+                            return (
+                              <Rect
+                                x={bx} y={by} width={bw} height={bh}
+                                fillLinearGradientStartPoint={{ x: 0, y: 0 }}
+                                fillLinearGradientEndPoint={{ x: bw * 0.6, y: bh }}
+                                fillLinearGradientColorStops={[0, "rgba(255,255,255,0.10)", 0.4, "rgba(0,0,0,0)", 1, "rgba(0,0,0,0.10)"]}
+                                listening={false}
+                              />
+                            );
+                          })()}
+                        </>
+                      )}
+
                       {/* SHINGLES — with optional ground-photo perspective warp + course depth */}
-                      {atLeast(currentStep, "SHINGLES") && activeShinglesImg && (() => {
+                      {atLeast(currentStep, "SHINGLES") && (active.roofingMaterial ?? "asphalt") === "asphalt" && activeShinglesImg && (() => {
                         const perspStr = r.perspectiveStrength ?? 0;
                         const courseC = getCourseShadowCanvas();
 
@@ -6737,8 +7004,8 @@ export default function Page() {
                       })()}
 
                       {/* ── Shingle surface overlays: directional light, grain noise, vignette ──
-                          Always-on when shingles are visible. */}
-                      {atLeast(currentStep, "SHINGLES") && (() => {
+                          Always-on when asphalt shingles are visible. */}
+                      {atLeast(currentStep, "SHINGLES") && (active.roofingMaterial ?? "asphalt") === "asphalt" && (() => {
                         const xs = r.outline.filter((_, i) => i % 2 === 0);
                         const ys = r.outline.filter((_, i) => i % 2 === 1);
                         if (!xs.length) return null;
@@ -6789,8 +7056,8 @@ export default function Page() {
                         <RidgeVentStroke key={`rv-${r.id}-${l.id}`} points={l.points} width={r.ridgeVentW} />
                       ))}
 
-                      {/* CAP SHINGLES */}
-                      {atLeast(currentStep, "CAP_SHINGLES") && activeShinglesImg && ridges.map((l) => (
+                      {/* CAP SHINGLES — asphalt only; metal uses ridge metal below */}
+                      {atLeast(currentStep, "CAP_SHINGLES") && (active.roofingMaterial ?? "asphalt") === "asphalt" && activeShinglesImg && ridges.map((l) => (
                         <CapBand key={`cap-${r.id}-${l.id}`} points={l.points} width={r.capW} clipStrokeWidth={r.capW / photoTx.scale} shinglesImg={activeShinglesImg} patternScale={effectivePatternScale} />
                       ))}
 
@@ -6824,9 +7091,11 @@ export default function Page() {
                         </Group>
                       ))}
 
-                      {/* Ridge fold — crease tinted to match shingle color so it blends naturally */}
+                      {/* Ridge fold — crease tinted to match roof color so it blends naturally */}
                       {atLeast(currentStep, "SHINGLES") && !atLeast(currentStep, "CAP_SHINGLES") && (() => {
-                        const [rr, rg, rb] = resolveShingleRGB(active.shingleSelection);
+                        const [rr, rg, rb] = (active.roofingMaterial ?? "asphalt") === "metal"
+                          ? (METAL_COLORS[active.metalColor ?? "charcoal"]?.rgb ?? [61, 63, 71])
+                          : resolveShingleRGB(active.shingleSelection);
                         return ridges.map((l) => (
                           <Group key={`ridgefold-${r.id}-${l.id}`}>
                             <Line points={l.points} stroke="rgba(0,0,0,0.22)"                    strokeWidth={5}   strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
@@ -6988,6 +7257,42 @@ export default function Page() {
                 />
               );
             })}
+
+            {/* ── Customer view Before/After slider ── */}
+            {screen === "CUSTOMER_VIEW" && customerBaMode && photoImg && active?.src && (
+              <>
+                <Group clipFunc={(ctx: any) => { ctx.rect(-10000, -10000, customerSplitWorldX + 10000, 30000); }} listening={false}>
+                  <Group x={photoTx.offX} y={photoTx.offY} scaleX={photoTx.scale} scaleY={photoTx.scale}>
+                    <KonvaImage image={photoImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} />
+                  </Group>
+                </Group>
+                <Line
+                  points={[customerSplitWorldX, -10000, customerSplitWorldX, 30000]}
+                  stroke="rgba(255,255,255,0.9)" strokeWidth={2}
+                  strokeScaleEnabled={false} listening={false}
+                />
+                <Circle
+                  x={customerSplitWorldX}
+                  y={photoTx.offY + (photoTx.imgH ?? 0) * photoTx.scale / 2}
+                  radius={18 / (active?.stageScale ?? 1)}
+                  fill="white" opacity={0.95}
+                  stroke="rgba(0,0,0,0.15)" strokeWidth={1}
+                  strokeScaleEnabled={false} listening={false}
+                />
+                <Text
+                  x={customerSplitWorldX - 90 / (active?.stageScale ?? 1)}
+                  y={photoTx.offY + 14 / (active?.stageScale ?? 1)}
+                  text="BEFORE" fontSize={11 / (active?.stageScale ?? 1)}
+                  fontStyle="bold" fill="rgba(255,255,255,0.75)" listening={false}
+                />
+                <Text
+                  x={customerSplitWorldX + 14 / (active?.stageScale ?? 1)}
+                  y={photoTx.offY + 14 / (active?.stageScale ?? 1)}
+                  text="AFTER" fontSize={11 / (active?.stageScale ?? 1)}
+                  fontStyle="bold" fill="rgba(255,255,255,0.75)" listening={false}
+                />
+              </>
+            )}
 
             {/* Auto-detect overlay removed — manual tracing only */}
             {/* ── Before/After slider overlay ── */}
