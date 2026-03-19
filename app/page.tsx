@@ -5,7 +5,7 @@ import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
 import { cleanupGeometry, strengthToOptions } from "@/app/lib/cleanupGeometry";
 import { cleanAiOutline } from "@/app/lib/aiOutlineCleanup";
-import { detectEdges, autoDetectMode, type LabeledSegment } from "@/app/lib/edgeDetection";
+import { detectEdges, type LabeledSegment } from "@/app/lib/edgeDetection";
 import { suggestPlanes, type PlaneSuggestion } from "@/app/lib/planeSuggestion";
 import {
   Circle,
@@ -107,6 +107,8 @@ type Polyline = {
   segmentCount?: number; // for merged ridge: how many raw segments were fused
 };
 
+type PhotoViewType = "ground" | "satellite" | "on_roof";
+
 type MetalColor = "Galvanized" | "Aluminum" | "White" | "Black" | "Bronze" | "Brown" | "Gray";
 type ShingleColor =
   | "Barkwood"
@@ -148,7 +150,7 @@ type Roof = {
   valleyMetalColor: MetalColor;
 
   shingleScale: number;
-  shingleRotation: number;       // degrees, -45..45; 0 = horizontal
+  shingleRotation: number;       // degrees, -90..90; 0 = horizontal
   perspectiveStrength: number;   // 0.0–0.4 ground-photo perspective warp, default 0
   proStartOnRakes: boolean;
 
@@ -163,6 +165,7 @@ type PhotoProject = {
   name: string;
   src: string;
   photoSrcs: string[]; // all uploaded photos for this project
+  viewType: PhotoViewType; // per-photo view type: ground, satellite, on_roof
 
   step: Step;
 
@@ -184,6 +187,7 @@ type PhotoProject = {
     activeRoofId: string;
     stageScale: number;
     stagePos: { x: number; y: number };
+    viewType?: PhotoViewType;
   }>;
 
   thumbnail?: string; // base64 canvas snapshot captured at CAP_SHINGLES
@@ -1246,9 +1250,7 @@ function CapBand({
   );
 }
 
-/* ------------------- Roof auto-detection ------------------- */
-
-// Andrew's monotone-chain convex hull
+// Andrew's monotone-chain convex hull (kept for potential future use by lib modules)
 function convexHull(pts: [number, number][]): [number, number][] {
   if (pts.length < 3) return pts;
   const s = [...pts].sort((a, b) => a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]);
@@ -1267,10 +1269,9 @@ function convexHull(pts: [number, number][]): [number, number][] {
   return [...lower.slice(0,-1), ...upper.slice(0,-1)];
 }
 
-type AutoSuggest = { outline: number[]; lines: Array<{ kind: LineKind; points: number[] }> };
-
-// Sobel-edge + Hough-transform roof line detector (runs client-side on a small canvas).
-function autoDetectRoof(img: HTMLImageElement, displayW: number, displayH: number): AutoSuggest {
+// autoDetectRoof removed — manual tracing is the primary workflow.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _autoDetectRoof_removed(img: HTMLImageElement, displayW: number, displayH: number): { outline: number[]; lines: Array<{ kind: LineKind; points: number[] }> } {
   const MAX = 350;
   const sc = Math.min(MAX / img.naturalWidth, MAX / img.naturalHeight);
   const pw = Math.max(1, Math.round(img.naturalWidth * sc));
@@ -1353,7 +1354,7 @@ function autoDetectRoof(img: HTMLImageElement, displayW: number, displayH: numbe
     return deg < 90 ? "HIP" : "VALLEY";
   };
 
-  const allLines: AutoSuggest["lines"] = [];
+  const allLines: Array<{ kind: LineKind; points: number[] }> = [];
   const lineEqs: { ct: number; st: number; rho: number }[] = [];
   for (const { t, r } of peaks) {
     const rho = r - diag, ct = cLUT[t], st = sLUT[t];
@@ -1595,6 +1596,7 @@ export default function Page() {
         name: customerViewData.name,
         src: photoData.src,
         photoSrcs: [],
+        viewType: "ground" as PhotoViewType,
         step: customerStep,
         roofs: photoData.roofs,
         activeRoofId: photoData.roofs[0]?.id ?? "",
@@ -1752,8 +1754,7 @@ export default function Page() {
   }, [cleanupOpen, activeRoof, cleanupStrength, cleanupSnapAngles, cleanupLockedIds]);
 
   const [exportView, setExportView] = useState<ExportView>("LIVE");
-  const [autoSuggest, setAutoSuggest] = useState<AutoSuggest | null>(null);
-  const [autoDetecting, setAutoDetecting] = useState(false);
+  // Auto-detect removed — manual tracing is the primary workflow.
   const [aiState, setAiState]       = useState<"idle" | "loading" | "preview" | "error">("idle");
   const [aiPolygon, setAiPolygon]   = useState<number[] | null>(null);
   const [aiPolygonRaw, setAiPolygonRaw] = useState<number[] | null>(null);
@@ -1904,6 +1905,7 @@ export default function Page() {
             ...p,
             photoSrcs: p.photoSrcs ?? (p.src ? [p.src] : []),
             photoStates: p.photoStates ?? {},
+            viewType: p.viewType ?? "ground",
 
             shingleSelection: p.shingleSelection ?? shingleColorToSelection(p.shingleColor ?? "Barkwood"),
             textureColorStrength: p.textureColorStrength ?? 100,
@@ -2432,6 +2434,7 @@ export default function Page() {
       name,
       src: "",
       photoSrcs: [],
+      viewType: "ground",
       step: "TRACE",
       roofs: [roof1],
       activeRoofId: roof1.id,
@@ -2467,34 +2470,7 @@ export default function Page() {
     setPhotos((prev) => prev.map((p) => p.id === id ? { ...p, name } : p));
   }
 
-  function runAutoDetect() {
-    if (!photoImg || !active) return;
-    setAutoDetecting(true);
-    setAutoSuggest(null);
-    // Defer to next tick so the "Detecting…" label renders before the heavy computation.
-    setTimeout(() => {
-      try {
-        const result = autoDetectRoof(photoImg, w, h);
-        setAutoSuggest(result);
-      } catch {
-        // Detection failed silently; user can trace manually.
-      } finally {
-        setAutoDetecting(false);
-      }
-    }, 0);
-  }
-
-  function acceptAutoSuggest() {
-    if (!autoSuggest) return;
-    patchActiveRoof((r) => ({
-      ...r,
-      outline: stageToImgPts(autoSuggest.outline, photoTx),
-      closed: true,
-      lines: autoSuggest.lines.map((l) => ({ ...l, id: uid(), points: stageToImgPts(l.points, photoTx) })),
-    }));
-    setAutoSuggest(null);
-    setTool("NONE");
-  }
+  // runAutoDetect / acceptAutoSuggest removed — manual tracing is primary.
 
   // Upload one or more photos into the currently active project.
   // All selected files are added to photoSrcs; src switches to the first new one.
@@ -2519,7 +2495,7 @@ export default function Page() {
           const saved = { ...p.photoStates };
           if (p.src) {
             saved[p.src] = { roofs: p.roofs, activeRoofId: p.activeRoofId,
-                             stageScale: p.stageScale, stagePos: p.stagePos };
+                             stageScale: p.stageScale, stagePos: p.stagePos, viewType: p.viewType };
           }
           // New photos start with fresh state (not inherited from current)
           const firstNewSrc = newSrcs[0];
@@ -2528,6 +2504,7 @@ export default function Page() {
             ...p,
             photoSrcs: merged,
             src: firstNewSrc,
+            viewType: "ground" as PhotoViewType,
             photoStates: saved,
             roofs: [freshRoof],
             activeRoofId: freshRoof.id,
@@ -2570,15 +2547,15 @@ export default function Page() {
       const saved = { ...p.photoStates };
       if (p.src) {
         saved[p.src] = { roofs: p.roofs, activeRoofId: p.activeRoofId,
-                         stageScale: p.stageScale, stagePos: p.stagePos };
+                         stageScale: p.stageScale, stagePos: p.stagePos, viewType: p.viewType };
       }
       const next = saved[newSrc];
       if (next) {
-        return { ...p, src: newSrc, photoStates: saved, roofs: next.roofs,
+        return { ...p, src: newSrc, viewType: next.viewType ?? "ground", photoStates: saved, roofs: next.roofs,
                  activeRoofId: next.activeRoofId, stageScale: next.stageScale, stagePos: next.stagePos };
       }
       const freshRoof = defaultRoof("Roof 1");
-      return { ...p, src: newSrc, photoStates: saved, roofs: [freshRoof],
+      return { ...p, src: newSrc, viewType: "ground" as PhotoViewType, photoStates: saved, roofs: [freshRoof],
                activeRoofId: freshRoof.id, stageScale: 1, stagePos: { x: 0, y: 0 } };
     });
     setTool("NONE"); setDraftLine(null); setDraftHole(null);
@@ -2592,19 +2569,19 @@ export default function Page() {
       const saved = { ...p.photoStates };
       // Save current state before removing
       saved[removedSrc] = { roofs: p.roofs, activeRoofId: p.activeRoofId,
-                             stageScale: p.stageScale, stagePos: p.stagePos };
+                             stageScale: p.stageScale, stagePos: p.stagePos, viewType: p.viewType };
       const newSrcs = (p.photoSrcs ?? []).filter((s) => s !== removedSrc);
       // Remove the deleted photo's saved state
       delete saved[removedSrc];
       const nextSrc = newSrcs[0] ?? "";
       const nextState = nextSrc ? saved[nextSrc] : null;
       if (nextState) {
-        return { ...p, photoSrcs: newSrcs, src: nextSrc, photoStates: saved,
+        return { ...p, photoSrcs: newSrcs, src: nextSrc, viewType: nextState.viewType ?? "ground", photoStates: saved,
                  roofs: nextState.roofs, activeRoofId: nextState.activeRoofId,
                  stageScale: nextState.stageScale, stagePos: nextState.stagePos };
       }
       const freshRoof = defaultRoof("Roof 1");
-      return { ...p, photoSrcs: newSrcs, src: nextSrc, photoStates: saved,
+      return { ...p, photoSrcs: newSrcs, src: nextSrc, viewType: "ground" as PhotoViewType, photoStates: saved,
                roofs: [freshRoof], activeRoofId: freshRoof.id, stageScale: 1, stagePos: { x: 0, y: 0 } };
     });
     setTool("NONE"); setDraftLine(null); setDraftHole(null);
@@ -2754,11 +2731,120 @@ export default function Page() {
   }
 
   const CLOSE_DIST = 18;
+  const EDGE_SNAP_RADIUS = 14; // screen pixels — snap to detected edges within this radius
+  const ANGLE_SNAP_THRESHOLD = 10; // degrees — snap to 0/45/90/135° if within this
   function dist(x1: number, y1: number, x2: number, y2: number) {
     const dx = x1 - x2;
     const dy = y1 - y2;
     return Math.sqrt(dx * dx + dy * dy);
   }
+
+  // ── Lightweight edge gradient map for snapping ──────────────────────────────
+  // Computes a small Sobel magnitude map from the photo, used to snap trace
+  // points toward high-contrast edges (roof lines, ridges, etc.).
+  const edgeMapRef = useRef<{ src: string; mag: Float32Array; pw: number; ph: number; natW: number; natH: number } | null>(null);
+
+  function getEdgeMap(img: HTMLImageElement) {
+    if (edgeMapRef.current?.src === img.src) return edgeMapRef.current;
+    const MAX = 300; // small processing resolution
+    const sc = Math.min(MAX / img.naturalWidth, MAX / img.naturalHeight);
+    const pw = Math.max(1, Math.round(img.naturalWidth * sc));
+    const ph = Math.max(1, Math.round(img.naturalHeight * sc));
+    const tc = document.createElement("canvas");
+    tc.width = pw; tc.height = ph;
+    const tCtx = tc.getContext("2d");
+    if (!tCtx) return null;
+    tCtx.drawImage(img, 0, 0, pw, ph);
+    const { data } = tCtx.getImageData(0, 0, pw, ph);
+    // Grayscale
+    const gray = new Float32Array(pw * ph);
+    for (let i = 0; i < pw * ph; i++)
+      gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+    // Sobel magnitude
+    const mag = new Float32Array(pw * ph);
+    for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) {
+      const gx = -gray[(y - 1) * pw + (x - 1)] + gray[(y - 1) * pw + (x + 1)]
+        - 2 * gray[y * pw + (x - 1)] + 2 * gray[y * pw + (x + 1)]
+        - gray[(y + 1) * pw + (x - 1)] + gray[(y + 1) * pw + (x + 1)];
+      const gy = -gray[(y - 1) * pw + (x - 1)] - 2 * gray[(y - 1) * pw + x] - gray[(y - 1) * pw + (x + 1)]
+        + gray[(y + 1) * pw + (x - 1)] + 2 * gray[(y + 1) * pw + x] + gray[(y + 1) * pw + (x + 1)];
+      mag[y * pw + x] = Math.hypot(gx, gy);
+    }
+    const result = { src: img.src, mag, pw, ph, natW: img.naturalWidth, natH: img.naturalHeight };
+    edgeMapRef.current = result;
+    return result;
+  }
+
+  // Find the highest-gradient pixel near a given image-space point (within radius).
+  // Returns snapped image-space [x, y] or null if no strong edge found.
+  function snapToEdge(imgX: number, imgY: number, radiusImg: number): [number, number] | null {
+    if (!photoImg) return null;
+    const em = getEdgeMap(photoImg);
+    if (!em) return null;
+    const { mag, pw, ph, natW, natH } = em;
+    // Convert image coords to edge-map coords
+    const emX = (imgX / natW) * pw;
+    const emY = (imgY / natH) * ph;
+    const emRadius = (radiusImg / natW) * pw;
+    const x0 = Math.max(1, Math.floor(emX - emRadius));
+    const x1 = Math.min(pw - 2, Math.ceil(emX + emRadius));
+    const y0 = Math.max(1, Math.floor(emY - emRadius));
+    const y1 = Math.min(ph - 2, Math.ceil(emY + emRadius));
+    let bestMag = 0, bestX = emX, bestY = emY;
+    // Compute a threshold: only snap if edge strength is significant
+    // (at least 30% of max gradient in the search window)
+    let maxInWindow = 0;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const d2 = (x - emX) ** 2 + (y - emY) ** 2;
+      if (d2 > emRadius * emRadius) continue;
+      if (mag[y * pw + x] > maxInWindow) maxInWindow = mag[y * pw + x];
+    }
+    const threshold = maxInWindow * 0.3;
+    if (threshold < 15) return null; // no significant edges nearby
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const d2 = (x - emX) ** 2 + (y - emY) ** 2;
+      if (d2 > emRadius * emRadius) continue;
+      const m = mag[y * pw + x];
+      if (m > threshold && m > bestMag) {
+        bestMag = m; bestX = x; bestY = y;
+      }
+    }
+    if (bestMag <= threshold) return null;
+    // Convert back to image coords
+    return [(bestX / pw) * natW, (bestY / ph) * natH];
+  }
+
+  // Snap a point's angle relative to the previous point to 0/45/90/135° if close
+  function snapAngleForTrace(prevX: number, prevY: number, curX: number, curY: number, shiftHeld: boolean): [number, number] {
+    if (!shiftHeld) return [curX, curY]; // only snap when Shift is held
+    const len = Math.hypot(curX - prevX, curY - prevY);
+    if (len < 1) return [curX, curY];
+    const angleDeg = Math.atan2(curY - prevY, curX - prevX) * 180 / Math.PI;
+    const SNAP_ANGLES = [0, 45, 90, 135, 180, -45, -90, -135, -180];
+    let bestDiff = Infinity, bestAngle = angleDeg;
+    for (const sa of SNAP_ANGLES) {
+      const diff = Math.abs(((angleDeg - sa + 180) % 360) - 180);
+      if (diff < bestDiff) { bestDiff = diff; bestAngle = sa; }
+    }
+    if (bestDiff <= ANGLE_SNAP_THRESHOLD) {
+      const rad = bestAngle * Math.PI / 180;
+      return [prevX + len * Math.cos(rad), prevY + len * Math.sin(rad)];
+    }
+    return [curX, curY];
+  }
+
+  // Track Shift key state for angle snapping
+  const shiftHeldRef = useRef(false);
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => { if (e.key === "Shift") shiftHeldRef.current = true; };
+    const up = (e: KeyboardEvent) => { if (e.key === "Shift") shiftHeldRef.current = false; };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
+  }, []);
+
+  // Track the snapped preview point for visual feedback during tracing
+  const [tracePreview, setTracePreview] = useState<{ x: number; y: number; snapped: boolean; nearClose: boolean } | null>(null);
 
   // ── Ramer–Douglas–Peucker simplification ──────────────────────────────────
   function rdpSimplify(pts: number[], epsilon: number): number[] {
@@ -2854,18 +2940,32 @@ export default function Page() {
     const imageCloseRadius = CLOSE_DIST / (scale * photoTx.scale);
 
     if (active.step === "TRACE" && tool === "TRACE_ROOF" && !activeRoof.closed) {
-      const iPos = stageToImgPts([pos.x, pos.y], photoTx);
+      let iPos = stageToImgPts([pos.x, pos.y], photoTx);
       const pts = activeRoof.outline;
+
+      // 1) Magnetic close — snap to first point if close enough
       if (pts.length >= 6) {
         const x0 = pts[0], y0 = pts[1];
         if (dist(iPos[0], iPos[1], x0, y0) <= imageCloseRadius) {
           patchActiveRoof((r) => ({ ...r, closed: true }));
           setTool("NONE");
+          setTracePreview(null);
           showToast("Roof outline closed ✓");
           return;
         }
       }
+
+      // 2) Angle snapping — only when Shift is held (opt-in)
+      if (pts.length >= 2 && shiftHeldRef.current) {
+        const [sx, sy] = snapAngleForTrace(pts[pts.length - 2], pts[pts.length - 1], iPos[0], iPos[1], true);
+        iPos = [sx, sy];
+      }
+
+      // Edge snapping removed from default click — point goes exactly where user clicked.
+      // Edge snapping is still available via the "Refine Outline" button after closing.
+
       patchActiveRoof((r) => ({ ...r, outline: [...r.outline, iPos[0], iPos[1]] }));
+      setTracePreview(null);
       return;
     }
 
@@ -2974,6 +3074,38 @@ export default function Page() {
       }
       return;
     }
+
+    // Trace preview — show snapped cursor position and close indicator
+    if (active?.step === "TRACE" && tool === "TRACE_ROOF" && activeRoof && !activeRoof.closed) {
+      const stage = stageRef.current;
+      if (!stage) { setTracePreview(null); return; }
+      const rawPos = stage.getPointerPosition();
+      if (!rawPos) { setTracePreview(null); return; }
+      const sc = stage.scaleX();
+      const wx = (rawPos.x - stage.x()) / sc;
+      const wy = (rawPos.y - stage.y()) / sc;
+      let iPos = stageToImgPts([wx, wy], photoTx);
+      const pts = activeRoof.outline;
+      let nearClose = false;
+
+      // Check magnetic close
+      if (pts.length >= 6) {
+        const closeR = CLOSE_DIST / (sc * photoTx.scale);
+        if (dist(iPos[0], iPos[1], pts[0], pts[1]) <= closeR) nearClose = true;
+      }
+
+      // Angle snap preview — only when Shift held
+      let snapped = false;
+      if (pts.length >= 2 && shiftHeldRef.current) {
+        const [sx, sy] = snapAngleForTrace(pts[pts.length - 2], pts[pts.length - 1], iPos[0], iPos[1], true);
+        if (sx !== iPos[0] || sy !== iPos[1]) { iPos = [sx, sy]; snapped = true; }
+      }
+
+      // No edge snapping in live preview — cursor follows user exactly.
+
+      setTracePreview({ x: iPos[0], y: iPos[1], snapped, nearClose });
+    }
+
     if (!brushPaintingRef.current || tool !== "BRUSH_ICE_WATER") return;
     const stage = stageRef.current;
     if (!stage) return;
@@ -3066,41 +3198,7 @@ export default function Page() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.step, active?.src]);
 
-  // Auto-detect roof when a new photo loads on the TRACE step with no outline yet.
-  // On success: accept the result and advance to TEAROFF ("Upload → AI → Present" flow).
-  const autoDetectTriggeredFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!photoImg || !active || active.step !== "TRACE") return;
-    if (activeRoof?.closed || (activeRoof?.outline?.length ?? 0) > 0) return;
-    if (photoImg.src === autoDetectTriggeredFor.current) return;
-    if (photoImg.naturalWidth === 0) return; // not fully loaded
-    autoDetectTriggeredFor.current = photoImg.src;
-    const t = setTimeout(() => {
-      try {
-        const result = autoDetectRoof(photoImg, w, h);
-        if (result?.outline?.length >= 6) {
-          // Auto-accept: patch the roof and advance to TEAROFF in one update
-          setPhotos(prev => prev.map(p => {
-            if (p.id !== activePhotoId) return p;
-            const roofs = p.roofs.map(r => {
-              if (r.id !== p.activeRoofId) return r;
-              return {
-                ...r,
-                outline: stageToImgPts(result.outline, photoTx),
-                closed: true,
-                lines: result.lines.map(l => ({ ...l, id: uid(), points: stageToImgPts(l.points, photoTx) })),
-              };
-            });
-            return { ...p, roofs, step: "TEAROFF" as Step };
-          }));
-          setTool("NONE");
-          showToast("Roof detected — ready to present!");
-        }
-      } catch { /* fail silently — user can trace manually */ }
-    }, 600);
-    return () => clearTimeout(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [photoImg?.src]);
+  // Auto-detect fully removed — manual tracing only.
 
   // textures
   const texW = Math.floor(w * 2.4);
@@ -4627,6 +4725,33 @@ export default function Page() {
                   </div>
                 )}
 
+                {/* View Type selector — per photo */}
+                {active?.src && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", whiteSpace: "nowrap" }}>View Type</span>
+                    <select
+                      value={active.viewType ?? "ground"}
+                      onChange={(e) => patchActive((p) => ({ ...p, viewType: e.target.value as PhotoViewType }))}
+                      style={{
+                        flex: 1,
+                        fontSize: 12,
+                        fontWeight: 500,
+                        padding: "4px 8px",
+                        borderRadius: 6,
+                        border: "1.5px solid rgba(15,23,42,0.12)",
+                        background: "#fff",
+                        color: "#1e293b",
+                        cursor: "pointer",
+                        outline: "none",
+                      }}
+                    >
+                      <option value="ground">Ground</option>
+                      <option value="satellite">Satellite</option>
+                      <option value="on_roof">On Roof</option>
+                    </select>
+                  </div>
+                )}
+
                 {/* Add more photos */}
                 {active?.src && (
                   <label className="rv-upload-zone" style={{
@@ -4915,6 +5040,54 @@ export default function Page() {
                       {active.showEditHandles ? "Hide handles" : "Edit handles"}
                     </button>
                   </div>
+                  {/* Refine Outline — post-process to straighten edges and snap to photo edges */}
+                  {activeRoof?.closed && activeRoof.outline.length >= 6 && (
+                    <button
+                      style={{ ...smallBtn, marginTop: 6, width: "100%", fontSize: 11 }}
+                      onClick={() => {
+                        if (!photoImg || !activeRoof) return;
+                        const pts = activeRoof.outline;
+                        const nPts = pts.length / 2;
+                        if (nPts < 3) return;
+                        const refined: number[] = [];
+                        for (let i = 0; i < nPts; i++) {
+                          let x = pts[i * 2], y = pts[i * 2 + 1];
+                          // 1) Try edge-snapping each vertex to nearby photo edges
+                          const snapR = 20; // image-space radius
+                          const snapped = snapToEdge(x, y, snapR);
+                          if (snapped) { x = snapped[0]; y = snapped[1]; }
+                          refined.push(x, y);
+                        }
+                        // 2) Straighten nearly-straight edges (angle within 5° of 0/90/180/270)
+                        const straightened = refined.slice();
+                        for (let i = 0; i < nPts; i++) {
+                          const prevI = (i - 1 + nPts) % nPts;
+                          const nextI = (i + 1) % nPts;
+                          const px = straightened[prevI * 2], py = straightened[prevI * 2 + 1];
+                          const cx = straightened[i * 2], cy = straightened[i * 2 + 1];
+                          const nx = straightened[nextI * 2], ny = straightened[nextI * 2 + 1];
+                          // Check if prev→cur→next is nearly collinear
+                          const a1 = Math.atan2(cy - py, cx - px) * 180 / Math.PI;
+                          const a2 = Math.atan2(ny - cy, nx - cx) * 180 / Math.PI;
+                          const diff = Math.abs(((a2 - a1 + 180) % 360) - 180);
+                          if (diff < 8) {
+                            // Nearly straight — project point onto the prev→next line
+                            const dx = nx - px, dy = ny - py;
+                            const len2 = dx * dx + dy * dy;
+                            if (len2 > 1) {
+                              const t = Math.max(0, Math.min(1, ((cx - px) * dx + (cy - py) * dy) / len2));
+                              straightened[i * 2] = px + t * dx;
+                              straightened[i * 2 + 1] = py + t * dy;
+                            }
+                          }
+                        }
+                        patchActiveRoof((r) => ({ ...r, outline: straightened }));
+                        showToast("Outline refined ✓");
+                      }}
+                    >
+                      Refine Outline
+                    </button>
+                  )}
 
                   {/* Ice & Water brush tools */}
                   {activeRoof && liveStep === "ICE_WATER" && (
@@ -5013,7 +5186,7 @@ export default function Page() {
                               color: "#c2410c",
                               fontWeight: tool === "TRACE_ROOF" ? 700 : 600,
                             }}
-                            onClick={() => { setTool("TRACE_ROOF"); setDraftLine(null); setDraftHole(null); }}
+                            onClick={() => { setTool("TRACE_ROOF"); setDraftLine(null); setDraftHole(null); setTracePreview(null); }}
                           >
                             {tool === "TRACE_ROOF" ? "✦ Tracing — click the canvas" : "Start Tracing Roof Edge"}
                           </button>
@@ -5021,7 +5194,8 @@ export default function Page() {
                             Undo Last Point
                           </button>
                           <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.55, background: "#f8fafc", borderRadius: 8, padding: "8px 10px" }}>
-                            Click around the roof edge on the photo. Click the <strong>first point again</strong> to close and finish the outline.
+                            Click around the roof edge on the photo. Click the <strong>first point again</strong> to close.<br />
+                            Hold <strong>Shift</strong> to snap angles to 0°/45°/90°. Use <strong>Refine Outline</strong> after closing to clean up.
                           </div>
                         </div>
                       ) : (
@@ -5793,8 +5967,8 @@ export default function Page() {
                       </div>
                       <input
                         type="range"
-                        min={-45}
-                        max={45}
+                        min={-90}
+                        max={90}
                         step={1}
                         value={activeRoof.shingleRotation ?? 0}
                         onChange={(e) => patchActiveRoof((r) => ({ ...r, shingleRotation: Number(e.target.value) }))}
@@ -6147,6 +6321,62 @@ export default function Page() {
                   ) : null
                 )}
 
+                {/* ── Trace preview: snapped cursor, guide line, close indicator ── */}
+                {!presentationMode && active?.step === "TRACE" && tool === "TRACE_ROOF" && activeRoof && !activeRoof.closed && tracePreview && (
+                  <>
+                    {/* Guide line from last placed point to cursor */}
+                    {activeRoof.outline.length >= 2 && (
+                      <Line
+                        points={[activeRoof.outline[activeRoof.outline.length - 2], activeRoof.outline[activeRoof.outline.length - 1], tracePreview.x, tracePreview.y]}
+                        stroke={tracePreview.nearClose ? "rgba(16,185,129,0.7)" : tracePreview.snapped ? "rgba(234,88,12,0.6)" : "rgba(255,255,255,0.4)"}
+                        strokeWidth={1.5}
+                        strokeScaleEnabled={false}
+                        dash={[6, 4]}
+                        lineCap="round"
+                        listening={false}
+                      />
+                    )}
+                    {/* Cursor dot — orange if snapped, green if near close */}
+                    <Circle
+                      x={tracePreview.nearClose && activeRoof.outline.length >= 2 ? activeRoof.outline[0] : tracePreview.x}
+                      y={tracePreview.nearClose && activeRoof.outline.length >= 2 ? activeRoof.outline[1] : tracePreview.y}
+                      radius={(tracePreview.nearClose ? 10 : tracePreview.snapped ? 7 : 5) / photoTx.scale}
+                      fill={tracePreview.nearClose ? "rgba(16,185,129,0.35)" : tracePreview.snapped ? "rgba(234,88,12,0.25)" : "transparent"}
+                      stroke={tracePreview.nearClose ? "rgba(16,185,129,0.9)" : tracePreview.snapped ? "rgba(234,88,12,0.8)" : "rgba(255,255,255,0.6)"}
+                      strokeWidth={2}
+                      strokeScaleEnabled={false}
+                      listening={false}
+                    />
+                    {/* Close magnet ring around first point */}
+                    {tracePreview.nearClose && activeRoof.outline.length >= 6 && (
+                      <Circle
+                        x={activeRoof.outline[0]}
+                        y={activeRoof.outline[1]}
+                        radius={14 / photoTx.scale}
+                        stroke="rgba(16,185,129,0.6)"
+                        strokeWidth={2}
+                        strokeScaleEnabled={false}
+                        dash={[4, 3]}
+                        listening={false}
+                      />
+                    )}
+                    {/* Vertex dots for placed outline points */}
+                    {Array.from({ length: activeRoof.outline.length / 2 }).map((_, idx) => (
+                      <Circle
+                        key={`tv-${idx}`}
+                        x={activeRoof.outline[idx * 2]}
+                        y={activeRoof.outline[idx * 2 + 1]}
+                        radius={4 / photoTx.scale}
+                        fill={idx === 0 ? "rgba(16,185,129,0.9)" : "rgba(255,255,255,0.85)"}
+                        stroke={idx === 0 ? "rgba(16,185,129,0.5)" : "rgba(15,23,42,0.35)"}
+                        strokeWidth={1.5}
+                        strokeScaleEnabled={false}
+                        listening={false}
+                      />
+                    ))}
+                  </>
+                )}
+
                 {/* ── AI Outline Overlay ── hidden in presentation mode */}
                 {!presentationMode && active?.step === "TRACE" && aiState === "preview" && (() => {
                   const dispPoly = aiShowRaw ? aiPolygonRaw : aiPolygon;
@@ -6253,6 +6483,7 @@ export default function Page() {
                 {/* Install overlays per roof */}
                 {active && active.roofs.map((r) => {
                   if (!r.closed || r.outline.length < 6) return null;
+                  const vt = active.viewType ?? "ground";
 
                   const eaves = r.lines.filter((l) => l.kind === "EAVE");
                   const rakes = r.lines.filter((l) => l.kind === "RAKE");
@@ -6304,24 +6535,44 @@ export default function Page() {
                           <KonvaImage image={syntheticImg} x={0} y={0} width={photoTx.imgW} height={photoTx.imgH} opacity={0.86} />
                         )}
 
-                      {/* Ice & water — always visible once reached */}
+                      {/* Ice & water — always visible once reached; rendering varies by viewType */}
                       {atLeast(currentStep, "ICE_WATER") && (
                         <>
                           {(r.iceWaterOnEaves !== false) && eaves.map((l) => (
                             <Group key={`iwe-${r.id}-${l.id}`}>
-                              <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterEaveW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                              <Line points={l.points} stroke="rgba(255,255,255,0.07)" strokeWidth={r.iceWaterEaveW * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                              {vt === "on_roof" ? (
+                                /* On-roof: surface-applied look — slightly translucent, more visible texture highlight */
+                                <>
+                                  <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterEaveW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" opacity={0.85} />
+                                  <Line points={l.points} stroke="rgba(255,255,255,0.14)" strokeWidth={r.iceWaterEaveW * 0.25} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                </>
+                              ) : (
+                                /* Ground + Satellite: same product appearance; satellite differs only in geometry placement */
+                                <>
+                                  <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterEaveW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                  <Line points={l.points} stroke="rgba(255,255,255,0.07)" strokeWidth={r.iceWaterEaveW * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                </>
+                              )}
                             </Group>
                           ))}
                           {(r.iceWaterOnValleys !== false) && valleys.map((l) => (
                             <Group key={`iwv-${r.id}-${l.id}`}>
-                              <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterValleyW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
-                              <Line points={l.points} stroke="rgba(255,255,255,0.07)" strokeWidth={r.iceWaterValleyW * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                              {vt === "on_roof" ? (
+                                <>
+                                  <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterValleyW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" opacity={0.85} />
+                                  <Line points={l.points} stroke="rgba(255,255,255,0.14)" strokeWidth={r.iceWaterValleyW * 0.25} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                </>
+                              ) : (
+                                <>
+                                  <Line points={l.points} stroke="#111827" strokeWidth={r.iceWaterValleyW} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                  <Line points={l.points} stroke="rgba(255,255,255,0.07)" strokeWidth={r.iceWaterValleyW * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                                </>
+                              )}
                             </Group>
                           ))}
                           {(r.iceWaterBrush ?? []).map((stroke) => (
                             <Group key={`iwb-${r.id}-${stroke.id}`} listening={false}>
-                              <Line points={stroke.points} stroke="#111827" strokeWidth={stroke.size} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
+                              <Line points={stroke.points} stroke="#111827" strokeWidth={stroke.size} strokeScaleEnabled={false} lineCap="round" lineJoin="round" opacity={vt === "on_roof" ? 0.85 : 1} />
                               <Line points={stroke.points} stroke="rgba(255,255,255,0.07)" strokeWidth={stroke.size * 0.14} strokeScaleEnabled={false} lineCap="round" lineJoin="round" />
                             </Group>
                           ))}
@@ -6351,15 +6602,36 @@ export default function Page() {
                       ))}
 
                       {/* VALLEY METAL (valleys) — Galvanized: narrow strip; W-Valley (colored): wider channel */}
-                      {atLeast(currentStep, "VALLEY_METAL") && valleys.map((l) => (
-                        <ShinyMetalStroke
-                          key={`vm-${r.id}-${l.id}`}
-                          points={l.points}
-                          width={r.valleyMetalColor === "Galvanized" ? r.valleyMetalW : r.valleyMetalW * 2.5}
-                          color={r.valleyMetalColor}
-                          opacity={0.995}
-                        />
-                      ))}
+                      {atLeast(currentStep, "VALLEY_METAL") && valleys.map((l) =>
+                        vt === "satellite" ? (
+                          /* Satellite: top-down uniform strip — same ShinyMetalStroke product appearance */
+                          <ShinyMetalStroke
+                            key={`vm-${r.id}-${l.id}`}
+                            points={l.points}
+                            width={r.valleyMetalColor === "Galvanized" ? r.valleyMetalW * 1.2 : r.valleyMetalW * 2}
+                            color={r.valleyMetalColor}
+                            opacity={0.995}
+                          />
+                        ) : vt === "on_roof" ? (
+                          /* On-roof: localized surface detail — slightly narrower, higher contrast */
+                          <ShinyMetalStroke
+                            key={`vm-${r.id}-${l.id}`}
+                            points={l.points}
+                            width={r.valleyMetalColor === "Galvanized" ? r.valleyMetalW * 0.8 : r.valleyMetalW * 2}
+                            color={r.valleyMetalColor}
+                            opacity={1}
+                          />
+                        ) : (
+                          /* Ground (default) */
+                          <ShinyMetalStroke
+                            key={`vm-${r.id}-${l.id}`}
+                            points={l.points}
+                            width={r.valleyMetalColor === "Galvanized" ? r.valleyMetalW : r.valleyMetalW * 2.5}
+                            color={r.valleyMetalColor}
+                            opacity={0.995}
+                          />
+                        )
+                      )}
 
                       {/* PRO-START (eaves always; rakes optional based on proStartOnRakes) */}
                       {atLeast(currentStep, "PRO_START") && (
@@ -6510,6 +6782,7 @@ export default function Page() {
                       })()}
 
                       {/* RIDGE VENT */}
+                      {/* RIDGE VENT — same product appearance across all view types */}
                       {atLeast(currentStep, "RIDGE_VENT") && ridges.map((l) => (
                         <RidgeVentStroke key={`rv-${r.id}-${l.id}`} points={l.points} width={r.ridgeVentW} />
                       ))}
@@ -6520,6 +6793,7 @@ export default function Page() {
                       ))}
 
                       {/* Valley seam / W-Valley on top of shingles */}
+                      {/* Valley seam / W-Valley on top of shingles — same product appearance across views */}
                       {atLeast(currentStep, "SHINGLES") && valleys.map((l) =>
                         r.valleyMetalColor === "Galvanized" ? (
                           /* Galvanized open valley: subtle crease visible through shingles */
@@ -6576,21 +6850,72 @@ export default function Page() {
                   active.step === "TRACE" &&
                   active.showEditHandles &&
                   activeRoof?.closed &&
-                  activeRoof.outline.length >= 6 &&
-                  Array.from({ length: activeRoof.outline.length / 2 }).map((_, idx) => (
-                    <Circle
-                      key={`pt-${idx}`}
-                      x={activeRoof.outline[idx * 2]}
-                      y={activeRoof.outline[idx * 2 + 1]}
-                      radius={10 / photoTx.scale}
-                      fill="rgba(255,255,255,0.90)"
-                      stroke="rgba(15,23,42,0.45)"
-                      strokeWidth={2}
-                      strokeScaleEnabled={false}
-                      draggable
-                      onDragMove={(e) => updateOutlinePoint(idx, e.target.x(), e.target.y())}
-                    />
-                  ))}
+                  activeRoof.outline.length >= 6 && (
+                  <>
+                    {/* Clickable edge segments — click to insert a new point on the edge */}
+                    {Array.from({ length: activeRoof.outline.length / 2 }).map((_, idx) => {
+                      const nPts = activeRoof.outline.length / 2;
+                      const nextIdx = (idx + 1) % nPts;
+                      const x1 = activeRoof.outline[idx * 2], y1 = activeRoof.outline[idx * 2 + 1];
+                      const x2 = activeRoof.outline[nextIdx * 2], y2 = activeRoof.outline[nextIdx * 2 + 1];
+                      return (
+                        <Line
+                          key={`edge-insert-${idx}`}
+                          points={[x1, y1, x2, y2]}
+                          stroke="transparent"
+                          strokeWidth={16 / photoTx.scale}
+                          hitStrokeWidth={20 / photoTx.scale}
+                          lineCap="round"
+                          onClick={(e) => {
+                            const stage = e.target.getStage();
+                            const rawPos = stage?.getPointerPosition();
+                            if (!rawPos || !stage) return;
+                            const sc = stage.scaleX();
+                            const wx = (rawPos.x - stage.x()) / sc;
+                            const wy = (rawPos.y - stage.y()) / sc;
+                            const iPos = stageToImgPts([wx, wy], photoTx);
+                            // Insert new point after idx
+                            patchActiveRoof((r) => {
+                              const next = r.outline.slice();
+                              next.splice((idx + 1) * 2, 0, iPos[0], iPos[1]);
+                              return { ...r, outline: next };
+                            });
+                          }}
+                          onMouseEnter={(e) => { const c = e.target.getStage()?.container(); if (c) c.style.cursor = "copy"; }}
+                          onMouseLeave={(e) => { const c = e.target.getStage()?.container(); if (c) c.style.cursor = "default"; }}
+                        />
+                      );
+                    })}
+                    {/* Vertex handles — drag to move, right-click to delete */}
+                    {Array.from({ length: activeRoof.outline.length / 2 }).map((_, idx) => (
+                      <Circle
+                        key={`pt-${idx}`}
+                        x={activeRoof.outline[idx * 2]}
+                        y={activeRoof.outline[idx * 2 + 1]}
+                        radius={10 / photoTx.scale}
+                        fill="rgba(255,255,255,0.90)"
+                        stroke="rgba(15,23,42,0.45)"
+                        strokeWidth={2}
+                        strokeScaleEnabled={false}
+                        draggable
+                        onDragMove={(e) => updateOutlinePoint(idx, e.target.x(), e.target.y())}
+                        onContextMenu={(e) => {
+                          e.evt.preventDefault();
+                          // Delete point on right-click (keep at least 3 points)
+                          if (activeRoof.outline.length > 6) {
+                            patchActiveRoof((r) => {
+                              const next = r.outline.slice();
+                              next.splice(idx * 2, 2);
+                              return { ...r, outline: next };
+                            });
+                          }
+                        }}
+                        onMouseEnter={(e) => { const c = e.target.getStage()?.container(); if (c) c.style.cursor = "grab"; }}
+                        onMouseLeave={(e) => { const c = e.target.getStage()?.container(); if (c) c.style.cursor = "default"; }}
+                      />
+                    ))}
+                  </>
+                )}
 
               </Group>
             )}
@@ -6662,31 +6987,7 @@ export default function Page() {
               );
             })}
 
-            {/* Auto-detect overlay — stage-space, hidden in presentation mode */}
-            {!presentationMode && autoSuggest && active?.step === "TRACE" && (
-              <>
-                <Line
-                  points={autoSuggest.outline}
-                  closed
-                  stroke="rgba(245,158,11,0.85)"
-                  strokeWidth={2.5}
-                  dash={[8, 5]}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-                {autoSuggest.lines.map((l, i) => (
-                  <Line
-                    key={`suggest-${i}`}
-                    points={l.points}
-                    stroke={kindColor(l.kind)}
-                    strokeWidth={2}
-                    dash={[10, 6]}
-                    lineCap="round"
-                    opacity={0.75}
-                  />
-                ))}
-              </>
-            )}
+            {/* Auto-detect overlay removed — manual tracing only */}
             {/* ── Before/After slider overlay ── */}
             {baMode && photoImg && active?.src && (
               <>
