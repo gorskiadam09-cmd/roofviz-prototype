@@ -1527,8 +1527,8 @@ function stageToImgPts(pts: number[], tx: PhotoTransform): number[] {
 
 /* ------------------- Logo animation ------------------- */
 function LogoAnimated({
-  width = 175,
-  height = 51,
+  width = 44,
+  height = 44,
   showCheck = true,
   href,
   onClick,
@@ -4223,7 +4223,7 @@ export default function Page() {
           display: "flex", alignItems: "center",
           padding: "0 20px", gap: 16,
         }}>
-          <Image src="/ladderlook-logo.png" alt="Ladder Look" width={48} height={48} priority style={{ flexShrink: 0 }} />
+          <Image src="/ladderlook-logo.png" alt="Ladder Look" width={28} height={28} priority style={{ flexShrink: 0 }} />
           <span style={{ flex: 1, textAlign: "center" as const, fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>
             {STEP_TITLE[liveStep] ?? liveStep}
           </span>
@@ -4269,7 +4269,7 @@ export default function Page() {
             style={{ ...topBarBtn, padding: "5px 10px", color: "#64748b", flexShrink: 0 }}>
             {isMobile ? "←" : "← Menu"}
           </button>
-          <LogoAnimated onClick={() => setScreen("MENU")} width={isMobile ? 110 : 200} height={isMobile ? 32 : 58} showCheck={false} style={{ flexShrink: 0 }} />
+          <LogoAnimated onClick={() => setScreen("MENU")} width={isMobile ? 32 : 42} height={isMobile ? 32 : 42} showCheck={false} style={{ flexShrink: 0 }} />
           {active && (
             <input
               value={active.name}
@@ -4443,7 +4443,7 @@ export default function Page() {
         }}>
           {/* Logo + project name */}
           <div style={{ padding: "14px 14px 12px", borderBottom: "1px solid #f1f5f9", flexShrink: 0 }}>
-            <Image src="/ladderlook-logo.png" alt="Ladder Look" width={80} height={80} priority />
+            <Image src="/ladderlook-logo.png" alt="Ladder Look" width={36} height={36} priority />
             <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: "#1e293b", lineHeight: 1.35, wordBreak: "break-word" as const }}>
               {customerViewData.name}
             </div>
