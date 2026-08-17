@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
-  const from = process.env.RESEND_FROM_EMAIL ?? "RoofViz <onboarding@resend.dev>";
+  const from = process.env.RESEND_FROM_EMAIL ?? "Ladder Look <onboarding@resend.dev>";
 
   const { error } = await resend.emails.send({
     from,
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
     subject: `Your ${projectName ?? "Roof"} Visualization`,
     html: `
       <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;color:#1e293b">
-        <img src="https://roofviz-prototype-1ycw.vercel.app/roofviz-logo.png" alt="RoofViz" width="120" style="margin-bottom:24px"/>
+        <img src="https://roofviz-prototype-1ycw.vercel.app/ladderlook-logo.png" alt="Ladder Look" width="120" style="margin-bottom:24px"/>
         <h2 style="margin:0 0 12px;font-size:20px">Your roof visualization is ready</h2>
         <p style="margin:0 0 24px;color:#475569;font-size:15px;line-height:1.6">
           Click the button below to view your interactive roof visualization for <strong>${projectName ?? "your project"}</strong>.

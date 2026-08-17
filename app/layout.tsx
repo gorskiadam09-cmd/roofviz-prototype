@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RoofViz",
+  title: "Ladder Look",
   description: "Interactive roofing installation visualizer",
 };
 
